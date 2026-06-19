@@ -13,7 +13,9 @@ namespace LMP.Core.Youtube.Videos;
 public sealed class VideoClient
 {
     private readonly VideoController _controller;
+    private readonly Func<bool>? _isAuthenticatedCheck;
 
+    /// <summary>Клиент управления аудиопотоками.</summary>
     public StreamClient Streams { get; }
 
     public VideoClient(
@@ -23,19 +25,26 @@ public sealed class VideoClient
         Func<bool>? isAuthenticatedCheck = null)
     {
         _controller = new VideoController(http, sigCipherDecryptor.PlayerManager);
+        _isAuthenticatedCheck = isAuthenticatedCheck;
         Streams = new StreamClient(http, nTokenDecryptor, sigCipherDecryptor, isAuthenticatedCheck);
     }
 
     /// <summary>
     /// Возвращает метаданные трека по его идентификатору.
     /// </summary>
+    /// <param name="videoId">Идентификатор видео YouTube.</param>
+    /// <param name="cancellationToken">Токен отмены операции.</param>
     public async ValueTask<TrackInfo> GetAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
-        var watchPage = await _controller.GetVideoWatchPageAsync(videoId, cancellationToken);
+        var watchPage = await _controller
+            .GetVideoWatchPageAsync(videoId, cancellationToken)
+            .ConfigureAwait(false);
+
         var playerResponse = watchPage.PlayerResponse
-                             ?? await _controller.GetPlayerResponseAsync(videoId, cancellationToken);
+                             ?? await GetPlayerResponseAsync(videoId, cancellationToken)
+                                 .ConfigureAwait(false);
 
         var title = playerResponse.Title ?? "";
         var channelTitle = playerResponse.Author
@@ -43,8 +52,8 @@ public sealed class VideoClient
         var channelId = playerResponse.ChannelId
                         ?? throw new YoutubeExplodeException("Failed to extract video channel ID.");
 
-        // Извлечение превью в один zero-alloc вызов без аллокации LINQ цепочек
-        var thumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(playerResponse.Thumbnails, videoId.Value);
+        var thumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(
+            playerResponse.Thumbnails, videoId.Value);
 
         return new TrackInfo
         {
@@ -59,21 +68,21 @@ public sealed class VideoClient
         };
     }
 
+    /// <summary>
+    /// Возвращает PlayerResponse с полной fallback-цепочкой клиентов и корректным auth-контекстом.
+    /// </summary>
+    /// <param name="videoId">Идентификатор видео YouTube.</param>
+    /// <param name="cancellationToken">Токен отмены операции.</param>
     internal async ValueTask<PlayerResponse> GetPlayerResponseAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
-        bool isAuth = VideoController.IsInCooldown;
+        bool isAuth = _isAuthenticatedCheck?.Invoke() ?? false;
         var (response, _) = await _controller.GetPlayerResponseWithFallbackAsync(
-            videoId, cancellationToken, isAuthenticated: isAuth);
-        return response;
-    }
+            videoId,
+            cancellationToken,
+            isAuthenticated: isAuth).ConfigureAwait(false);
 
-    internal ValueTask<PlayerResponse> GetPlayerResponseWithClientAsync(
-        VideoId videoId,
-        string clientName,
-        CancellationToken cancellationToken = default)
-    {
-        return _controller.GetPlayerResponseWithClientAsync(videoId, clientName, cancellationToken);
+        return response;
     }
 }

@@ -64,35 +64,70 @@ public sealed class TrackRegistry
     {
         if (string.IsNullOrEmpty(incoming.Id)) return incoming;
 
+        var audioCache = GetAudioCache();
+
         if (_pinned.TryGetValue(incoming.Id, out var pinned))
         {
             pinned.UpdateMetadata(incoming);
+            HydrateTrackFromAudioCache(pinned, audioCache);
             return pinned;
         }
 
         if (_cache.TryGetValue(incoming.Id, out var weakRef) && weakRef.TryGetTarget(out var cached))
         {
             cached.UpdateMetadata(incoming);
+            HydrateTrackFromAudioCache(cached, audioCache);
             return cached;
         }
 
         _cache[incoming.Id] = new WeakReference<TrackInfo>(incoming);
+        HydrateTrackFromAudioCache(incoming, audioCache);
+        return incoming;
+    }
 
-        // Актуализируем статус локального кэширования аудиоданных
-        if (!incoming.IsDownloaded && !incoming.IsCached)
+    /// <summary>
+    /// Дополняет рантайм-модель трека статусом локального кэша и metadata нормализации.
+    /// </summary>
+    /// <param name="track">Канонический экземпляр трека.</param>
+    /// <param name="audioCache">Менеджер аудио-кэша.</param>
+    private static void HydrateTrackFromAudioCache(TrackInfo track, AudioCacheManager? audioCache)
+    {
+        if (audioCache == null || string.IsNullOrEmpty(track.Id))
+            return;
+
+        CacheEntry? completeEntry = null;
+
+        if (!track.IsDownloaded && !track.IsCached)
         {
-            var audioCache = GetAudioCache();
-            if (audioCache != null && audioCache.IsTrackFullyCached(incoming.Id))
-            {
-                var bestEntry = audioCache.FindBestCacheByTrackId(incoming.Id);
-                if (bestEntry != null)
-                    incoming.MarkAsCached(bestEntry.Format.ToString(), bestEntry.Bitrate);
-                else
-                    incoming.IsCached = true;
-            }
+            completeEntry = audioCache.FindBestCacheByTrackId(track.Id);
+            if (completeEntry != null)
+                track.MarkAsCached(completeEntry.Format.ToString(), completeEntry.Bitrate);
         }
 
-        return incoming;
+        if (track.HasCachedNormalizationGain && track.HasYoutubeLoudnessDb)
+            return;
+
+        var metadataEntry = completeEntry
+            ?? audioCache.FindBestCacheByTrackId(track.Id)
+            ?? audioCache.FindBestStartupCache(track.Id, 0);
+
+        if (metadataEntry == null)
+            return;
+
+        if (!track.HasCachedNormalizationGain
+            && metadataEntry.CachedNormalizationGain is float cachedGain
+            && float.IsFinite(cachedGain)
+            && cachedGain > 0f)
+        {
+            track.SetGain(cachedGain);
+        }
+
+        if (!track.HasYoutubeLoudnessDb
+            && metadataEntry.YoutubeIntegratedLoudnessDb is float loudnessDb
+            && float.IsFinite(loudnessDb))
+        {
+            track.TrySetGainFromLoudness(loudnessDb);
+        }
     }
 
     /// <summary>

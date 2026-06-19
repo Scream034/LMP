@@ -901,6 +901,29 @@ public sealed partial class CachingStreamSource : IAudioSource
 
     #endregion
 
+    #region Warning Events
+
+    /// <summary>
+    /// Публикует non-fatal предупреждение источника для внешнего оркестратора UI.
+    /// </summary>
+    /// <param name="exception">Причина предупреждения.</param>
+    private void PublishSourceWarning(Exception exception)
+    {
+        var handler = OnSourceWarning;
+        if (handler is null) return;
+
+        try
+        {
+            handler(_trackId, exception);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[CachingSource] Source warning callback failed: {ex.Message}");
+        }
+    }
+
+    #endregion
+
     #region Dispose
 
     /// <summary>Диспозит все блоки в RAM-кэше.</summary>

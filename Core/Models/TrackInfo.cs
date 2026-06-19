@@ -269,22 +269,12 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
         return true;
     }
 
-    /// <summary>
-    /// Кэширует сырое значение <c>loudnessDb</c> из YouTube InnerTube API.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Не записывает в <see cref="CachedNormalizationGain"/>.</b>
-    /// YouTube данные имеют DownwardOnly семантику и несовместимы с Bidirectional
-    /// режимом или нестандартными targetLufs. Конвертация и применение
-    /// выполняются через <see cref="NormalizationGainResolver.Resolve"/>
-    /// с учётом текущей <see cref="NormalizationConfig"/>.</para>
-    /// </remarks>
-    /// <param name="loudnessDb">Значение поля loudnessDb из InnerTube adaptiveFormats.</param>
-    /// <returns><c>true</c> если значение валидно и сохранено.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TrySetGainFromLoudness(float loudnessDb)
     {
-        if (!HasYoutubeLoudnessDb) return false;
+        if (!float.IsFinite(loudnessDb))
+            return false;
+
         YoutubeIntegratedLoudnessDb = loudnessDb;
         return true;
     }
@@ -341,6 +331,9 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
         if (fresh.HasCachedNormalizationGain && !HasCachedNormalizationGain)
             CachedNormalizationGain = fresh.CachedNormalizationGain;
+
+        if (fresh.HasYoutubeLoudnessDb && !HasYoutubeLoudnessDb)
+            YoutubeIntegratedLoudnessDb = fresh.YoutubeIntegratedLoudnessDb;
 
         // Предотвращаем потерю StreamUrl и связанных runtime-свойств 
         // при слиянии метаданных с сущностью, загруженной из базы данных.

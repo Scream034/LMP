@@ -626,15 +626,14 @@ public sealed partial class CachingStreamSource
         if (minimumLength <= 0) return RangeDownloadResult.Success;
 
         minimumLength = (int)Math.Min(minimumLength, _contentLength - position);
-        long alignedStart = AlignDown(position, _requestAlignmentBytes);
 
         if (IsRangeLocallyAvailable(position, minimumLength)) return RangeDownloadResult.Success;
 
         ct.ThrowIfCancellationRequested();
 
-        // Стандарт: максимум ретраев на один конкретный чанк
         int maxAttempts = _config.MaxNetworkRetries;
         int chunkIoExceptions = 0;
+        bool warningPublished = false;
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
@@ -649,7 +648,10 @@ public sealed partial class CachingStreamSource
             }
 
             var plan = BuildDownloadPlan(position, minimumLength, isCritical);
-            var ownerLazy = new Lazy<Task<RangeDownloadResult>>(() => DownloadRangeCoreAsync(plan, ct, isCritical), LazyThreadSafetyMode.ExecutionAndPublication);
+            var ownerLazy = new Lazy<Task<RangeDownloadResult>>(
+                () => DownloadRangeCoreAsync(plan, ct, isCritical),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+
             var candidate = new ActiveRangeDownload(plan.Start, plan.Length, ownerLazy);
             var actual = RegisterOrGetActiveDownload(candidate);
 
@@ -660,8 +662,14 @@ public sealed partial class CachingStreamSource
                 {
                     result = await actual.LazyTask.Value.ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested) { continue; }
-                finally { RemoveActiveDownloadIfOwner(plan.Start, actual); }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    continue;
+                }
+                finally
+                {
+                    RemoveActiveDownloadIfOwner(plan.Start, actual);
+                }
 
                 switch (result)
                 {
@@ -669,23 +677,35 @@ public sealed partial class CachingStreamSource
                         return RangeDownloadResult.Success;
 
                     case RangeDownloadResult.Forbidden403:
+                        if (isCritical && !warningPublished)
+                        {
+                            warningPublished = true;
+                            PublishSourceWarning(
+                                new UnauthorizedAccessException(
+                                    $"Critical range {plan.Start}-{plan.Start + plan.Length - 1L} received HTTP 403 and requires stream URL refresh"));
+                        }
+
                         await CoordinatedRefreshAsync(ct).ConfigureAwait(false);
                         continue;
 
                     case RangeDownloadResult.NetworkError:
                         chunkIoExceptions++;
 
-                        // Если это не первая ошибка I/O для этого чанка — URL подозрителен.
-                        // Принудительно обновляем URL, чтобы сменить GGC узел (Google Global Cache).
+                        if (isCritical && !warningPublished && chunkIoExceptions >= 2)
+                        {
+                            warningPublished = true;
+                            PublishSourceWarning(
+                                new IOException(
+                                    $"Critical range {plan.Start}-{plan.Start + plan.Length - 1L} failed repeatedly and playback may stall"));
+                        }
+
                         if (chunkIoExceptions >= 2)
                         {
                             Log.Warn($"[CachingSource] Chunk {plan.Start} failed repeatedly. Forcing URL refresh...");
                             await CoordinatedRefreshAsync(ct).ConfigureAwait(false);
-                            // Сбрасываем эпоху, чтобы закрыть все старые сокеты
                             ResetDownloadEpoch();
                         }
 
-                        // Экспоненциальный Backoff: 100ms, 400ms, 900ms...
                         int delay = (int)Math.Min(2000, 100 * Math.Pow(attempt + 1, 2));
                         await Task.Delay(delay, ct).ConfigureAwait(false);
                         continue;

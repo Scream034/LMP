@@ -930,12 +930,12 @@ public partial class YoutubeProvider : IDisposable
     }
 
     /// <summary>
-    /// Выполняет сверхлегкий точечный запрос к InnerTube API для получения только громкости (loudnessDb) видео.
-    /// Исключает необходимость выполнения тяжелой локальной дешифрации подписей и токенов.
+    /// Выполняет точечный запрос к InnerTube API для получения только громкости видео.
+    /// Использует ту же fallback-цепочку player-клиентов, что и основной playback path.
     /// </summary>
-    /// <param name="videoId">Уникальный 11-значный идентификатор видео.</param>
+    /// <param name="videoId">Уникальный идентификатор видео.</param>
     /// <param name="ct">Токен отмены операции.</param>
-    /// <returns>Значение громкости в dB, либо <c>float.NaN</c> в случае ошибки или отсутствия сети.</returns>
+    /// <returns>Значение громкости в dB, либо <c>float.NaN</c> в случае ошибки.</returns>
     public async ValueTask<float> GetLoudnessDbOnlyAsync(string videoId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(videoId))
@@ -945,12 +945,13 @@ public partial class YoutubeProvider : IDisposable
         {
             var vId = VideoId.Parse(videoId);
             var client = GetClient();
+            var response = await client.Videos.GetPlayerResponseAsync(vId, ct).ConfigureAwait(false);
+            float loudnessDb = response.LoudnessDb;
 
-            // Используем ANDROID_VR — он самый быстрый, не имеет оверхеда на PO Token и ротацию n-token шифров
-            var response = await client.Videos.GetPlayerResponseWithClientAsync(
-                vId, "ANDROID_VR", ct).ConfigureAwait(false);
+            if (float.IsFinite(loudnessDb))
+                AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(videoId, loudnessDb);
 
-            return response.LoudnessDb;
+            return loudnessDb;
         }
         catch (OperationCanceledException)
         {

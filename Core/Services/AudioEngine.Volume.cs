@@ -1,3 +1,4 @@
+using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Normalization;
 
 namespace LMP.Core.Services;
@@ -110,9 +111,26 @@ public sealed partial class AudioEngine
             audioSettings.NormalizationMode);
 
         var track = CurrentTrack;
+        CacheEntry? cacheEntry = null;
+
+        if (track != null)
+        {
+            cacheEntry = FindNormalizationCacheEntry(track.Id);
+            if (cacheEntry != null)
+                TryHydrateTrackNormalizationFromCache(track, cacheEntry);
+        }
+
         float cachedGain = normConfig.Enabled
             ? NormalizationGainResolver.Resolve(track, normConfig)
             : float.NaN;
+
+        if (float.IsNaN(cachedGain) && cacheEntry != null)
+        {
+            cachedGain = NormalizationGainResolver.Resolve(
+                cacheEntry.CachedNormalizationGain,
+                cacheEntry.YoutubeIntegratedLoudnessDb,
+                normConfig);
+        }
 
         pipeline.Analyzer.Configure(normConfig);
 

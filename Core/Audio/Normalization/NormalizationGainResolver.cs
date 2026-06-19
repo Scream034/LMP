@@ -46,15 +46,41 @@ public static class NormalizationGainResolver
     /// </returns>
     public static float Resolve(TrackInfo? track, NormalizationConfig config)
     {
-        if (track == null || !config.Enabled) return float.NaN;
+        if (track == null || !config.Enabled)
+            return float.NaN;
 
-        // Приоритет 1: EBU R128 gain — точный анализ, универсален.
-        if (track.HasCachedNormalizationGain)
-            return ApplyConstraints(track.CachedNormalizationGain, config);
+        return Resolve(
+            track.HasCachedNormalizationGain ? track.CachedNormalizationGain : null,
+            track.HasYoutubeLoudnessDb ? track.YoutubeIntegratedLoudnessDb : null,
+            config);
+    }
 
-        // Приоритет 2: YouTube loudnessDb — конвертируем для текущего targetLufs и mode.
-        if (track.HasYoutubeLoudnessDb)
-            return ComputeGainFromYoutubeLoudness(track.YoutubeIntegratedLoudnessDb, config);
+    /// <summary>
+    /// Резолвит линейный gain нормализации из raw metadata источников.
+    /// </summary>
+    /// <param name="cachedNormalizationGain">
+    /// Persisted EBU R128 gain, если он уже был вычислен ранее.
+    /// </param>
+    /// <param name="youtubeIntegratedLoudnessDb">
+    /// Сырое значение <c>loudnessDb</c> из YouTube InnerTube API.
+    /// </param>
+    /// <param name="config">Текущая конфигурация нормализации.</param>
+    /// <returns>
+    /// Линейный gain если источник найден; <c>float.NaN</c> если требуется EBU R128 анализ.
+    /// </returns>
+    public static float Resolve(
+        float? cachedNormalizationGain,
+        float? youtubeIntegratedLoudnessDb,
+        NormalizationConfig config)
+    {
+        if (!config.Enabled)
+            return float.NaN;
+
+        if (cachedNormalizationGain is float gain && float.IsFinite(gain) && gain > 0f)
+            return ApplyConstraints(gain, config);
+
+        if (youtubeIntegratedLoudnessDb is float loudnessDb && float.IsFinite(loudnessDb))
+            return ComputeGainFromYoutubeLoudness(loudnessDb, config);
 
         return float.NaN;
     }

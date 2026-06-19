@@ -43,23 +43,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     #region Public API
 
-    public bool IsTrackFullyCached(string trackId)
-    {
-        if (string.IsNullOrEmpty(trackId)) return false;
-        if (!_trackIndex.TryGetValue(trackId, out var keys)) return false;
-
-        foreach (var key in keys.Keys)
-        {
-            if (_entries.TryGetValue(key, out var entry)
-                && entry.IsComplete
-                && EnsureCacheFileIntegrity(entry))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    public bool IsTrackFullyCached(string trackId) => FindBestCache(trackId) != null;
 
     public CacheEntry? FindBestCacheByTrackId(string trackId) => FindBestCache(trackId);
 
@@ -124,18 +108,101 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// Лучшую запись кэша, если найден локальный contiguous prefix достаточной длины;
     /// иначе <c>null</c>.
     /// </returns>
-    /// <remarks>
-    /// <para>
-    /// В отличие от <see cref="FindBestCache(string)"/>, этот метод подходит и для
-    /// partially cached треков. Он не требует <see cref="CacheEntry.IsComplete"/>,
-    /// а оценивает непрерывный префикс от позиции 0.
-    /// </para>
-    /// <para>
-    /// Используется для режима Partial Cache Fast Start:
-    /// playback стартует сразу из локального кэша, а continuation URL готовится в фоне.
-    /// </para>
-    /// </remarks>
     public CacheEntry? FindBestStartupCache(string trackId, int minContiguousBytes)
+    {
+        var entry = FindBestStartupCacheCore(trackId, minContiguousBytes);
+        if (entry != null)
+            return entry;
+
+        var rawTrackId = TryGetRawTrackId(trackId);
+        if (!string.IsNullOrEmpty(rawTrackId))
+        {
+            entry = FindBestStartupCacheCore(rawTrackId, minContiguousBytes);
+            if (entry != null)
+                return entry;
+        }
+
+        if (!IsPrefixedTrackId(trackId))
+            return FindBestStartupCacheCore(string.Concat("yt_", trackId), minContiguousBytes);
+
+        return null;
+    }
+
+    public CacheEntry? FindBestCache(string trackId)
+    {
+        var entry = FindBestCacheCore(trackId);
+        if (entry != null)
+            return entry;
+
+        var rawTrackId = TryGetRawTrackId(trackId);
+        if (!string.IsNullOrEmpty(rawTrackId))
+        {
+            entry = FindBestCacheCore(rawTrackId);
+            if (entry != null)
+                return entry;
+        }
+
+        if (!IsPrefixedTrackId(trackId))
+            return FindBestCacheCore(string.Concat("yt_", trackId));
+
+        return null;
+    }
+
+    /// <summary>
+    /// Пытается сохранить persisted EBU R128 gain в metadata лучшего кэша трека.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    /// <param name="gain">Линейный gain нормализации.</param>
+    /// <returns><c>true</c>, если metadata была обновлена.</returns>
+    public bool TryUpdateNormalizationGain(string trackId, float gain)
+    {
+        if (string.IsNullOrEmpty(trackId) || !float.IsFinite(gain) || gain <= 0f)
+            return false;
+
+        var entry = FindBestCache(trackId) ?? FindBestStartupCache(trackId, 0);
+        if (entry == null)
+            return false;
+
+        if (entry.CachedNormalizationGain is float existingGain
+            && MathF.Abs(existingGain - gain) < 0.001f)
+        {
+            return false;
+        }
+
+        entry.CachedNormalizationGain = gain;
+        entry.LastAccessedAt = DateTime.UtcNow;
+        _ = SaveIndexAsync();
+        return true;
+    }
+
+    /// <summary>
+    /// Пытается сохранить сырое значение <c>loudnessDb</c> YouTube в metadata лучшего кэша трека.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    /// <param name="loudnessDb">Сырое значение <c>loudnessDb</c>.</param>
+    /// <returns><c>true</c>, если metadata была обновлена.</returns>
+    public bool TryUpdateYoutubeLoudnessDb(string trackId, float loudnessDb)
+    {
+        if (string.IsNullOrEmpty(trackId) || !float.IsFinite(loudnessDb))
+            return false;
+
+        var entry = FindBestCache(trackId) ?? FindBestStartupCache(trackId, 0);
+        if (entry == null)
+            return false;
+
+        if (entry.YoutubeIntegratedLoudnessDb is float existingLoudness
+            && MathF.Abs(existingLoudness - loudnessDb) < 0.01f)
+        {
+            return false;
+        }
+
+        entry.YoutubeIntegratedLoudnessDb = loudnessDb;
+        entry.LastAccessedAt = DateTime.UtcNow;
+        _ = SaveIndexAsync();
+        return true;
+    }
+
+    private CacheEntry? FindBestStartupCacheCore(string trackId, int minContiguousBytes)
     {
         if (string.IsNullOrEmpty(trackId)) return null;
         if (!_trackIndex.TryGetValue(trackId, out var keys)) return null;
@@ -174,8 +241,9 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         return best;
     }
 
-    public CacheEntry? FindBestCache(string trackId)
+    private CacheEntry? FindBestCacheCore(string trackId)
     {
+        if (string.IsNullOrEmpty(trackId)) return null;
         if (!_trackIndex.TryGetValue(trackId, out var keys)) return null;
 
         CacheEntry? best = null;
@@ -192,6 +260,39 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// Определяет, содержит ли идентификатор доменный префикс трека.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    private static bool IsPrefixedTrackId(string trackId)
+    {
+        if (string.IsNullOrEmpty(trackId))
+            return false;
+
+        var span = trackId.AsSpan();
+        return span.StartsWith("yt_".AsSpan()) || span.StartsWith("yt_pl_".AsSpan());
+    }
+
+    /// <summary>
+    /// Возвращает raw YouTube ID без доменного префикса, если он присутствует.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    private static string? TryGetRawTrackId(string trackId)
+    {
+        if (string.IsNullOrEmpty(trackId))
+            return null;
+
+        var span = trackId.AsSpan();
+
+        if (span.StartsWith("yt_pl_".AsSpan()))
+            return span[6..].ToString();
+
+        if (span.StartsWith("yt_".AsSpan()))
+            return span[3..].ToString();
+
+        return null;
     }
 
     public bool HasPartialCache(string cacheKey) =>
@@ -1270,6 +1371,16 @@ public sealed class CacheEntry
 
     /// <summary>Физический размер файла кэша на диске.</summary>
     public long ActualFileSize { get; set; }
+
+    /// <summary>
+    /// Закэшированный linear gain нормализации, вычисленный EBU R128 анализом.
+    /// </summary>
+    public float? CachedNormalizationGain { get; set; }
+
+    /// <summary>
+    /// Сырое значение <c>loudnessDb</c> из YouTube InnerTube API.
+    /// </summary>
+    public float? YoutubeIntegratedLoudnessDb { get; set; }
 
     /// <summary>
     /// Сериализуемые диапазоны локально скачанных данных.

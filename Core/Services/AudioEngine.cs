@@ -311,29 +311,43 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         {
             var registryTrack = _trackRegistry.TryGet(trackId) ?? _library.GetTrack(trackId);
             var currentTrack = CurrentTrack;
-
             var track = registryTrack ?? (currentTrack?.Id == trackId ? currentTrack : null);
+            var cacheEntry = FindNormalizationCacheEntry(trackId);
+
+            if (track != null && cacheEntry != null)
+                TryHydrateTrackNormalizationFromCache(track, cacheEntry);
+
+            float cachedGain = track != null
+                ? NormalizationGainResolver.Resolve(track, normConfig)
+                : float.NaN;
+
+            if (float.IsNaN(cachedGain) && cacheEntry != null)
+            {
+                cachedGain = NormalizationGainResolver.Resolve(
+                    cacheEntry.CachedNormalizationGain,
+                    cacheEntry.YoutubeIntegratedLoudnessDb,
+                    normConfig);
+            }
 
             if (track != null)
             {
-                float cachedGain = NormalizationGainResolver.Resolve(track, normConfig);
-
-                // Детальная телеметрия для отладки pre-scan
                 Log.Debug($"[AudioEngine] Track resolved: ID={track.Id}, Title='{track.Title}' " +
                           $"| Source: {(registryTrack != null ? "Registry" : "CurrentTrackFallback")} " +
                           $"| DB Cached Gain: {(float.IsNaN(track.CachedNormalizationGain) ? "NaN" : track.CachedNormalizationGain.ToString("F4"))} " +
                           $"| YT Loudness: {(float.IsNaN(track.YoutubeIntegratedLoudnessDb) ? "NaN" : track.YoutubeIntegratedLoudnessDb.ToString("F2") + "dB")} " +
+                          $"| Cache Gain: {(cacheEntry?.CachedNormalizationGain is float cg ? cg.ToString("F4") : "null")} " +
+                          $"| Cache Loudness: {(cacheEntry?.YoutubeIntegratedLoudnessDb is float cl ? cl.ToString("F2") + "dB" : "null")} " +
                           $"| Resolved Gain: {(float.IsNaN(cachedGain) ? "NaN" : cachedGain.ToString("F4"))}");
+            }
 
-                if (!float.IsNaN(cachedGain))
-                {
-                    pipeline.Analyzer.LockFromCachedGain(cachedGain);
-                    Log.Info($"[AudioEngine] Normalization gain locked from cache: {cachedGain:F4}x for {trackId}");
-                }
-                else
-                {
-                    Log.Warn($"[AudioEngine] Normalization resolver returned NaN for {trackId}. EBU R128 Pre-scan is REQUIRED.");
-                }
+            if (!float.IsNaN(cachedGain))
+            {
+                pipeline.Analyzer.LockFromCachedGain(cachedGain);
+                Log.Info($"[AudioEngine] Normalization gain locked from cache: {cachedGain:F4}x for {trackId}");
+            }
+            else if (track != null)
+            {
+                Log.Warn($"[AudioEngine] Normalization resolver returned NaN for {trackId}. EBU R128 Pre-scan is REQUIRED.");
             }
             else
             {
@@ -567,10 +581,20 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         var canonical = _library.GetTrack(trackId);
         canonical?.SetGain(gain);
 
-        var current = CurrentTrack;
-        if (current != null && current.Id == trackId && !ReferenceEquals(current, canonical))
-            current.SetGain(gain);
+        var registryTrack = _trackRegistry.TryGet(trackId);
+        if (registryTrack != null && !ReferenceEquals(registryTrack, canonical))
+            registryTrack.SetGain(gain);
 
+        var current = CurrentTrack;
+        if (current != null
+            && current.Id == trackId
+            && !ReferenceEquals(current, canonical)
+            && !ReferenceEquals(current, registryTrack))
+        {
+            current.SetGain(gain);
+        }
+
+        AudioSourceFactory.GlobalCache?.TryUpdateNormalizationGain(trackId, gain);
         _pendingGainWrites.Enqueue((trackId, gain));
     }
 
@@ -872,9 +896,11 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
         if (fullCache != null)
         {
-            track.TransientBitrate = fullCache.Value.Entry.Bitrate;
+            var fullCacheEntry = fullCache.Value.Entry;
+            track.TransientBitrate = fullCacheEntry.Bitrate;
+            TryHydrateTrackNormalizationFromCache(track, fullCacheEntry);
 
-            if (float.IsNaN(track.CachedNormalizationGain) && float.IsNaN(track.YoutubeIntegratedLoudnessDb))
+            if (!track.HasCachedNormalizationGain && !track.HasYoutubeLoudnessDb)
             {
                 var profileStr = _library.Settings.InternetProfile.ToString();
                 bool isDataSaving = profileStr.Contains("Cellular", StringComparison.OrdinalIgnoreCase) ||
@@ -895,6 +921,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                         if (!float.IsNaN(loudness))
                         {
                             track.TrySetGainFromLoudness(loudness);
+                            AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(track.Id, loudness);
                             Log.Info($"[AudioEngine] Resolved online loudness for cached track {track.Id}: {loudness:F2}dB");
                         }
                     }
@@ -909,12 +936,9 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                 }
             }
 
-            return ("", fullCache.Value.Entry.TotalSize, fullCache.Value.Entry.Bitrate);
+            return ("", fullCacheEntry.TotalSize, fullCacheEntry.Bitrate);
         }
 
-        // Partial Cache Fast Start:
-        // если есть достаточный локальный contiguous prefix от начала трека,
-        // стартуем playback немедленно из cache, а continuation URL готовим в фоне.
         var bootstrapCache = TryGetPartialBootstrapCache(track, seekPosition);
         if (bootstrapCache != null)
         {
@@ -924,6 +948,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             track.CachedContainer = bootstrapCache.Format.ToString();
             track.TransientContainer = bootstrapCache.Format.ToString();
             track.TransientSize = bootstrapCache.TotalSize;
+            TryHydrateTrackNormalizationFromCache(track, bootstrapCache);
 
             _ = PrimeContinuationUrlAsync(track, ct);
 
@@ -937,7 +962,13 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         ct.ThrowIfCancellationRequested();
 
         if (!string.IsNullOrEmpty(track.StreamUrl))
+        {
+            var cacheEntry = FindNormalizationCacheEntry(track.Id);
+            if (cacheEntry != null)
+                TryHydrateTrackNormalizationFromCache(track, cacheEntry);
+
             return (track.StreamUrl, track.TransientSize, track.TransientBitrate);
+        }
 
         var info = await _youtube.RefreshStreamUrlAsync(track, false, ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Failed to resolve stream URL for {track.Id}");
@@ -1344,6 +1375,42 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     #endregion
 
     #region Helpers
+
+    /// <summary>
+    /// Возвращает наиболее релевантную metadata-запись кэша для нормализации.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    private static CacheEntry? FindNormalizationCacheEntry(string trackId)
+    {
+        var cache = AudioSourceFactory.GlobalCache;
+        if (cache == null || string.IsNullOrEmpty(trackId))
+            return null;
+
+        return cache.FindBestCacheByTrackId(trackId) ?? cache.FindBestStartupCache(trackId, 0);
+    }
+
+    /// <summary>
+    /// Копирует normalization metadata из дискового кэша в рантайм-модель трека.
+    /// </summary>
+    /// <param name="track">Рантайм-модель трека.</param>
+    /// <param name="entry">Metadata-запись кэша.</param>
+    private static void TryHydrateTrackNormalizationFromCache(TrackInfo track, CacheEntry entry)
+    {
+        if (!track.HasCachedNormalizationGain
+            && entry.CachedNormalizationGain is float cachedGain
+            && float.IsFinite(cachedGain)
+            && cachedGain > 0f)
+        {
+            track.SetGain(cachedGain);
+        }
+
+        if (!track.HasYoutubeLoudnessDb
+            && entry.YoutubeIntegratedLoudnessDb is float loudnessDb
+            && float.IsFinite(loudnessDb))
+        {
+            track.TrySetGainFromLoudness(loudnessDb);
+        }
+    }
 
     /// <summary>
     /// Потокобезопасно обновляет статус ручной загрузки движка на UI-потоке.
