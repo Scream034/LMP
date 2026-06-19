@@ -1,35 +1,47 @@
 namespace LMP.Core.Models;
 
 /// <summary>
-/// Конфигурация потоковой передачи и буферизации аудио.
-/// Создаётся через <see cref="StreamingProfiles"/> на основе <see cref="InternetProfile"/>.
-/// Иммутабельна после создания — безопасно передавать между потоками.
+/// Конфигурация потоковой передачи и буферизации аудио для range-based транспорта.
 /// </summary>
 public sealed record StreamingConfig
 {
-    #region Chunk Settings
+    #region Range Request Settings
 
-    /// <summary>Размер одного чанка в байтах.</summary>
-    public int ChunkSizeBytes { get; init; } = Defaults.ChunkSizeBytes;
+    /// <summary>
+    /// Выравнивание сетевых запросов и локального кэша в байтах.
+    /// </summary>
+    public int RequestAlignmentBytes { get; init; } = Defaults.RequestAlignmentBytes;
 
-    /// <summary>Количество чанков, читаемых вперёд от текущей позиции.</summary>
-    public int ReadAheadChunks { get; init; } = Defaults.ReadAheadChunks;
+    /// <summary>
+    /// Минимальный размер одного сетевого range-запроса в байтах.
+    /// </summary>
+    public int MinRequestSizeBytes { get; init; } = Defaults.MinRequestSizeBytes;
 
-    /// <summary>Максимальное количество чанков в RAM.</summary>
-    public int MaxRamChunks { get; init; } = Defaults.MaxRamChunks;
+    /// <summary>
+    /// Максимальный размер одного сетевого range-запроса в байтах.
+    /// </summary>
+    public int MaxRequestSizeBytes { get; init; } = Defaults.MaxRequestSizeBytes;
 
-    /// <summary>Расстояние от текущей позиции для eviction чанков из RAM.</summary>
-    public int RamEvictionDistance { get; init; } = Defaults.RamEvictionDistance;
+    #endregion
+
+    #region RAM Cache
+
+    /// <summary>
+    /// Максимальный объём RAM-кэша в байтах.
+    /// </summary>
+    public int MaxRamBytes { get; init; } = Defaults.MaxRamBytes;
+
+    /// <summary>
+    /// Окно удержания RAM-кэша вокруг текущей позиции в байтах.
+    /// </summary>
+    public int RamEvictionWindowBytes { get; init; } = Defaults.RamEvictionWindowBytes;
 
     #endregion
 
     #region Download Settings
 
-    /// <summary>Максимальное количество параллельных загрузок чанков.</summary>
+    /// <summary>Максимальное количество параллельных range-загрузок.</summary>
     public int MaxConcurrentDownloads { get; init; } = Defaults.MaxConcurrentDownloads;
-
-    /// <summary>Таймаут загрузки одного чанка (мс).</summary>
-    public int DownloadTimeoutMs { get; init; } = Defaults.DownloadTimeoutMs;
 
     /// <summary>Таймаут ожидания слота загрузки (мс). 0 = без ожидания.</summary>
     public int DownloadSlotTimeoutMs { get; init; } = Defaults.DownloadSlotTimeoutMs;
@@ -38,10 +50,10 @@ public sealed record StreamingConfig
 
     #region Retry / Resilience
 
-    /// <summary>Максимум повторных попыток при сетевых ошибках (IOException, HttpRequestException).</summary>
+    /// <summary>Максимум повторных попыток при сетевых ошибках.</summary>
     public int MaxNetworkRetries { get; init; } = Defaults.MaxNetworkRetries;
 
-    /// <summary>Базовая задержка между retry (мс). При exponential backoff умножается на 2^attempt.</summary>
+    /// <summary>Базовая задержка между retry (мс).</summary>
     public int NetworkRetryBaseDelayMs { get; init; } = Defaults.NetworkRetryBaseDelayMs;
 
     /// <summary>Использовать exponential backoff при retry.</summary>
@@ -58,13 +70,28 @@ public sealed record StreamingConfig
 
     #endregion
 
-    #region Pre-Buffer Settings
+    #region Buffer Targets
 
-    /// <summary>Размер предварительного буфера (в чанках) перед стартом воспроизведения.</summary>
-    public int InitialChunksToLoad { get; init; } = Defaults.InitialChunksToLoad;
+    /// <summary>
+    /// Целевой объём буфера вперёд от текущей позиции в миллисекундах.
+    /// Используется MAPO-планировщиком.
+    /// </summary>
+    public int TargetBufferMs { get; init; } = Defaults.TargetBufferMs;
 
-    /// <summary>Размер предварительного буфера (в чанках) при перетаскивании ползунка (seek).</summary>
-    public int SeekPreloadChunks { get; init; } = Defaults.SeekPreloadChunks;
+    /// <summary>
+    /// Начальный объём данных в байтах, который желательно иметь перед стартом парсинга/декодирования.
+    /// </summary>
+    public int InitialPrebufferBytes { get; init; } = Defaults.InitialPrebufferBytes;
+
+    /// <summary>
+    /// Объём данных в байтах для best-effort предзагрузки вокруг seek-позиции.
+    /// </summary>
+    public int SeekPreloadBytes { get; init; } = Defaults.SeekPreloadBytes;
+
+    /// <summary>
+    /// Минимальный объём буфера вперёд в миллисекундах перед запуском фоновой докачки.
+    /// </summary>
+    public int MinBufferAheadForBackgroundFillMs { get; init; } = Defaults.MinBufferAheadForBackgroundFillMs;
 
     #endregion
 
@@ -73,14 +100,11 @@ public sealed record StreamingConfig
     /// <summary>Циклов простоя перед фоновой докачкой.</summary>
     public int BackgroundFillIdleCycles { get; init; } = Defaults.BackgroundFillIdleCycles;
 
-    /// <summary>Пауза между фоновыми загрузками (мс).</summary>
+    /// <summary>Пауза между фоновыми range-загрузками (мс).</summary>
     public int BackgroundFillIntervalMs { get; init; } = Defaults.BackgroundFillIntervalMs;
 
-    /// <summary>Максимум чанков для фоновой докачки за сессию (0 = unlimited).</summary>
-    public int MaxBackgroundChunksPerSession { get; init; } = Defaults.MaxBackgroundChunksPerSession;
-
-    /// <summary>Минимум буфера впереди перед началом фоновой докачки.</summary>
-    public int MinBufferAheadForBackgroundFill { get; init; } = Defaults.MinBufferAheadForBackgroundFill;
+    /// <summary>Максимум фоновых range-запросов за сессию (0 = unlimited).</summary>
+    public int MaxBackgroundRequestsPerSession { get; init; } = Defaults.MaxBackgroundRequestsPerSession;
 
     #endregion
 
@@ -91,23 +115,32 @@ public sealed record StreamingConfig
 
     #endregion
 
+    #region Throttling
+
     /// <summary>
-    /// Значения по умолчанию — совпадают с обновленным сбалансированным Medium (бывший High) профилем (64 КБ).
+    /// Множитель скорости скачивания относительно битрейта аудио.
+    /// 0 = без ограничений. 3.0 = скачиваем не быстрее 3× битрейта.
+    /// Предотвращает burst-download, из-за которого YouTube дросселирует соединение.
+    /// </summary>
+    public double ThrottleMultiplier { get; init; } = Defaults.ThrottleMultiplier;
+
+    #endregion
+
+    /// <summary>
+    /// Значения по умолчанию.
     /// </summary>
     public static class Defaults
     {
-        // Chunk Settings
-        public const int ChunkSizeBytes = 64 * 1024;
-        public const int ReadAheadChunks = 6;
-        public const int MaxRamChunks = 96;
-        public const int RamEvictionDistance = 14;
+        public const int RequestAlignmentBytes = 16 * 1024;
+        public const int MinRequestSizeBytes = 16 * 1024;
+        public const int MaxRequestSizeBytes = 256 * 1024;
 
-        // Download Settings
+        public const int MaxRamBytes = 6 * 1024 * 1024;
+        public const int RamEvictionWindowBytes = 1536 * 1024;
+
         public const int MaxConcurrentDownloads = 3;
-        public const int DownloadTimeoutMs = 15_000;
         public const int DownloadSlotTimeoutMs = 300;
 
-        // Retry / Resilience
         public const int MaxNetworkRetries = 3;
         public const int NetworkRetryBaseDelayMs = 500;
         public const bool UseExponentialBackoff = true;
@@ -115,21 +148,17 @@ public sealed record StreamingConfig
         public const int RefreshCooldownMs = 3000;
         public const int PostRefreshDelayMs = 500;
 
-        // Pre-buffer Settings
-        public const int InitialChunksToLoad = 4;
-        public const int SeekPreloadChunks = 6;
+        public const int TargetBufferMs = 12_000;
+        public const int InitialPrebufferBytes = 96 * 1024;
+        public const int SeekPreloadBytes = 192 * 1024;
+        public const int MinBufferAheadForBackgroundFillMs = 4000;
 
-        // Background Fill
         public const int BackgroundFillIdleCycles = 5;
         public const int BackgroundFillIntervalMs = 3000;
-        public const int MaxBackgroundChunksPerSession = 0;
+        public const int MaxBackgroundRequestsPerSession = 0;
 
-        /// <summary>
-        /// Минимум буфера впереди перед началом фоновой докачки.
-        /// </summary>
-        public const int MinBufferAheadForBackgroundFill = 4;
-
-        // Preload Loop
         public const int PreloadIntervalMs = 500;
+
+        public const double ThrottleMultiplier = 3.0;
     }
 }

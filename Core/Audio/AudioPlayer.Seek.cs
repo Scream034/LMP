@@ -1,4 +1,5 @@
 using LMP.Core.Audio.Interfaces;
+using LMP.Core.Audio.Sources;
 using LMP.Core.Exceptions;
 using static LMP.Core.Audio.AudioConstants;
 
@@ -6,24 +7,15 @@ namespace LMP.Core.Audio;
 
 public sealed partial class AudioPlayer
 {
-    /// <summary>
-    /// Таймаут прогрева буфера после seek для streaming контента (мс).
-    /// Для cached контента используется <see cref="SeekWarmupTimeoutCachedMs"/>.
-    /// </summary>
+    #region Seek Constants
+
+    /// <summary>Таймаут прогрева буфера после seek для streaming контента (мс).</summary>
     private const int SeekWarmupTimeoutMs = 150;
 
-    /// <summary>
-    /// Таймаут прогрева буфера после seek для cached/local контента (мс).
-    /// Существенно короче <see cref="SeekWarmupTimeoutMs"/>: данные уже на диске,
-    /// задержка определяется только скоростью декодирования.
-    /// </summary>
+    /// <summary>Таймаут прогрева буфера после seek для cached/local контента (мс).</summary>
     private const int SeekWarmupTimeoutCachedMs = 50;
 
-    /// <summary>
-    /// Максимальное количество итераций основного seek-loop.
-    /// Защита от бесконечного цикла при патологическом потоке seek-событий.
-    /// Значение 50 покрывает даже агрессивный scrubbing (~10 seeks/sec × 5 sec).
-    /// </summary>
+    /// <summary>Максимальное количество итераций seek coalescing loop.</summary>
     private const int SeekLoopMaxIterations = 50;
 
     /// <summary>Таймаут остановки декодера при re-seek внутри loop (мс).</summary>
@@ -31,48 +23,48 @@ public sealed partial class AudioPlayer
 
     /// <summary>
     /// Порог BufferProgress для определения «быстрого» источника (%).
-    /// Снижен с 95% до 80%: при 80%+ cached трек для seek не требует HTTP,
-    /// данные читаются с диска. Предыдущий порог 95% заставлял WaitForBuffer
-    /// ждать полный <see cref="MinSeekResumeBufferMs"/> на 92% cached треках.
     /// </summary>
     private const double FastSourceBufferThreshold = 80.0;
 
     /// <summary>
-    /// Максимальный таймаут Phase A (source seek + critical chunk download).
+    /// Максимальный таймаут Phase A (source seek + critical range download).
+    /// Ограничивает блокировку actor loop при scrubbing по незакачанному контенту.
     /// </summary>
-    /// <remarks>
-    /// <para>Phase A может блокировать actor loop на всё время HTTP download,
-    /// что при scrubbing по незакачанному контенту превращается в секундные freeze'ы.
-    /// Этот таймаут ограничивает максимальное ожидание: если source seek не завершился
-    /// за это время, seek прерывается и новый pending seek обрабатывается немедленно.</para>
-    /// </remarks>
     private const int SourceSeekTimeoutMs = 500;
+
+    /// <summary>
+    /// Максимальное время фонового ожидания decoder/ring buffer
+    /// после deferred seek в состоянии Buffering.
+    /// </summary>
+    private const int DeferredSeekResumeTimeoutMs = 30_000;
+
+    #endregion
+
+    #region Seek State
 
     /// <summary>CTS текущей фоновой фазы seek.</summary>
     private CancellationTokenSource? _activeSeekCts;
 
-    /// <summary>
-    /// Pending seek позиция для latest-wins coalescing.
-    /// -1 = нет pending seek.
-    /// </summary>
+    /// <summary>CTS текущего deferred-resume waiter после seek-buffering.</summary>
+    private CancellationTokenSource? _deferredResumeCts;
+
+    /// <summary>Pending seek позиция для latest-wins coalescing. -1 = нет pending seek.</summary>
     private long _pendingSeekMs = -1;
 
     /// <summary>Флаг активного seek (HandleSeekAsync выполняется).</summary>
     private volatile bool _backgroundSeekActive;
 
-    /// <summary>
-    /// Pipeline, к которому относится текущий seek.
-    /// Защищает от утечки seek-state между треками.
-    /// </summary>
+    /// <summary>Pipeline, к которому относится текущий seek.</summary>
     private AudioPipeline? _backgroundSeekPipeline;
 
 #if DEBUG
-    /// <summary>Счётчик принудительных перезапусков seek.</summary>
     private int _seekRestartCount;
-
-    /// <summary>Счётчик перезапусков decoder loop в рамках текущего трека.</summary>
     private int _decoderRestartCount;
 #endif
+
+    #endregion
+
+    #region Public Seek API
 
     /// <summary>
     /// Инициирует seek с latest-wins coalescing.
@@ -80,21 +72,17 @@ public sealed partial class AudioPlayer
     /// </summary>
     public ValueTask SeekAsync(TimeSpan position, CancellationToken ct = default)
     {
-        if (_disposed || _state is not (PlayerState.Playing or PlayerState.Paused))
+        if (_disposed || _state is not (PlayerState.Playing or PlayerState.Paused or PlayerState.Buffering))
             return ValueTask.CompletedTask;
 
         var pipeline = _activePipeline;
         if (pipeline == null || !pipeline.Source.CanSeek)
             return ValueTask.CompletedTask;
 
-        // Мгновенно приостанавливаем фоновую загрузку источника прямо отсюда на UI-потоке.
-        // Это исключает планирование новых фоновых загрузок в PreloadLoop до завершения серии seeks.
         pipeline.Source.SetPlaybackActive(false);
 
         long targetMs = (long)position.TotalMilliseconds;
 
-        // Coalescing: если seek уже выполняется или в очереди канала уже висит SeekCommand,
-        // мы просто атомарно обновляем целевую позицию без создания новой команды в канале.
         if (_backgroundSeekActive || Interlocked.Read(ref _pendingSeekMs) >= 0)
         {
             Interlocked.Exchange(ref _pendingSeekMs, targetMs);
@@ -106,22 +94,23 @@ public sealed partial class AudioPlayer
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         ct.Register(() => tcs.TrySetCanceled(ct));
 
+        int seekGeneration = Interlocked.Increment(ref _seekGeneration);
+
         Interlocked.Exchange(ref _pendingSeekMs, targetMs);
+        _commandChannel.Writer.TryWrite(new SeekCommand(position, _session.Current, seekGeneration, tcs));
 
-        _commandChannel.Writer.TryWrite(new SeekCommand(position, _session.Current, tcs));
-
-        // ВАЖНО: Разрываем связь с UI! 
-        // Возвращаем CompletedTask, чтобы UI-поток (слайдер) не ждал завершения HTTP-скачивания чанка.
-        // Плеер сам уведомит интерфейс о завершении через событие SeekCompleted.
         return ValueTask.CompletedTask;
     }
 
     /// <summary>
-    /// Отменяет текущую фазу seek АСИНХРОННО.
+    /// Отменяет текущую фоновую фазу seek АСИНХРОННО.
     /// </summary>
     private void CancelActiveSeek()
     {
         ResetSeekState();
+
+        var deferredResumeCts = Interlocked.Exchange(ref _deferredResumeCts, null);
+        CancelCtsAsync(deferredResumeCts);
 
         var cts = Interlocked.Exchange(ref _activeSeekCts, null);
         if (cts == null) return;
@@ -132,9 +121,13 @@ public sealed partial class AudioPlayer
             Log.Warn($"[AudioPlayer] Seek restart storm: {restartCount} cancellations on current track");
 #endif
 
-        // АСИНХРОННАЯ ОТМЕНА:
-        // Передаем отмену в ThreadPool. Это защищает UI-поток от жестких блокировок 
-        // при синхронном разрыве TCP-сокетов HttpClient'а на уровне ОС.
+        CancelCtsAsync(cts);
+    }
+
+    private static void CancelCtsAsync(CancellationTokenSource? cts)
+    {
+        if (cts == null) return;
+
         ThreadPool.UnsafeQueueUserWorkItem(static state =>
         {
             try { ((CancellationTokenSource)state!).Cancel(); }
@@ -152,8 +145,12 @@ public sealed partial class AudioPlayer
 #endif
     }
 
+    #endregion
+
+    #region Seek Command Handler
+
     /// <summary>
-    /// Обрабатывает seek: синхронная actor-фаза + ожидание background-фазы с coalescing.
+    /// Обрабатывает seek: синхронная actor-фаза + background coalescing.
     /// </summary>
     private async Task HandleSeekAsync(SeekCommand cmd)
     {
@@ -164,23 +161,18 @@ public sealed partial class AudioPlayer
             return;
         }
 
-        // Читаем самую свежую позицию, которая могла прийти во время ожидания в канале
         long latestTargetMs = DrainPendingSeekMs();
         long posMs = latestTargetMs >= 0 ? latestTargetMs : (long)cmd.Position.TotalMilliseconds;
 
-        bool wasPlaying = _state == PlayerState.Playing;
+        bool wasPlaying = _state is PlayerState.Playing or PlayerState.Buffering;
         SetState(PlayerState.Seeking);
         StopPositionTimer();
-
-        _lastRawPlayedSamples = -1; // Сброс экстраполяции для предотвращения дёргания слайдера в момент отпускания клика
+        _lastRawPlayedSamples = -1;
 
         try
         {
-            // Prefetch целевого чанка параллельно с остановкой decoder
-            if (pipeline.Source is Sources.CachingStreamSource cachingSource)
-            {
+            if (pipeline.Source is CachingStreamSource cachingSource)
                 _ = cachingSource.TryPrefetchChunkForSeekAsync(posMs, _lifetimeCts.Token);
-            }
 
             await pipeline.StopDecodingAsync(
                 TimeSpan.FromMilliseconds(DecoderStopTimeoutSeekMs)).ConfigureAwait(false);
@@ -194,7 +186,6 @@ public sealed partial class AudioPlayer
 
             pipeline.Stop();
             pipeline.Flush();
-
             pipeline.PrepareForSeek(posMs);
 
             Volatile.Write(ref _backgroundSeekPipeline, pipeline);
@@ -208,8 +199,8 @@ public sealed partial class AudioPlayer
                 catch (ObjectDisposedException) { }
             }
 
-            await CompleteSeekWithCoalescingAsync(pipeline, cmd, posMs, wasPlaying, cmd.SessionId, seekCts)
-                .ConfigureAwait(false);
+            await CompleteSeekWithCoalescingAsync(
+                pipeline, cmd, posMs, wasPlaying, cmd.SessionId, cmd.SeekGeneration, seekCts).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -235,17 +226,20 @@ public sealed partial class AudioPlayer
         }
     }
 
+    #endregion
+
+    #region Seek Coalescing Loop
+
     /// <summary>
-    /// Background-фаза seek с full-lifecycle coalescing и высокоточной телеметрией замеров времени.
+    /// Background-фаза seek с full-lifecycle coalescing и автоматическим
+    /// переходом в Buffering при нехватке данных.
     /// </summary>
     private async Task CompleteSeekWithCoalescingAsync(
-        AudioPipeline pipeline, SeekCommand cmd, long initialPosMs,
-        bool wasPlaying, int sessionAtStart, CancellationTokenSource seekCts)
+     AudioPipeline pipeline, SeekCommand cmd, long initialPosMs,
+     bool wasPlaying, int sessionAtStart, int seekGeneration, CancellationTokenSource seekCts)
     {
         var seekCt = seekCts.Token;
         bool decoderStarted = false;
-
-        // Запуск глобального таймера операции seek
         var totalSw = System.Diagnostics.Stopwatch.StartNew();
 
         try
@@ -257,13 +251,10 @@ public sealed partial class AudioPlayer
             {
                 var phaseSw = System.Diagnostics.Stopwatch.StartNew();
 
-                // ── Phase A: Seek source (bounded) ──
-                bool success;
                 try
                 {
                     var sourceSeekTask = pipeline.Source
-                        .SeekAsync(currentTargetMs, seekCt)
-                        .AsTask();
+                        .SeekAsync(currentTargetMs, seekCt).AsTask();
 
                     var completed = await Task.WhenAny(
                         sourceSeekTask,
@@ -271,29 +262,26 @@ public sealed partial class AudioPlayer
 
                     if (completed == sourceSeekTask)
                     {
-                        success = await sourceSeekTask.ConfigureAwait(false);
+                        await sourceSeekTask.ConfigureAwait(false);
                     }
                     else
                     {
-                        // Source seek не завершился за SourceSeekTimeoutMs.
-                        // Проверяем: пришёл ли новый seek пока мы ждали?
                         long drained = DrainPendingSeekMs();
                         if (drained >= 0)
                         {
                             currentTargetMs = drained;
                             pipeline.Flush();
                             pipeline.PrepareForSeek(currentTargetMs);
-                            Log.Debug($"[SeekTelemetry] Phase A (Source Seek) timed out, coalescing to pending position {drained}ms");
+                            Log.Debug($"[SeekTelemetry] Phase A timed out, coalescing to {drained}ms");
                             continue;
                         }
 
-                        // Нет нового seek — дожидываемся source seek до конца.
-                        success = await sourceSeekTask.ConfigureAwait(false);
+                        await sourceSeekTask.ConfigureAwait(false);
                     }
                 }
                 catch (OperationCanceledException)
                 {
-                    Log.Debug($"[SeekTelemetry] Phase A (Source Seek) cancelled after {phaseSw.ElapsedMilliseconds}ms");
+                    Log.Debug($"[SeekTelemetry] Phase A cancelled after {phaseSw.ElapsedMilliseconds}ms");
                     throw;
                 }
 
@@ -306,18 +294,8 @@ public sealed partial class AudioPlayer
                     return;
                 }
 
-                if (!success)
-                {
-                    cmd.Completion?.TrySetResult(false);
-                    SetState(wasPlaying ? PlayerState.Playing : PlayerState.Paused);
-                    if (wasPlaying) pipeline.Start();
-                    StartPositionTimerDelayed();
-                    return;
-                }
-
                 UpdateDecodedPosition(pipeline, currentTargetMs);
 
-                // ── Phase B: Immediate drain ──
                 {
                     long drained = DrainPendingSeekMs();
                     if (drained >= 0)
@@ -325,28 +303,26 @@ public sealed partial class AudioPlayer
                         currentTargetMs = drained;
                         pipeline.Flush();
                         pipeline.PrepareForSeek(currentTargetMs);
-                        Log.Debug($"[SeekTelemetry] Phase B: Coalesced pending seek to {drained}ms without starting decoder");
+                        Log.Debug($"[SeekTelemetry] Phase B: Coalesced to {drained}ms");
                         continue;
                     }
                 }
 
-                // ── Phase C: Validation ──
                 if (!ValidateSeekState(seekCt, pipeline, sessionAtStart))
                 {
                     cmd.Completion?.TrySetCanceled();
                     return;
                 }
 
-                // ── Phase D: StartDecoding ──
                 pipeline.StartDecoding(
                     CreateUrlRefresher(), _options,
-                    CreateTrackEndedCallback(cmd.SessionId), HandleError);
+                    CreateTrackEndedCallback(cmd.SessionId),
+                    CreateErrorCallback(cmd.SessionId, pipeline));
                 decoderStarted = true;
 
                 long phaseDMs = phaseSw.ElapsedMilliseconds;
                 phaseSw.Restart();
 
-                // Checkpoint
                 {
                     long drained = DrainPendingSeekMs();
                     if (drained >= 0)
@@ -355,28 +331,36 @@ public sealed partial class AudioPlayer
                         await StopDecoderForReseekAsync(pipeline, seekCt).ConfigureAwait(false);
                         decoderStarted = false;
                         pipeline.PrepareForSeek(currentTargetMs);
-                        Log.Debug($"[SeekTelemetry] Phase D (Decoder Start) interrupted, re-seeking to {drained}ms");
+                        Log.Debug($"[SeekTelemetry] Phase D interrupted, re-seeking to {drained}ms");
                         continue;
                     }
                 }
 
-                // ── Phase E: Ожидание буфера и возобновление ──
                 long phaseEMs = 0;
+
                 if (wasPlaying && _state != PlayerState.Paused)
                 {
                     var (seekThreshold, warmupTimeout) =
                         ComputeSeekWarmupParams(pipeline, currentTargetMs);
 
+                    bool warmupReady = seekThreshold <= 0;
+
                     if (seekThreshold > 0 && warmupTimeout > 0)
                     {
-                        await pipeline.WaitForBufferAsync(seekThreshold, warmupTimeout, seekCt)
-                            .ConfigureAwait(false);
+                        try
+                        {
+                            warmupReady = await pipeline.WaitForBufferAsync(
+                                seekThreshold, warmupTimeout, seekCt).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch
+                        {
+                        }
                     }
 
                     phaseEMs = phaseSw.ElapsedMilliseconds;
                     phaseSw.Restart();
 
-                    // Финальный checkpoint
                     {
                         long drained = DrainPendingSeekMs();
                         if (drained >= 0)
@@ -385,7 +369,7 @@ public sealed partial class AudioPlayer
                             await StopDecoderForReseekAsync(pipeline, seekCt).ConfigureAwait(false);
                             decoderStarted = false;
                             pipeline.PrepareForSeek(currentTargetMs);
-                            Log.Debug($"[SeekTelemetry] Phase E (Buffer Wait) interrupted, re-seeking to {drained}ms");
+                            Log.Debug($"[SeekTelemetry] Phase E interrupted, re-seeking to {drained}ms");
                             continue;
                         }
                     }
@@ -396,21 +380,42 @@ public sealed partial class AudioPlayer
                         return;
                     }
 
-                    ResumePlaybackSequence(
-                        pipeline, startTimers: false, configurePipeline: true,
-                        trackId: _currentTrackId);
+                    bool bufferReady = seekThreshold <= 0
+                        || warmupReady
+                        || pipeline.BufferedSamples >= seekThreshold;
+
+                    if (bufferReady || pipeline.Source.IsFullyBuffered)
+                    {
+                        ResumePlaybackSequence(
+                            pipeline, startTimers: false,
+                            configurePipeline: true, trackId: _currentTrackId);
+                    }
+                    else
+                    {
+                        Log.Warn($"[SeekTelemetry] Buffer warmup timed out " +
+                                 $"(ring={pipeline.BufferedSamples}, threshold={seekThreshold}). " +
+                                 "Entering Buffering state. Playback will auto-resume.");
+
+                        _options.OnPipelineConfiguring?.Invoke(pipeline, _currentTrackId);
+                        pipeline.ActivateBufferingMode();
+                        SetState(PlayerState.Buffering);
+
+                        var deferredResumeCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+                        var previousDeferredResumeCts = Interlocked.Exchange(ref _deferredResumeCts, deferredResumeCts);
+                        CancelCtsAsync(previousDeferredResumeCts);
+
+                        _ = AwaitDeferredSeekBufferAndResumeAsync(
+                            pipeline, seekThreshold, sessionAtStart, seekGeneration, deferredResumeCts);
+                    }
                 }
                 else
                 {
                     SetState(PlayerState.Paused);
                 }
 
-                // Логирование детальной телеметрии времени выполнения
-                Log.Info($"[SeekTelemetry] Seek to {currentTargetMs}ms COMPLETED successfully. " +
-                         $"Total time: {totalSw.ElapsedMilliseconds}ms | " +
-                         $"Phase A (Source Seek): {phaseAMs}ms | " +
-                         $"Phase D (Decoder Init): {phaseDMs}ms | " +
-                         $"Phase E (Buffer Warmup): {phaseEMs}ms");
+                Log.Info($"[SeekTelemetry] Seek to {currentTargetMs}ms COMPLETED. " +
+                         $"Total: {totalSw.ElapsedMilliseconds}ms | " +
+                         $"A: {phaseAMs}ms | D: {phaseDMs}ms | E: {phaseEMs}ms");
 
                 StartPositionTimerDelayed();
                 _events.RaiseSeekCompleted(TimeSpan.FromMilliseconds(currentTargetMs));
@@ -419,19 +424,22 @@ public sealed partial class AudioPlayer
             }
 
             Log.Warn($"[SeekTelemetry] Seek coalescing loop exhausted ({SeekLoopMaxIterations} iterations)");
+
             if (decoderStarted && wasPlaying && _state != PlayerState.Paused)
             {
-                ResumePlaybackSequence(pipeline, startTimers: false,
+                ResumePlaybackSequence(
+                    pipeline, startTimers: false,
                     configurePipeline: true, trackId: _currentTrackId);
             }
 
             StartPositionTimerDelayed();
-            _events.RaiseSeekCompleted(TimeSpan.FromMilliseconds(currentTargetMs));
+            _events.RaiseSeekCompleted(TimeSpan.FromMilliseconds(initialPosMs));
             cmd.Completion?.TrySetResult(true);
         }
         catch (OperationCanceledException)
         {
-            Log.Debug($"[SeekTelemetry] Seek to {initialPosMs}ms was cancelled by user action. Elapsed: {totalSw.ElapsedMilliseconds}ms");
+            Log.Debug($"[SeekTelemetry] Seek to {initialPosMs}ms cancelled. " +
+                       $"Elapsed: {totalSw.ElapsedMilliseconds}ms");
             cmd.Completion?.TrySetCanceled();
             StartPositionTimerDelayed();
         }
@@ -458,28 +466,204 @@ public sealed partial class AudioPlayer
                 ResetSeekState();
 
             Interlocked.CompareExchange(ref _activeSeekCts, null, seekCts);
+
             try { seekCts.Dispose(); }
             catch (ObjectDisposedException) { }
         }
     }
 
     /// <summary>
+    /// Фоново дожидается готовности decoder/ring buffer после deferred seek
+    /// и возвращает completion в actor loop через <see cref="DeferredResumeCommand"/>.
+    /// </summary>
+    private async Task AwaitDeferredSeekBufferAndResumeAsync(
+        AudioPipeline pipeline,
+        int seekThreshold,
+        int sessionId,
+        int seekGeneration,
+        CancellationTokenSource deferredResumeCts)
+    {
+        try
+        {
+            bool thresholdReached = await pipeline.WaitForBufferAsync(
+                seekThreshold, DeferredSeekResumeTimeoutMs, deferredResumeCts.Token)
+                .ConfigureAwait(false);
+
+            int ringBufferSamples = pipeline.BufferedSamples;
+
+            if (_disposed || deferredResumeCts.IsCancellationRequested || _lifetimeCts.IsCancellationRequested)
+                return;
+
+            if (!_commandChannel.Writer.TryWrite(new DeferredResumeCommand(
+                    sessionId,
+                    seekGeneration,
+                    pipeline,
+                    thresholdReached,
+                    ringBufferSamples)))
+            {
+                Log.Debug("[SeekTelemetry] Deferred resume command dropped: channel unavailable");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[SeekTelemetry] Deferred seek waiter error: {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _deferredResumeCts, null, deferredResumeCts);
+            try { deferredResumeCts.Dispose(); } catch (ObjectDisposedException) { }
+        }
+    }
+
+    /// <summary>
+    /// Возобновляет воспроизведение после deferred seek внутри actor loop.
+    /// </summary>
+    private Task HandleDeferredResumeAsync(DeferredResumeCommand cmd)
+    {
+        int currentSeekGeneration = Volatile.Read(ref _seekGeneration);
+
+        if (_disposed
+            || _activePipeline != cmd.Pipeline
+            || _session.IsStale(cmd.SessionId)
+            || cmd.SeekGeneration != currentSeekGeneration)
+        {
+            Log.Debug($"[SeekTelemetry] Deferred resume dropped: " +
+                      $"disposed={_disposed}, pipelineMatch={_activePipeline == cmd.Pipeline}, " +
+                      $"stale={_session.IsStale(cmd.SessionId)}, " +
+                      $"generationMatch={cmd.SeekGeneration == currentSeekGeneration}, " +
+                      $"state={_state}");
+            return Task.CompletedTask;
+        }
+
+        if (CurrentPlaybackIntent != PlaybackIntent.Play)
+        {
+            Log.Debug($"[SeekTelemetry] Deferred resume ignored due to intent={CurrentPlaybackIntent}");
+            return Task.CompletedTask;
+        }
+
+        if (_state == PlayerState.Playing)
+            return Task.CompletedTask;
+
+        if (_state is PlayerState.Idle or PlayerState.Disposed or PlayerState.Error)
+        {
+            Log.Debug($"[SeekTelemetry] Deferred resume ignored in terminal state={_state}");
+            return Task.CompletedTask;
+        }
+
+        if (cmd.Pipeline.IsDeviceLost)
+        {
+            SetState(PlayerState.Buffering);
+            _commandChannel.Writer.TryWrite(new DeviceRecoveryCommand(cmd.SessionId));
+            return Task.CompletedTask;
+        }
+
+        if (!cmd.ThresholdReached)
+        {
+            Log.Warn($"[SeekTelemetry] Deferred warmup timed out after {DeferredSeekResumeTimeoutMs}ms " +
+                     $"(ring={cmd.BufferedSamples}). Force-resuming playback.");
+        }
+        else
+        {
+            Log.Debug($"[SeekTelemetry] Deferred warmup complete " +
+                      $"(ring={cmd.BufferedSamples}). Resuming playback.");
+        }
+
+        ResumePlaybackSequence(
+            cmd.Pipeline,
+            startTimers: true,
+            configurePipeline: false,
+            trackId: _currentTrackId);
+
+        Log.Info("[SeekTelemetry] Deferred seek buffer ready. Playback resumed automatically.");
+        return Task.CompletedTask;
+    }
+
+    #endregion
+
+    #region Deferred Seek Resume
+
+    /// <summary>
+    /// Фоново дожидается готовности decoder/ring buffer после deferred seek
+    /// и автоматически возобновляет воспроизведение, не блокируя actor loop.
+    /// </summary>
+    /// <param name="pipeline">Pipeline, для которого выполняется ожидание.</param>
+    /// <param name="seekThreshold">Минимальный порог ring buffer для безопасного resume.</param>
+    /// <param name="sessionId">Сессия playback, к которой относится seek.</param>
+    private async Task AwaitDeferredSeekBufferAndResumeAsync(
+        AudioPipeline pipeline, int seekThreshold, int sessionId)
+    {
+        try
+        {
+            bool thresholdReached = await pipeline.WaitForBufferAsync(
+                seekThreshold, DeferredSeekResumeTimeoutMs, _lifetimeCts.Token)
+                .ConfigureAwait(false);
+
+            int ringBufferSamples = pipeline.BufferedSamples;
+
+            // Guard: убеждаемся что pipeline/session/state всё ещё актуальны
+            if (_disposed
+                || _activePipeline != pipeline
+                || _session.IsStale(sessionId)
+                || _state != PlayerState.Buffering)
+            {
+                Log.Debug($"[SeekTelemetry] Deferred resume abandoned: " +
+                          $"disposed={_disposed}, pipelineMatch={_activePipeline == pipeline}, " +
+                          $"stale={_session.IsStale(sessionId)}, state={_state}");
+                return;
+            }
+
+            if (thresholdReached)
+            {
+                Log.Debug($"[SeekTelemetry] Deferred warmup: ring buffer reached threshold " +
+                          $"({ringBufferSamples} samples). Resuming playback.");
+            }
+            else
+            {
+                // Таймаут истёк. Запускаем воспроизведение принудительно:
+                // decoder продолжит заполнять ring buffer на лету.
+                // При пустом ring buffer будут кратковременные underruns,
+                // но starvation callback обработает эскалацию.
+                Log.Warn($"[SeekTelemetry] Deferred warmup timed out after {DeferredSeekResumeTimeoutMs}ms " +
+                         $"(ring={ringBufferSamples}, threshold={seekThreshold}). " +
+                         "Force-resuming playback.");
+            }
+
+            pipeline.Start();
+            SetState(PlayerState.Playing);
+            StartTimers();
+
+            Log.Info("[SeekTelemetry] Deferred seek buffer ready. Playback resumed automatically.");
+        }
+        catch (OperationCanceledException)
+        {
+            // Нормально: пользователь сделал Stop, новый Seek или Dispose
+        }
+        catch (AudioDeviceException ex)
+        {
+            HandleError(ex);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[SeekTelemetry] Deferred seek resume error: {ex.Message}");
+        }
+    }
+
+    #endregion
+
+    #region Seek Helpers
+
+    /// <summary>
     /// Вычисляет параметры WaitForBuffer на основе реального состояния источника.
     /// </summary>
     /// <remarks>
-    /// <para><b>Архитектура (v3):</b></para>
     /// <list type="bullet">
-    ///   <item><b>Fully cached / LocalFile:</b> threshold=0, timeout=0 —
-    ///     пропуск WaitForBuffer целиком. Данные на диске, decoder заполнит
-    ///     ring buffer быстрее, чем backend его опустошит.</item>
-    ///   <item><b>Target chunk cached (≥80% overall):</b> минимальный threshold
-    ///     и короткий timeout. Целевой чанк уже в RAM/на диске, decoder
-    ///     начнёт выдавать PCM мгновенно.</item>
-    ///   <item><b>Streaming (target chunk не cached):</b> полный threshold
-    ///     и стандартный timeout — нужно дождаться HTTP-загрузки.</item>
-    ///   </list>
-    /// <para>Предыдущая версия использовала единый <c>BufferProgress ≥ 95%</c>
-    /// порог, из-за которого 92% cached трек ждал полные 300ms.</para>
+    ///   <item><b>Fully cached / LocalFile:</b> threshold=0, timeout=0 — пропуск ожидания</item>
+    ///   <item><b>Target range cached (≥80% overall):</b> минимальный threshold, короткий timeout</item>
+    ///   <item><b>Streaming (не cached):</b> полный threshold и стандартный timeout</item>
+    /// </list>
     /// </remarks>
     private static (int seekThreshold, int warmupTimeout) ComputeSeekWarmupParams(
         AudioPipeline pipeline, long targetMs)
@@ -488,18 +672,17 @@ public sealed partial class AudioPlayer
         int rate = pipeline.SampleRate;
         int channels = pipeline.Channels;
 
-        // ── Fast path: полностью кэшированные / локальные ──
+        // Полностью кэшированные / локальные файлы: мгновенный resume
         if (source.IsFullyBuffered || source is Sources.LocalFileSource)
             return (0, 0);
 
-        // ── Medium path: target chunk уже доступен ──
-        if (source is Sources.CachingStreamSource caching)
+        // Target range уже доступен или общий прогресс высокий
+        if (source is CachingStreamSource caching)
         {
-            bool targetChunkCached = caching.IsTargetChunkAvailable(targetMs);
+            bool targetReady = caching.IsTargetChunkAvailable(targetMs);
 
-            if (targetChunkCached || source.BufferProgress >= FastSourceBufferThreshold)
+            if (targetReady || source.BufferProgress >= FastSourceBufferThreshold)
             {
-                // Минимальный порог: ~10ms буфера — достаточно для бесшовного resume
                 int minThreshold = rate * channels * 10 / 1000;
                 return (Math.Max(minThreshold, 1), SeekWarmupTimeoutCachedMs);
             }
@@ -510,25 +693,19 @@ public sealed partial class AudioPlayer
             return (Math.Max(minThreshold, 1), SeekWarmupTimeoutCachedMs);
         }
 
-        // ── Slow path: streaming, target chunk не cached ──
+        // Streaming: нужно подождать
         int fullThreshold = rate * channels * MinSeekResumeBufferMs / 1000;
         return (fullThreshold, SeekWarmupTimeoutMs);
     }
 
-    /// <summary>
-    /// Атомарно забирает pending seek позицию (latest-wins).
-    /// </summary>
-    /// <returns>
-    /// Позиция в миллисекундах, или <c>-1</c> если pending seek отсутствует.
-    /// </returns>
+    /// <summary>Атомарно забирает pending seek позицию (latest-wins).</summary>
+    /// <returns>Позиция в миллисекундах, или <c>-1</c> если pending seek отсутствует.</returns>
     private long DrainPendingSeekMs()
         => Interlocked.Exchange(ref _pendingSeekMs, -1);
 
     /// <summary>
     /// Останавливает decoder и очищает буферы для re-seek внутри coalescing loop.
     /// </summary>
-    /// <param name="pipeline">Активный pipeline.</param>
-    /// <param name="ct">Токен отмены seek-фазы.</param>
     private static async Task StopDecoderForReseekAsync(AudioPipeline pipeline, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -563,4 +740,6 @@ public sealed partial class AudioPlayer
         Volatile.Write(ref _backgroundSeekPipeline, null);
         _backgroundSeekActive = false;
     }
+
+    #endregion
 }

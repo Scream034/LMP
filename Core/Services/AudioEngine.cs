@@ -134,6 +134,16 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     /// </summary>
     private int _cacheRetryCount;
 
+    /// <summary>
+    /// Признак того, что активный <see cref="Audio.Sources.CachingStreamSource"/>
+    /// был реально приостановлен lifecycle-политикой движка.
+    /// </summary>
+    /// <remarks>
+    /// Нужен для симметричного Resume: если suspend был пропущен из-за активного playback,
+    /// нельзя безусловно дергать <c>Resume()</c> при возврате окна в активное состояние.
+    /// </remarks>
+    private int _sourceLifecycleSuspended;
+
     #endregion
 
     #region Observable Properties
@@ -664,9 +674,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             }
 
             ApplyGainToPipeline();
-
-            if (_isSuspended && _player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource cs)
-                cs.Suspend();
+            ApplyLifecycleSourceSuspendPolicy();
         }
         catch (OperationCanceledException ex)
         {
@@ -801,6 +809,8 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
     private void HandlePlayerStateChanged(PlaybackState state)
     {
+        ApplyLifecycleSourceSuspendPolicy();
+
         RaiseOnUI(() =>
         {
             this.RaisePropertyChanged(nameof(IsPlaying));
@@ -1141,16 +1151,21 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     public void OnSuspend(SuspendLevel level)
     {
         _isSuspended = true;
-        if (_player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource cs)
-            cs.Suspend();
+
+        if (ShouldKeepSourceActiveWhileSuspended())
+        {
+            Log.Debug("[AudioEngine] Suspend policy: source remains active due to active playback/buffering");
+            return;
+        }
+
+        ApplyLifecycleSourceSuspendPolicy();
     }
 
     /// <inheritdoc />
     public void OnResume(SuspendLevel previousLevel)
     {
         _isSuspended = false;
-        if (_player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource cs)
-            cs.Resume();
+        ApplyLifecycleSourceSuspendPolicy();
         _ = PreWarmHttpConnectionAsync();
     }
 
@@ -1197,6 +1212,67 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                 OnLoadingStateChanged?.Invoke(IsLoading);
             }
         });
+    }
+
+    /// <summary>
+    /// Определяет, должен ли сетевой audio source оставаться активным,
+    /// даже если UI ушёл в background/suspend.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c>, если source нельзя suspend'ить;
+    /// <c>false</c>, если suspend source допустим.
+    /// </returns>
+    /// <remarks>
+    /// <para>Ключевой принцип: UI suspend ≠ audio/network suspend.</para>
+    /// <para>
+    /// Пока player находится в состояниях <see cref="PlaybackState.Loading"/>,
+    /// <see cref="PlaybackState.Buffering"/>, <see cref="PlaybackState.Playing"/>
+    /// или в детальном состоянии <see cref="PlayerState.Seeking"/>,
+    /// source preload критически важен для стабильного playback/rebuffer.
+    /// </para>
+    /// </remarks>
+    private bool ShouldKeepSourceActiveWhileSuspended()
+    {
+        var playbackState = _player.State;
+        var detailedState = _player.DetailedState;
+
+        return playbackState is PlaybackState.Loading
+            or PlaybackState.Buffering
+            or PlaybackState.Playing
+            || detailedState == PlayerState.Seeking;
+    }
+
+    /// <summary>
+    /// Применяет lifecycle-политику suspend/resume к активному сетевому audio source.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Если приложение suspended, но playback ещё активен, source НЕ приостанавливается:
+    /// это предотвращает starvation на сетях с высоким RTT.
+    /// </para>
+    /// <para>
+    /// Если playback не активен (paused/stopped/error) и приложение suspended —
+    /// source можно safely suspend'ить для экономии ресурсов.
+    /// </para>
+    /// </remarks>
+    private void ApplyLifecycleSourceSuspendPolicy()
+    {
+        if (_player.GetActivePipeline()?.Source is not Audio.Sources.CachingStreamSource cs)
+        {
+            Interlocked.Exchange(ref _sourceLifecycleSuspended, 0);
+            return;
+        }
+
+        if (!_isSuspended || ShouldKeepSourceActiveWhileSuspended())
+        {
+            if (Interlocked.Exchange(ref _sourceLifecycleSuspended, 0) != 0)
+                cs.Resume();
+
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _sourceLifecycleSuspended, 1) == 0)
+            cs.Suspend();
     }
 
     private static void RaiseOnUI(Action action)

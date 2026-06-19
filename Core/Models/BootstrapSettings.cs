@@ -22,6 +22,13 @@ public sealed class BootstrapSettings
 
     public string? LastRunVersion { get; set; }
 
+    /// <summary>
+    /// Флаг, указывающий, что в текущем запуске произошло обновление версии приложения.
+    /// Используется для условного сброса критических конфигураций.
+    /// </summary>
+    [JsonIgnore]
+    public bool AppUpdatedThisRun { get; private set; }
+
     public static BootstrapSettings Load()
     {
         try
@@ -35,6 +42,7 @@ public sealed class BootstrapSettings
                     // ═══ ОЧИСТКА КЭША ПРИ ОБНОВЛЕНИИ ВЕРСИИ ПЛЕЕРА ═══
                     if (settings.LastRunVersion != G.Build.Version)
                     {
+                        settings.AppUpdatedThisRun = true;
                         Log.Info($"[Bootstrap] App updated: {settings.LastRunVersion} -> {G.Build.Version}. Purging obsolete bypass caches...");
                         PurgeBypassCaches();
                         settings.LastRunVersion = G.Build.Version;

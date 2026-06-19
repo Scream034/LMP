@@ -92,13 +92,47 @@ public sealed class LibraryService : IAsyncDisposable
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        Settings = await _settings.GetOrDefaultAsync("AppSettings", new AppSettings(), ct);
+        Settings = await _settings.GetOrDefaultAsync("AppSettings", new AppSettings(), ct).ConfigureAwait(false);
+
+        bool requireSave = false;
+
+#if DEBUG
+        // В DEBUG всегда принудительно сбрасываем на дефолт для быстрого тестирования новых параметров из кода.
+        if (Settings.InternetProfile != InternetProfile.Medium)
+        {
+            Settings.InternetProfile = InternetProfile.Medium;
+            requireSave = true;
+        }
+#else
+        // В Release сбрасываем настройки сети на дефолтные только при мажорном обновлении версии приложения.
+        if (BootstrapSettings.Current.AppUpdatedThisRun && Settings.InternetProfile != InternetProfile.Medium)
+        {
+            Settings.InternetProfile = InternetProfile.Medium;
+            requireSave = true;
+            Log.Info("[LibraryService] App updated, resetting InternetProfile to default.");
+        }
+#endif
+
+        if (requireSave)
+        {
+            await _settings.SetAsync("AppSettings", Settings, ct).ConfigureAwait(false);
+        }
+
         YoutubeClientUtils.CurrentProfile = Settings.YoutubeClient;
+
+        // Этот вызов отсутствовал. 
+        // Без него профиль из БД не применялся к фабрике при старте, 
+        // и стриминг всегда инициализировался с дефолтным Medium.
+        AudioSourceFactory.ApplyInternetProfile(Settings.InternetProfile);
 
         var jsonPath = G.FilePath.Library;
         if (File.Exists(jsonPath))
         {
-            await MigrateFromJsonAsync(jsonPath, ct);
+            await MigrateFromJsonAsync(jsonPath, ct).ConfigureAwait(false);
+        }
+        if (File.Exists(jsonPath))
+        {
+            await MigrateFromJsonAsync(jsonPath, ct).ConfigureAwait(false);
         }
 
         await _registry.HydrateAsync(ct);
@@ -392,7 +426,7 @@ public sealed class LibraryService : IAsyncDisposable
     public async Task<List<TrackInfo>> GetRecentlyPlayedAsync(int count = 20, CancellationToken ct = default)
     {
         var tracks = await _tracks.GetRecentlyPlayedAsync(CurrentOwnerId, count, ct);
-        for (int i = 0; i < tracks.Count; i++) 
+        for (int i = 0; i < tracks.Count; i++)
             _registry.RegisterOrUpdate(tracks[i]);
         return tracks;
     }

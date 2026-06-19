@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Parsers;
@@ -7,21 +6,21 @@ using LMP.Core.Exceptions;
 namespace LMP.Core.Audio.Sources;
 
 /// <summary>
-/// Источник аудио с сегментным кэшированием и HTTP Range-request загрузкой.
+/// Источник аудио с range-based кэшированием и HTTP Range-request загрузкой.
 ///
 /// <para><b>Архитектура:</b></para>
 /// <list type="bullet">
-///   <item>Данные загружаются чанками размера <see cref="_config"/>.<see cref="StreamingConfig.ChunkSizeBytes"/></item>
-///   <item>Чанки кэшируются в RAM (<see cref="_ramChunks"/>) и на диск (<see cref="_cacheManager"/>)</item>
-///   <item>Фоновый preload loop обеспечивает опережающую загрузку</item>
+///   <item>Данные загружаются произвольными диапазонами с адаптивным размером (MAPO)</item>
+///   <item>Диапазоны кэшируются в RAM (<see cref="SlidingRamCache"/>) и на диск (<see cref="AudioCacheManager"/>)</item>
+///   <item>Фоновый preload loop удерживает буфер вокруг текущей позиции</item>
 ///   <item>Seek реализован через epoch-based cancellation</item>
 ///   <item>Suspend/Resume приостанавливает фоновую загрузку при сворачивании окна</item>
 /// </list>
 ///
 /// <para><b>Partial class structure:</b></para>
 /// <list type="bullet">
-///   <item><c>CachingStreamSource.cs</c> — ядро: поля, init, read frames, suspend/resume, dispose</item>
-///   <item><c>CachingStreamSource.Chunks.cs</c> — загрузка чанков с retry и circuit breaker</item>
+///   <item><c>CachingStreamSource.cs</c> — ядро: поля, init, read frames, dispose, network assessment</item>
+///   <item><c>CachingStreamSource.Chunks.cs</c> — загрузка диапазонов, MAPO planner, RAM cache, dedup</item>
 ///   <item><c>CachingStreamSource.Seeking.cs</c> — seek с epoch-based cancellation</item>
 ///   <item><c>CachingStreamSource.Preload.cs</c> — фоновая загрузка и буферизация</item>
 ///   <item><c>CachingStreamSource.ReadStream.cs</c> — Stream-обёртка для парсеров</item>
@@ -29,13 +28,15 @@ namespace LMP.Core.Audio.Sources;
 /// </summary>
 public sealed partial class CachingStreamSource : IAudioSource
 {
+    #region Constants
+
     /// <summary>Короткая задержка перед окончательной утилизацией ресурсов (мс).</summary>
     private const int DisposalDelayMs = 32;
 
     /// <summary>Таймаут ожидания открытия playback gate (мс).</summary>
     private const int PlaybackGateTimeoutMs = 128;
 
-    /// <summary>Критический таймаут playback gate (мс).</summary>
+    /// <summary>Критический таймаут suspend-mode подзагрузки (мс).</summary>
     private const int PlaybackGateCriticalTimeoutMs = 512;
 
     /// <summary>Количество повторов чтения при смене эпохи.</summary>
@@ -44,7 +45,7 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <summary>Задержка между retry чтения при смене эпохи (мс).</summary>
     private const int ReadAtEpochRetryDelayMs = 30;
 
-    /// <summary>Количество последовательных 403 перед открытием circuit breaker.</summary>
+    /// <summary>Количество последовательных 403 refresh-failures перед открытием breaker.</summary>
     private const int MaxRefreshFailuresBeforeCircuitBreak = 2;
 
     /// <summary>Минимальная граница seek clamp.</summary>
@@ -53,14 +54,42 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <summary>Смещение для последнего байта контента.</summary>
     private const long SeekEndOffset = 1;
 
-    /// <summary>Конец диапазона буферизации.</summary>
-    private const double BufferedRangeEnd = 1.0;
-
     /// <summary>Задержка перед утилизацией CTS предыдущей эпохи (мс).</summary>
     private const int DeferredEpochDisposeDelayMs = 2000;
 
-    /// <summary>Таймаут ожидания завершения preload-таска при Dispose (мс).</summary>
+    /// <summary>Таймаут ожидания завершения preload-task при DisposeAsync (мс).</summary>
     private const int PreloadTaskDisposeWaitTimeoutMs = 1000;
+
+    /// <summary>Гистерезис буфера для предотвращения дрожания вокруг цели (мс).</summary>
+    private const int TargetBufferHysteresisMs = 2500;
+
+    /// <summary>Порог критического refill-режима (мс). Ниже — агрессивный prefetch.</summary>
+    private const int CriticalRefillBufferMs = 4000;
+
+    /// <summary>Аварийный порог буфера (мс). Ниже — максимально агрессивная загрузка.</summary>
+    private const int EmergencyRefillBufferMs = 1500;
+
+    #endregion
+
+    #region Enums
+
+    /// <summary>
+    /// Уровень деградации текущего сетевого соединения.
+    /// Влияет на параллелизм, размер запросов и агрессивность preload.
+    /// </summary>
+    private enum NetworkDegradationLevel
+    {
+        /// <summary>Сеть в норме. Стандартные параметры.</summary>
+        Normal,
+
+        /// <summary>Повышенная задержка или узкий канал. Ограниченный параллелизм.</summary>
+        Degraded,
+
+        /// <summary>Экстремальная задержка или минимальный канал. Один поток, маленькие запросы.</summary>
+        Critical
+    }
+
+    #endregion
 
     #region Fields
 
@@ -74,9 +103,8 @@ public sealed partial class CachingStreamSource : IAudioSource
     private readonly AudioFormat _format;
     private readonly int _bitrate;
 
-    // ── Derived from config ──
-    private int _chunkSize;
-    private int _totalChunks;
+    // ── Transport alignment ──
+    private int _requestAlignmentBytes;
 
     // ── Dependencies ──
     private readonly HttpClient _httpClient;
@@ -87,34 +115,28 @@ public sealed partial class CachingStreamSource : IAudioSource
 
     /// <summary>
     /// Метаданные кэша текущего трека. Гарантированно не null после успешного
-    /// <see cref="InitializeAsync"/>; null-guard при обращении снаружи init — программная ошибка.
+    /// <see cref="InitializeAsync"/>; обращение снаружи init — программная ошибка.
     /// </summary>
     private CacheEntry? _cacheEntry;
-
     private IContainerParser? _parser;
     private AsyncCachingReadStream? _readStream;
 
-    // ── Chunk storage ──
+    // ── RAM cache & active downloads ──
 
     /// <summary>
-    /// RAM-кэш чанков. Ключ = индекс чанка. Значение = данные + реальная длина.
+    /// RAM-кэш диапазонов байт, оптимизированный для малого количества активных блоков
+    /// в скользящем окне вокруг текущей позиции воспроизведения.
     /// </summary>
-    private readonly ConcurrentDictionary<int, ChunkData> _ramChunks = new();
+    private readonly SlidingRamCache _ramCache = new();
 
     /// <summary>
-    /// Словарь активных загрузок для дедупликации параллельных запросов одного чанка.
+    /// Реестр активных HTTP-загрузок для дедупликации.
+    /// Ключ = начало выровненного диапазона. Строгая overlap-защита.
     /// </summary>
-    /// <remarks>
-    /// <para>Значение — <see cref="Lazy{T}"/> над <see cref="Task{TResult}"/>.</para>
-    /// <para>Почему не просто <see cref="Task"/>: при схеме check-then-act
-    /// (<c>TryGetValue</c> → создать Task → <c>TryAdd</c>) проигравший поток уже успевает
-    /// стартовать второй HTTP-запрос для того же чанка. Обёртка <see cref="Lazy{T}"/>
-    /// откладывает запуск до первого обращения к <see cref="Lazy{T}.Value"/>, поэтому
-    /// проигравшие в <see cref="ConcurrentDictionary{TKey,TValue}.GetOrAdd(TKey, TValue)"/>
-    /// создают только неиспользованный lazy-объект без сетевой активности.</para>
-    /// </remarks>
-    private readonly ConcurrentDictionary<int, Lazy<Task<ChunkDownloadResult>>> _activeDownloads = new();
+    private readonly Lock _activeDownloadsLock = new();
+    private readonly Dictionary<long, ActiveRangeDownload> _activeDownloads = new(8);
 
+    /// <summary>Семафор параллельных загрузок.</summary>
     private readonly SemaphoreSlim _downloadSlots;
 
     // ── Epoch-based cancellation ──
@@ -125,62 +147,8 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <summary>
     /// Легковесный затвор для управления фоновым циклом предзагрузки.
     /// Set = воспроизведение активно, Reset = плеер на паузе.
-    /// Начинается в состоянии Set (true), чтобы разрешить первичную буферизацию при старте.
     /// </summary>
     private readonly ManualResetEventSlim _playbackGate = new(initialState: true);
-
-    // ── Lifetime ──
-    private CancellationTokenSource? _lifetimeCts;
-    private Task? _preloadTask;
-
-    // ── Position tracking ──
-    private int _currentChunk;
-    private long _positionMs;
-    private string _currentUrl;
-    private int _backgroundChunksLoaded;
-
-    /// <summary>
-    /// Holds the last exception captured during a chunk download attempt.
-    /// Used to diagnose early warnings on retry thresholds.
-    /// </summary>
-    private Exception? _lastDownloadException;
-
-    // ── State flags ──
-    private volatile bool _initialized;
-    private volatile bool _disposed;
-
-    // ── Latency Tracking & Adaptive Preloading ──
-    private readonly object _latencyLock = new();
-    private double _latency0;
-    private double _latency1;
-    private double _latency2;
-
-    private double _estimatedBandwidthBytesPerSec;
-
-    /// <summary>
-    /// Текущая расчетная скорость загрузки данных из сети (байт/сек).
-    /// </summary>
-    public double EstimatedSpeedBytesPerSec
-    {
-        get
-        {
-            lock (_latencyLock)
-            {
-                return _estimatedBandwidthBytesPerSec;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Текущая средняя задержка сети (мс).
-    /// </summary>
-    public double AveragePingMs
-    {
-        get
-        {
-            lock (_latencyLock) return GetAverageLatencyInternal();
-        }
-    }
 
     /// <summary>
     /// ManualResetEventSlim для блокировки preload loop при suspend.
@@ -188,9 +156,49 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// </summary>
     private readonly ManualResetEventSlim _suspendGate = new(initialState: true);
 
+    // ── Lifecycle ──
+    private CancellationTokenSource? _lifetimeCts;
+    private Task? _preloadTask;
+
+    // ── Position tracking ──
+    private long _currentReadOffset;
+    private long _positionMs;
+    private string _currentUrl;
+
+    // ── Refresh / retry state ──
+    private readonly SemaphoreSlim _refreshLock = new(1, 1);
+    private DateTime _lastRefreshTime = DateTime.MinValue;
+    private int _consecutive403Count;
+    private int _requestSequenceNumber;
+    private int _consecutiveRefreshFailures;
+    private Exception? _lastDownloadException;
+
+    // ── Latency Tracking & Adaptive Transport ──
+    private readonly object _latencyLock = new();
+    private double _latency0;
+    private double _latency1;
+    private double _latency2;
+    private double _estimatedBandwidthBytesPerSec;
+
+    // ── State flags ──
+    private volatile bool _initialized;
+    private volatile bool _disposed;
+
     #endregion
 
     #region Properties
+
+    /// <summary>Текущая расчетная скорость загрузки данных из сети (байт/сек).</summary>
+    public double EstimatedSpeedBytesPerSec
+    {
+        get { lock (_latencyLock) return _estimatedBandwidthBytesPerSec; }
+    }
+
+    /// <summary>Текущая средняя задержка сети (мс).</summary>
+    public double AveragePingMs
+    {
+        get { lock (_latencyLock) return GetAverageLatencyInternal(); }
+    }
 
     /// <inheritdoc/>
     public long DurationMs => _parser?.DurationMs ?? _cacheEntry?.DurationMs ?? -1;
@@ -213,83 +221,44 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <inheritdoc/>
     public int Channels => _parser?.Channels ?? 0;
 
-    /// <summary>Прогресс буферизации (0–100%). Считается на основе загруженных чанков.</summary>
+    /// <summary>Прогресс буферизации (0–100%).</summary>
     public double BufferProgress => _cacheEntry?.DownloadProgress ?? 0;
 
     /// <summary>Полностью ли загружен трек на диск.</summary>
     public bool IsFullyBuffered => _cacheEntry?.IsComplete ?? false;
 
     /// <summary>Объём скачанных данных в байтах.</summary>
-    public long DownloadedBytes => (_cacheEntry?.DownloadedChunks ?? 0) * (long)_chunkSize;
+    public long DownloadedBytes => _cacheEntry?.DownloadedBytes ?? 0;
 
     /// <summary>Битрейт (kbps).</summary>
     public int Bitrate => _cacheEntry?.Bitrate ?? _bitrate;
 
-    /// <summary>
-    /// Парсер контейнера. Доступен для диагностики (resync detection).
-    /// </summary>
+    /// <summary>Парсер контейнера. Доступен для диагностики.</summary>
     internal IContainerParser? Parser => _parser;
 
     /// <summary>
-    /// Проверяет, доступен ли чанк для заданной позиции seek.
-    /// </summary>
-    /// <remarks>
-    /// Используется <see cref="AudioPlayer"/> в <c>ComputeSeekWarmupParams</c>
-    /// для определения, нужно ли ждать HTTP-загрузку перед resume.
-    /// Если целевой чанк уже в RAM или на диске — seek может resume мгновенно.
-    /// </remarks>
-    /// <param name="positionMs">Позиция в миллисекундах.</param>
-    /// <returns><c>true</c> если чанк доступен в RAM или на диске.</returns>
-    public bool IsTargetChunkAvailable(long positionMs)
-    {
-        if (_parser == null || !_initialized) return false;
-
-        var seekInfo = _parser.FindSeekPosition(positionMs);
-        if (seekInfo == null) return false;
-
-        long targetBytePos = Math.Min(seekInfo.Value.BytePosition, Math.Max(0, _contentLength - 1));
-        int targetChunk = Math.Clamp((int)(targetBytePos / _chunkSize), 0, _totalChunks - 1);
-
-        return IsChunkAvailable(targetChunk);
-    }
-
-    /// <summary>
-    /// Global event triggered when an audio source encounters non-fatal network issues (e.g., slow download or retries).
+    /// Глобальное событие о non-fatal сетевых проблемах источника.
     /// </summary>
     public static event Action<string, Exception>? OnSourceWarning;
 
-    private void RaiseSourceWarning(int chunkIndex, Exception ex)
-    {
-        try
-        {
-            OnSourceWarning?.Invoke(_trackId, ex);
-        }
-        catch (Exception logEx)
-        {
-            Log.Warn($"[CachingSource] Failed to raise warning event: {logEx.Message}");
-        }
-    }
     #endregion
 
     #region Constructor
 
     /// <summary>
-    /// Создаёт источник с кэширующим HTTP-стримингом.
+    /// Создаёт источник с range-based HTTP-стримингом.
     /// </summary>
-    /// <param name="cacheKey">Уникальный ключ кэша (trackId + format + bitrate).</param>
+    /// <param name="cacheKey">Уникальный ключ кэша (trackId + format + normalized_bitrate).</param>
     /// <param name="trackId">Идентификатор трека.</param>
     /// <param name="url">Исходный URL потока.</param>
     /// <param name="contentLength">Полный размер контента в байтах.</param>
     /// <param name="format">Аудио-формат контейнера.</param>
     /// <param name="codec">Аудио-кодек.</param>
     /// <param name="bitrate">Битрейт в kbps.</param>
-    /// <param name="httpClient">HTTP-клиент для загрузки чанков.</param>
+    /// <param name="httpClient">HTTP-клиент для загрузки.</param>
     /// <param name="cacheManager">Менеджер дискового кэша.</param>
     /// <param name="config">Конфигурация стриминга.</param>
-    /// <param name="urlRefresher">
-    /// Делегат обновления URL при истечении срока действия (403). Может быть null
-    /// если URL статичен (локальные источники, тесты).
-    /// </param>
+    /// <param name="urlRefresher">Делегат обновления URL при 403.</param>
     public CachingStreamSource(
         string cacheKey,
         string trackId,
@@ -315,12 +284,239 @@ public sealed partial class CachingStreamSource : IAudioSource
         _urlRefresher = urlRefresher;
         Codec = codec;
 
-        _chunkSize = config.ChunkSizeBytes;
-        _totalChunks = contentLength > 0
-            ? (int)Math.Ceiling((double)contentLength / _chunkSize)
-            : 1;
-
+        _requestAlignmentBytes = Math.Max(4096, config.RequestAlignmentBytes);
         _downloadSlots = new SemaphoreSlim(config.MaxConcurrentDownloads);
+    }
+
+    #endregion
+
+    #region Network Assessment
+
+    /// <summary>
+    /// Оценивает деградацию сети по средней задержке (RTT) и отношению
+    /// реальной пропускной способности к битрейту аудиопотока.
+    /// </summary>
+    private NetworkDegradationLevel GetNetworkDegradationLevel()
+    {
+        double avgLatencyMs;
+        double bw;
+
+        lock (_latencyLock)
+        {
+            avgLatencyMs = GetAverageLatencyInternal();
+            bw = _estimatedBandwidthBytesPerSec;
+        }
+
+        double bitrateBps = Math.Max(1, _bitrate) * 1000.0 / 8.0;
+        double widthRatio = bw > 0 ? bw / bitrateBps : double.PositiveInfinity;
+
+        if (avgLatencyMs > 2500 || widthRatio < 3.0)
+            return NetworkDegradationLevel.Critical;
+
+        if (avgLatencyMs > 800 || widthRatio < 6.0)
+            return NetworkDegradationLevel.Degraded;
+
+        return NetworkDegradationLevel.Normal;
+    }
+
+    /// <summary>
+    /// Возвращает максимально допустимое число параллельных HTTP-загрузок
+    /// с учётом текущего состояния сети.
+    /// </summary>
+    private int GetAdaptiveMaxConcurrentDownloads() => GetNetworkDegradationLevel() switch
+    {
+        NetworkDegradationLevel.Critical => 1,
+        NetworkDegradationLevel.Degraded => Math.Min(2, _config.MaxConcurrentDownloads),
+        _ => _config.MaxConcurrentDownloads
+    };
+
+    /// <summary>
+    /// Возвращает адаптивный объём предварительной догрузки после seek.
+    /// На узком канале seek-preload уменьшается.
+    /// </summary>
+    private int GetAdaptiveSeekPreloadBytes()
+    {
+        int preload = _config.SeekPreloadBytes;
+        return GetNetworkDegradationLevel() switch
+        {
+            NetworkDegradationLevel.Critical =>
+                Math.Max(_requestAlignmentBytes * 2, Math.Min(preload, _requestAlignmentBytes * 4)),
+            NetworkDegradationLevel.Degraded =>
+                Math.Max(_requestAlignmentBytes * 2, Math.Min(preload, _requestAlignmentBytes * 8)),
+            _ => preload
+        };
+    }
+
+    /// <summary>
+    /// Переводит количество буферизованных байт аудио в миллисекунды воспроизведения.
+    /// </summary>
+    /// <param name="bytes">Количество байт аудиопотока.</param>
+    /// <returns>Эквивалентная длительность в миллисекундах.</returns>
+    private int ConvertBufferedBytesToMs(long bytes)
+    {
+        if (bytes <= 0) return 0;
+        double bitrateBps = Math.Max(1, _bitrate) * 1000.0 / 8.0;
+        return (int)(bytes / bitrateBps * 1000.0);
+    }
+
+    /// <summary>
+    /// Вычисляет адаптивный целевой размер буфера на основе RTT и ширины канала.
+    /// Высокий ping увеличивает цель, но узкий канал ограничивает бессмысленное раздувание.
+    /// </summary>
+    private int GetAdaptiveTargetBufferMs()
+    {
+        double avgLatencyMs;
+        double bw;
+
+        lock (_latencyLock)
+        {
+            avgLatencyMs = GetAverageLatencyInternal();
+            bw = _estimatedBandwidthBytesPerSec;
+        }
+
+        int target = _config.TargetBufferMs;
+
+        if (avgLatencyMs > 3000) target = Math.Min(target * 4, 45_000);
+        else if (avgLatencyMs > 1500) target = Math.Min(target * 3, 32_000);
+        else if (avgLatencyMs > 800) target = Math.Min(target * 2, 24_000);
+        else if (avgLatencyMs > 300) target = Math.Min((target * 3) / 2, 18_000);
+
+        if (bw > 0)
+        {
+            double bitrateBps = Math.Max(1, _bitrate) * 1000.0 / 8.0;
+            double widthRatio = bw / bitrateBps;
+
+            if (widthRatio < 2.0) target = Math.Min(target, 8_000);
+            else if (widthRatio < 3.0) target = Math.Min(target, 12_000);
+            else if (widthRatio < 5.0) target = Math.Min(target, 16_000);
+        }
+
+        return Math.Max(target, 4_000);
+    }
+
+    /// <summary>
+    /// Возвращает минимальный непрерывный префикс данных (в байтах),
+    /// необходимый для безопасного старта decoder после seek.
+    /// </summary>
+    /// <param name="position">Целевая позиция seek в байтах.</param>
+    /// <returns>Требуемое количество contiguous-байт.</returns>
+    private int GetMinimalSeekStartBytes(long position)
+    {
+        if (position >= _contentLength) return 0;
+
+        var deg = GetNetworkDegradationLevel();
+        int desiredMs = deg switch
+        {
+            NetworkDegradationLevel.Critical => 4000,
+            NetworkDegradationLevel.Degraded => 3000,
+            _ => 2500
+        };
+
+        double bitrateBps = Math.Max(1, _bitrate) * 1000.0 / 8.0;
+        int byTime = (int)Math.Ceiling(bitrateBps * desiredMs / 1000.0);
+        int required = Math.Max(_requestAlignmentBytes * 2, AlignUp(byTime, _requestAlignmentBytes));
+        required = Math.Clamp(required, 32 * 1024, 128 * 1024);
+
+        long remaining = _contentLength - position;
+        return (int)Math.Min(required, remaining);
+    }
+
+    /// <summary>
+    /// Проверяет, достаточно ли локально доступных непрерывных данных
+    /// для мгновенного старта decoder после seek.
+    /// </summary>
+    /// <param name="position">Целевая позиция seek в байтах.</param>
+    /// <returns><c>true</c> если seek может стартовать без ожидания сети.</returns>
+    private bool HasMinimalLocalSeekStartData(long position)
+    {
+        int required = GetMinimalSeekStartBytes(position);
+        if (required <= 0) return true;
+
+        long ramBytes = _ramCache.GetContiguousBytesFrom(position);
+        long diskBytes = _cacheEntry?.GetContiguousDownloadedBytesFrom(position) ?? 0;
+        long available = Math.Max(ramBytes, diskBytes);
+
+        return available >= required;
+    }
+
+    /// <summary>
+    /// Вычисляет адаптивный таймаут ожидания critical-range при seek.
+    /// </summary>
+    /// <param name="expectedBytes">Ожидаемый объём критического диапазона.</param>
+    /// <returns>Таймаут в миллисекундах, clamped в [1500, 5000].</returns>
+    private int ComputeAdaptiveSeekCriticalTimeoutMs(int expectedBytes)
+    {
+        double avgLatencyMs;
+        double bw;
+
+        lock (_latencyLock)
+        {
+            avgLatencyMs = GetAverageLatencyInternal();
+            bw = _estimatedBandwidthBytesPerSec;
+        }
+
+        double bitrateBps = Math.Max(1, _bitrate) * 1000.0 / 8.0;
+        double fallbackBps = Math.Max(16 * 1024, bitrateBps * 2.0);
+        double effectiveBps = bw > 0 ? Math.Max(bw * 0.35, fallbackBps) : fallbackBps;
+
+        double transferMs = expectedBytes / effectiveBps * 1000.0;
+        double latencyBudgetMs = Math.Max(250.0, avgLatencyMs * 1.5);
+
+        int timeoutMs = (int)Math.Ceiling(latencyBudgetMs + transferMs + 500.0);
+        return Math.Clamp(timeoutMs, 1500, 5000);
+    }
+
+    #endregion
+
+    #region Public Seek Helpers
+
+    /// <summary>
+    /// Проверяет, доступен ли диапазон для заданной позиции seek (для AudioPlayer).
+    /// </summary>
+    /// <param name="positionMs">Позиция в миллисекундах.</param>
+    /// <returns><c>true</c> если данные доступны в RAM или на диске.</returns>
+    public bool IsTargetChunkAvailable(long positionMs)
+    {
+        if (_parser == null || !_initialized) return false;
+
+        var seekInfo = _parser.FindSeekPosition(positionMs);
+        if (seekInfo == null) return false;
+
+        long targetBytePos = Math.Min(seekInfo.Value.BytePosition, Math.Max(0, _contentLength - 1));
+        int requiredLength = GetAlignedReadLength(targetBytePos, _config.MinRequestSizeBytes);
+        return IsRangeLocallyAvailable(targetBytePos, requiredLength);
+    }
+
+    /// <summary>
+    /// Проверяет, достаточно ли contiguous-данных для безопасного старта decoder
+    /// после ранее выполненного seek (для AudioPlayer polling).
+    /// </summary>
+    /// <param name="positionMs">Позиция в миллисекундах, к которой был выполнен seek.</param>
+    /// <returns><c>true</c> если минимальный startup prefix доступен.</returns>
+    public bool IsSeekDataReady(long positionMs)
+    {
+        if (_parser == null || !_initialized) return false;
+
+        var seekInfo = _parser.FindSeekPosition(positionMs);
+        if (seekInfo == null) return false;
+
+        long targetBytePos = Math.Min(seekInfo.Value.BytePosition, Math.Max(0, _contentLength - 1));
+        return HasMinimalLocalSeekStartData(targetBytePos);
+    }
+
+    #endregion
+
+    #region Warning Events
+
+    /// <summary>
+    /// Публикует предупреждение о non-fatal сетевой проблеме.
+    /// </summary>
+    /// <param name="rangeStart">Начало проблемного диапазона.</param>
+    /// <param name="ex">Исключение-причина.</param>
+    private void RaiseSourceWarning(long rangeStart, Exception ex)
+    {
+        try { OnSourceWarning?.Invoke(_trackId, ex); }
+        catch (Exception logEx) { Log.Warn($"[CachingSource] Failed to raise warning event: {logEx.Message}"); }
     }
 
     #endregion
@@ -336,57 +532,35 @@ public sealed partial class CachingStreamSource : IAudioSource
         {
             _cacheEntry = _cacheManager.CreateOrUpdate(
                 _cacheKey, _trackId, _currentUrl, _contentLength, _format,
-                AudioSourceFactory.GetCodecForFormat(_format),
-                _bitrate,
-                chunkSize: _chunkSize);
+                AudioSourceFactory.GetCodecForFormat(_format), _bitrate,
+                alignmentBytes: _requestAlignmentBytes);
 
-            // Примиряем ChunkSize: если в кэше уже есть чанки, используем строго
-            // оригинальный сохранённый ChunkSize для предотвращения дрейфа побайтовой адресации.
-            if (_cacheEntry.DownloadedChunks > 0
-                && _cacheEntry.TotalChunks > 0
-                && _cacheEntry.ChunkSize > 0
-                && _cacheEntry.ChunkSize != _chunkSize)
+            if (_cacheEntry.DownloadedBytes > 0)
             {
-                Log.Info($"[CachingSource] ChunkSize reconciled: " +
-                         $"config={_chunkSize}B → cached={_cacheEntry.ChunkSize}B " +
-                         $"(totalChunks: {_totalChunks}→{_cacheEntry.TotalChunks})");
-
-                _chunkSize = _cacheEntry.ChunkSize;
-                _totalChunks = _cacheEntry.TotalChunks;
-            }
-
-            if (_cacheEntry.DownloadedChunks > 0)
-            {
-                Log.Info($"[CachingSource] Resuming: " +
-                         $"{_cacheEntry.DownloadedChunks}/{_cacheEntry.TotalChunks} chunks");
+                _requestAlignmentBytes = Math.Max(4096, _cacheEntry.AlignmentBytes);
+                Log.Info($"[CachingSource] Resuming: {_cacheEntry.DownloadedBytes}/{_cacheEntry.TotalSize} bytes");
             }
 
             _lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             InitializeFirstEpoch();
 
-            // ПАРАЛЛЕЛЬНАЯ ИНИЦИАЛИЗАЦИЯ
-            // Chunk 0 нужен для ParseHeaders (EBML + Segment + Tracks <= 128KB).
-            await EnsureChunkAsync(0, _lifetimeCts.Token, isCritical: true).ConfigureAwait(false);
+            int initialBytes = Math.Min(
+                _config.InitialPrebufferBytes,
+                (int)Math.Min(_contentLength, int.MaxValue));
+
+            await EnsureRangeAsync(0, initialBytes, _lifetimeCts.Token, isCritical: true)
+                .ConfigureAwait(false);
 
             _readStream = new AsyncCachingReadStream(this);
             _parser = CreateParser(_readStream);
 
-            int totalInitial = Math.Min(_config.InitialChunksToLoad, _cacheEntry.TotalChunks);
-            var parseTask = _parser.ParseHeadersAsync(ct).AsTask();
-            var remainingTask = totalInitial > 1
-                ? LoadChunkRangeAsync(1, totalInitial, _lifetimeCts.Token)
-                : Task.CompletedTask;
-
-            await Task.WhenAll(parseTask, remainingTask).ConfigureAwait(false);
-
-            if (!parseTask.Result)
+            if (!await _parser.ParseHeadersAsync(ct).ConfigureAwait(false))
                 throw new InvalidOperationException("Failed to parse container headers");
 
             Codec = _parser.Codec;
             _cacheEntry.Codec = Codec;
             _cacheEntry.DurationMs = _parser.DurationMs;
             _cacheEntry.Bitrate = _bitrate;
-
             _initialized = true;
 
             _preloadTask = Task.Run(
@@ -394,7 +568,6 @@ public sealed partial class CachingStreamSource : IAudioSource
 
             Log.Info($"[CachingSource] Initialized: duration={DurationMs}ms, " +
                      $"cached={_cacheEntry.DownloadProgress:F0}%");
-
             return true;
         }
         catch (Exception ex)
@@ -404,26 +577,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         }
     }
 
-    /// <summary>
-    /// Загружает диапазон чанков [<paramref name="from"/>, <paramref name="count"/>) параллельно.
-    /// </summary>
-    /// <param name="from">Первый индекс чанка включительно.</param>
-    /// <param name="count">Верхняя граница (исключительно).</param>
-    /// <param name="ct">Токен отмены.</param>
-    private async Task LoadChunkRangeAsync(int from, int count, CancellationToken ct)
-    {
-        var tasks = new Task[count - from];
-        for (int i = from; i < count; i++)
-        {
-            // Стартовые чанки критичны
-            tasks[i - from] = EnsureChunkAsync(i, ct, isCritical: true);
-        }
-        await Task.WhenAll(tasks).ConfigureAwait(false);
-    }
-
     /// <summary>Выбирает парсер контейнера на основе формата трека.</summary>
-    /// <param name="stream">Поток данных для парсинга.</param>
-    /// <returns>Экземпляр парсера.</returns>
     private IContainerParser CreateParser(Stream stream) => _format switch
     {
         AudioFormat.WebM or AudioFormat.Ogg => new WebMContainerParser(stream),
@@ -431,9 +585,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         _ => throw new NotSupportedException($"Format not supported: {_format}")
     };
 
-    /// <summary>
-    /// Инициализирует первую эпоху загрузки. Вызывается один раз в <see cref="InitializeAsync"/>.
-    /// </summary>
+    /// <summary>Инициализирует первую эпоху загрузки.</summary>
     private void InitializeFirstEpoch()
     {
         lock (_epochLock)
@@ -451,9 +603,8 @@ public sealed partial class CachingStreamSource : IAudioSource
 
     /// <inheritdoc/>
     /// <remarks>
-    /// <para><b>Self-Healing Pipeline:</b> Оборачивает чтение в try-catch для перехвата 
-    /// <see cref="ParserCorruptionException"/>. Если парсер находит мусор, запускается хирургическое
-    /// восстановление чанка из сети без прерывания воспроизведения.</para>
+    /// <para><b>Self-Healing:</b> При обнаружении коррупции парсером запускается
+    /// точечное восстановление диапазона без прерывания воспроизведения.</para>
     /// </remarks>
     public async ValueTask<AudioFrame?> ReadFrameAsync(CancellationToken ct = default)
     {
@@ -462,7 +613,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         if (!_initialized || _parser == null)
             throw new InvalidOperationException("Source not initialized");
 
-        int maxHealingAttempts = 3;
+        const int maxHealingAttempts = 3;
 
         for (int attempt = 0; attempt < maxHealingAttempts; attempt++)
         {
@@ -472,13 +623,12 @@ public sealed partial class CachingStreamSource : IAudioSource
                 if (frame != null)
                 {
                     Volatile.Write(ref _positionMs, frame.Value.TimestampMs);
-                    UpdateCurrentChunk();
+                    UpdateCurrentReadOffset();
                 }
                 return frame;
             }
             catch (ParserCorruptionException ex)
             {
-                // Запускаем процесс самовосстановления конвейера
                 await HealCorruptionAsync(ex.AbsoluteBytePosition, ct).ConfigureAwait(false);
             }
         }
@@ -487,66 +637,59 @@ public sealed partial class CachingStreamSource : IAudioSource
     }
 
     /// <summary>
-    /// Стратегия исцеления. Если есть сеть — перекачивает чанк и заставляет парсер перечитать его.
-    /// Если сети нет — помечает чанк как мертвый и перепрыгивает его, заставляя парсер сделать Resync.
+    /// Self-healing: инвалидирует повреждённый диапазон и перекачивает его из сети.
+    /// Если сети нет — помечает диапазон как мёртвый и делает resync.
     /// </summary>
     private async Task HealCorruptionAsync(long absoluteBytePosition, CancellationToken ct)
     {
-        int chunkIndex = (int)(absoluteBytePosition / _chunkSize);
-        Log.Warn($"[SelfHealing] Corruption detected at byte {absoluteBytePosition} (Chunk {chunkIndex})");
+        ct.ThrowIfCancellationRequested();
+
+        long rangeStart = AlignDown(absoluteBytePosition, _requestAlignmentBytes);
+        int rangeLength = GetAlignedReadLength(rangeStart, _config.MinRequestSizeBytes);
+        if (rangeLength <= 0) return;
+
+        Log.Warn($"[SelfHealing] Corruption detected at byte {absoluteBytePosition} " +
+                 $"(Range {rangeStart}-{rangeStart + rangeLength - 1})");
 
         if (_cacheEntry == null || _readStream == null || _parser == null) return;
 
-        // 1. Инвалидируем битый чанк в кэше и RAM
-        _cacheManager.InvalidateChunk(_cacheKey, chunkIndex);
-        if (_ramChunks.TryRemove(chunkIndex, out var badChunk))
+        _cacheManager.InvalidateRange(_cacheKey, rangeStart, rangeLength);
+
+        if (_ramCache.TryRemoveContaining(absoluteBytePosition, out var badBlock) && badBlock is not null)
+            badBlock.Dispose();
+
+        var healResult = await EnsureRangeAsync(rangeStart, rangeLength, ct, isCritical: true)
+            .ConfigureAwait(false);
+
+        if (healResult == RangeDownloadResult.Success)
         {
-            badChunk.Dispose();
-        }
-
-        // 2. Стратегия: Попытка экстренного онлайн-восстановления
-        var healResult = await EnsureChunkAsync(chunkIndex, ct, isCritical: true).ConfigureAwait(false);
-
-        if (healResult == ChunkDownloadResult.Success)
-        {
-            Log.Info($"[SelfHealing] Chunk {chunkIndex} healed seamlessly from network.");
-
-            // Откатываем поток к началу исправленного чанка
-            long safeStart = (long)chunkIndex * _chunkSize;
-            _readStream.SeekAndCancelPendingReads(safeStart);
-
-            // Говорим парсеру сбросить внутренние битые стейты и приготовиться читать чисто
+            Log.Info($"[SelfHealing] Range {rangeStart}-{rangeStart + rangeLength - 1} healed from network.");
+            _readStream.SeekAndCancelPendingReads(rangeStart);
+            Volatile.Write(ref _currentReadOffset, rangeStart);
             _parser.RequireResync();
+            return;
         }
-        else
-        {
-            // 3. Fallback: Оффлайн деградация
-            Log.Warn($"[SelfHealing] Network unavailable. Marking chunk {chunkIndex} as dead for this session. Glitch expected.");
-            _cacheEntry.MarkChunkCorruptedOffline(chunkIndex);
 
-            // Перепрыгиваем "мертвую зону" к следующей границе чанка
-            long nextChunkBoundary = (long)(chunkIndex + 1) * _chunkSize;
+        if (healResult == RangeDownloadResult.Cancelled && ct.IsCancellationRequested)
+            ct.ThrowIfCancellationRequested();
 
-            if (nextChunkBoundary >= _contentLength)
-            {
-                _readStream.SeekAndCancelPendingReads(_contentLength); // Конец файла
-            }
-            else
-            {
-                _readStream.SeekAndCancelPendingReads(nextChunkBoundary);
-                _parser.RequireResync(); // Парсер будет искать ближайший Cluster/moof
-            }
-        }
+        _cacheEntry.MarkRangeCorruptedOffline(rangeStart);
+        long nextBoundary = Math.Min(rangeStart + rangeLength, _contentLength);
+
+        Log.Warn($"[SelfHealing] Network unavailable. Marking range as dead for this session.");
+
+        _readStream.SeekAndCancelPendingReads(nextBoundary);
+        Volatile.Write(ref _currentReadOffset, nextBoundary);
+
+        if (nextBoundary < _contentLength)
+            _parser.RequireResync();
     }
 
-    /// <summary>
-    /// Обновляет <see cref="_currentChunk"/> на основе текущей позиции потока.
-    /// Используется preload loop для определения, какие чанки нужно подгружать следующими.
-    /// </summary>
-    private void UpdateCurrentChunk()
+    /// <summary>Обновляет текущую абсолютную позицию чтения для preload/eviction.</summary>
+    private void UpdateCurrentReadOffset()
     {
         if (_readStream != null)
-            _currentChunk = (int)(_readStream.Position / _chunkSize);
+            Volatile.Write(ref _currentReadOffset, _readStream.Position);
     }
 
     #endregion
@@ -554,20 +697,9 @@ public sealed partial class CachingStreamSource : IAudioSource
     #region Epoch-Based Cancellation
 
     /// <summary>
-    /// Откладывает <see cref="IDisposable.Dispose"/> для
-    /// <see cref="CancellationTokenSource"/> на указанный интервал.
+    /// Откладывает <see cref="IDisposable.Dispose"/> для CTS,
+    /// предотвращая <see cref="ObjectDisposedException"/> в конкурентных путях.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Почему dispose не сразу:</b></para>
-    /// <para>После <see cref="CancellationTokenSource.Cancel"/> in-flight continuations
-    /// ещё могут завершать обработку и обращаться к токену/связанным регистрациям.
-    /// Немедленный <c>Dispose()</c> сужает race window и способен привести к
-    /// <see cref="ObjectDisposedException"/> в конкурентных путях чтения/seek.</para>
-    /// <para>Фоновая отложенная утилизация изолирована от UI-контекста и не требует
-    /// синхронного ожидания завершения сетевых операций.</para>
-    /// </remarks>
-    /// <param name="cts">CTS для отложенного освобождения.</param>
-    /// <param name="delayMs">Задержка перед dispose в миллисекундах.</param>
     private static void DeferDisposeCancellationTokenSource(CancellationTokenSource? cts, int delayMs)
     {
         if (cts == null) return;
@@ -575,24 +707,12 @@ public sealed partial class CachingStreamSource : IAudioSource
         ThreadPool.UnsafeQueueUserWorkItem(static async state =>
         {
             var (source, delay) = ((CancellationTokenSource Source, int DelayMs))state!;
-
-            try
-            {
-                await Task.Delay(delay).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Игнорируем: dispose best-effort.
-            }
-
-            try { source.Dispose(); }
-            catch (ObjectDisposedException) { }
+            try { await Task.Delay(delay).ConfigureAwait(false); } catch { }
+            try { source.Dispose(); } catch (ObjectDisposedException) { }
         }, (cts, delayMs));
     }
 
-    /// <summary>
-    /// Отменяет все загрузки текущей эпохи и создаёт новую.
-    /// </summary>
+    /// <summary>Отменяет все загрузки текущей эпохи и создаёт новую.</summary>
     private CancellationToken ResetDownloadEpoch()
     {
         lock (_epochLock)
@@ -607,15 +727,12 @@ public sealed partial class CachingStreamSource : IAudioSource
 
             if (oldCts != null)
             {
-                // Отменяем в ThreadPool, чтобы не задерживать конвейер
                 ThreadPool.UnsafeQueueUserWorkItem(static state =>
                 {
                     try { ((CancellationTokenSource)state!).Cancel(); }
                     catch (ObjectDisposedException) { }
                 }, oldCts);
 
-                // Dispose откладывается: in-flight continuations ещё могут
-                // завершать обработку отмены и держать связанные регистрации.
                 DeferDisposeCancellationTokenSource(oldCts, DeferredEpochDisposeDelayMs);
             }
 
@@ -633,14 +750,8 @@ public sealed partial class CachingStreamSource : IAudioSource
         }
     }
 
-    /// <summary>
-    /// Мгновенно отменяет все активные операции чтения на потоке без уничтожения источника.
-    /// Предотвращает мёртвые 600мс блокировки при быстрой смене эпох (rapid seeks).
-    /// </summary>
-    public void CancelActiveReads()
-    {
-        _readStream?.CancelActiveReads();
-    }
+    /// <summary>Мгновенно отменяет активные чтения на потоке без уничтожения источника.</summary>
+    public void CancelActiveReads() => _readStream?.CancelActiveReads();
 
     #endregion
 
@@ -649,19 +760,8 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <inheritdoc/>
     public void ReleaseRamBuffers()
     {
-        int current = Volatile.Read(ref _currentChunk);
-
-        // Синхронизируем вытеснение с адаптивным окном, чтобы не удалить предзагруженное
-        GetAdaptivePreloadParams(out _, out _, out int evictionDistance);
-
-        foreach (var kvp in _ramChunks)
-        {
-            if (Math.Abs(kvp.Key - current) > evictionDistance
-                && _ramChunks.TryRemove(kvp.Key, out var evicted))
-            {
-                evicted.Dispose();
-            }
-        }
+        long currentOffset = Volatile.Read(ref _currentReadOffset);
+        _ramCache.Trim(currentOffset, _config.RamEvictionWindowBytes, _config.MaxRamBytes);
     }
 
     /// <inheritdoc/>
@@ -672,13 +772,9 @@ public sealed partial class CachingStreamSource : IAudioSource
     {
         if (_disposed) return;
 
-        if (active)
-            _playbackGate.Set();
-        else
-            _playbackGate.Reset();
+        if (active) _playbackGate.Set();
+        else _playbackGate.Reset();
 
-        // НАМЕРЕННО не вызываем ResetDownloadEpoch здесь.
-        // Epoch reset = только seek. Pause/Resume не меняют позицию потока.
         Log.Debug($"[CachingSource] Playback active state updated: {active}");
     }
 
@@ -686,23 +782,10 @@ public sealed partial class CachingStreamSource : IAudioSource
 
     #region Dispose
 
-    /// <summary>
-    /// Диспозит все чанки в RAM-кэше, возвращая арендованные буферы
-    /// в <see cref="System.Buffers.MemoryPool{T}.Shared"/>.
-    /// </summary>
-    private void DisposeAllRamChunks()
-    {
-        foreach (var kvp in _ramChunks)
-        {
-            if (_ramChunks.TryRemove(kvp.Key, out var chunk))
-                chunk.Dispose();
-        }
-    }
+    /// <summary>Диспозит все блоки в RAM-кэше.</summary>
+    private void DisposeAllRamChunks() => _ramCache.DisposeAll();
 
-    /// <summary>
-    /// Общая преамбула dispose: снимает блокировки gates, отменяет epoch CTS и lifetime CTS.
-    /// Единый источник истины для обоих путей Dispose / DisposeAsync.
-    /// </summary>
+    /// <summary>Общая преамбула dispose: разблокировка gates, cancel epoch + lifetime.</summary>
     private void BeginDispose()
     {
         _suspendGate.Set();
@@ -718,17 +801,17 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         if (downloadCtsToDispose != null)
         {
-            try { downloadCtsToDispose.Cancel(); } catch (ObjectDisposedException) { }
+            try { downloadCtsToDispose.Cancel(); }
+            catch (ObjectDisposedException) { }
+
             DeferDisposeCancellationTokenSource(downloadCtsToDispose, DeferredEpochDisposeDelayMs);
         }
 
-        try { _lifetimeCts?.Cancel(); } catch (ObjectDisposedException) { }
+        try { _lifetimeCts?.Cancel(); }
+        catch (ObjectDisposedException) { }
     }
 
-    /// <summary>
-    /// Общий эпилог dispose: освобождает lifetime CTS, read stream, RAM-чанки, семафоры, gates.
-    /// Вызывается после ожидания preload task и dispose парсера.
-    /// </summary>
+    /// <summary>Общий эпилог dispose: освобождение всех ресурсов.</summary>
     private void DisposeSharedResources()
     {
         try { _lifetimeCts?.Dispose(); } catch (ObjectDisposedException) { }
@@ -750,13 +833,6 @@ public sealed partial class CachingStreamSource : IAudioSource
         _disposed = true;
 
         BeginDispose();
-
-        if (_preloadTask is { IsCompleted: false })
-        {
-            try { _preloadTask.Wait(TimeSpan.FromMilliseconds(PlaybackGateTimeoutMs)); }
-            catch { }
-        }
-
         _parser?.Dispose();
         DisposeSharedResources();
     }
@@ -780,7 +856,6 @@ public sealed partial class CachingStreamSource : IAudioSource
             catch { }
         }
 
-        // Даём фоновым потокам завершить свои проверки на отмену.
         await Task.Delay(DisposalDelayMs).ConfigureAwait(false);
 
         if (_parser != null)

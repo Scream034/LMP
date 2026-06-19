@@ -8,11 +8,7 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Приостанавливает фоновую загрузку (при сворачивании окна).
-    /// 
-    /// <para><b>ВАЖНО:</b> Suspend останавливает только background fill.
-    /// Critical read-ahead (чанки вокруг текущей позиции) продолжает работать
-    /// для бесперебойного воспроизведения. On-demand загрузка через ReadAtAsync
-    /// тоже не затрагивается.</para>
+    /// Critical read-ahead продолжает работать для бесперебойного воспроизведения.
     /// </summary>
     public void Suspend()
     {
@@ -34,13 +30,12 @@ public sealed partial class CachingStreamSource
     #region Preload Loop
 
     /// <summary>
-    /// Фоновый цикл предзагрузки чанков.
-    /// Динамически адаптирует свои аппетиты (окно скачивания) под состояние сети (Latency).
+    /// Фоновый цикл предзагрузки диапазонов.
+    /// Удерживает буфер вокруг текущей позиции, учитывает in-flight загрузки,
+    /// адаптирует параллелизм и размер запросов к состоянию сети.
     /// </summary>
     private async Task PreloadLoopAsync(CancellationToken ct)
     {
-        int idleCycles = 0;
-        _backgroundChunksLoaded = 0;
         bool justResumed = false;
 
 #if DEBUG
@@ -54,7 +49,7 @@ public sealed partial class CachingStreamSource
                 bool isSuspended = !_suspendGate.IsSet;
                 bool isPaused = !_playbackGate.IsSet;
 
-                // PAUSE DETECT
+                // ── Пауза: ждём открытия gate ──
                 if (isPaused)
                 {
                     try { _playbackGate.Wait(PlaybackGateTimeoutMs, ct); }
@@ -62,41 +57,31 @@ public sealed partial class CachingStreamSource
                     continue;
                 }
 
-                // Пересчитываем адаптивные пределы каждый цикл на основе свежей статистики сети
-                GetAdaptivePreloadParams(out int adaptiveReadAhead, out int adaptiveMinBuffer, out _);
-
+                // ── Suspend mode: только critical read-ahead ──
                 if (isSuspended)
                 {
-                    // SUSPEND MODE: Только critical read-ahead
-                    int current = Volatile.Read(ref _currentChunk);
-                    var epochAtStart = Interlocked.Read(ref _downloadEpoch);
+                    long current = Volatile.Read(ref _currentReadOffset);
+                    long bufferedAhead = GetBufferedBytesAheadIncludingInflight(current);
 
-                    int criticalAhead = Math.Min(5, adaptiveReadAhead + 1);
-
-                    for (int i = 0; i <= criticalAhead; i++)
+                    if (bufferedAhead < _config.MinRequestSizeBytes)
                     {
-                        if (ct.IsCancellationRequested) break;
-                        if (Interlocked.Read(ref _downloadEpoch) != epochAtStart) break;
+                        long nextPos = current + bufferedAhead;
+                        int nextLen = GetAlignedReadLength(nextPos, _config.MinRequestSizeBytes);
 
-                        int idx = current + i;
-                        if (idx >= _totalChunks) break;
-
-                        if (!IsChunkAvailable(idx) && !_activeDownloads.ContainsKey(idx))
+                        try
                         {
-                            try
-                            {
-                                await EnsureChunkAsync(idx, ct).ConfigureAwait(false);
-                            }
-                            catch (OperationCanceledException) { break; }
-                            catch (ChunkDownloadFatalException)
-                            {
-                                Log.Debug($"[CachingSource] Critical chunk {idx} fatal in suspend mode");
-                                break;
-                            }
-                            catch (Exception ex)
-                            {
-                                Log.Debug($"[CachingSource] Critical chunk {idx}: {ex.Message}");
-                            }
+                            await EnsureRangeAsync(nextPos, nextLen, ct, isCritical: true)
+                                .ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) { break; }
+                        catch (ChunkDownloadFatalException)
+                        {
+                            Log.Debug("[CachingSource] Critical suspended preload fatal");
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Debug($"[CachingSource] Suspended critical preload: {ex.Message}");
                         }
                     }
 
@@ -109,8 +94,7 @@ public sealed partial class CachingStreamSource
                     continue;
                 }
 
-                // NORMAL MODE: Полный preload
-
+                // ── Дебаунс после resume ──
                 if (justResumed)
                 {
                     justResumed = false;
@@ -119,99 +103,66 @@ public sealed partial class CachingStreamSource
                     continue;
                 }
 
+                // ── Штатный интервал ожидания между итерациями ──
                 await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
 
                 if (_cacheEntry.IsComplete) break;
 
-                var epochNormal = Interlocked.Read(ref _downloadEpoch);
-                var tokenNormal = CurrentDownloadToken;
-                int currentNormal = Volatile.Read(ref _currentChunk);
-                int pending = _activeDownloads.Count;
+                // ── Snapshot текущего состояния ──
+                long epochAtLoopStart = Interlocked.Read(ref _downloadEpoch);
+                var token = CurrentDownloadToken;
+                long currentOffset = Volatile.Read(ref _currentReadOffset);
 
-                if (pending >= _config.MaxConcurrentDownloads)
-                {
-                    idleCycles = 0;
+                int adaptiveMaxDownloads = GetAdaptiveMaxConcurrentDownloads();
+                int pending = GetActiveDownloadCount();
+
+                if (pending >= adaptiveMaxDownloads)
                     continue;
-                }
 
-                bool activePreload = false;
-                int chunksAhead = 0;
+                int adaptiveTargetBufferMs = GetAdaptiveTargetBufferMs();
+                int refillStopMs = adaptiveTargetBufferMs + TargetBufferHysteresisMs;
 
-                // Используем адаптивное расширенное окно предзагрузки
-                for (int i = 0; i <= adaptiveReadAhead && pending < _config.MaxConcurrentDownloads; i++)
+                var degradation = GetNetworkDegradationLevel();
+
+                // ── Prefetch loop: планируем запросы вперёд от текущей позиции ──
+                while (pending < adaptiveMaxDownloads)
                 {
-                    if (Interlocked.Read(ref _downloadEpoch) != epochNormal)
-                    {
-                        Log.Debug("[CachingSource] Preload: epoch changed, re-evaluating");
+                    if (Interlocked.Read(ref _downloadEpoch) != epochAtLoopStart)
                         break;
-                    }
 
-                    int idx = currentNormal + i;
-                    if (idx >= _totalChunks) break;
+                    long plannedAheadBytes = GetBufferedBytesAheadIncludingInflight(currentOffset);
+                    int plannedAheadMs = ConvertBufferedBytesToMs(plannedAheadBytes);
 
-                    if (IsChunkAvailable(idx))
-                    {
-                        chunksAhead++;
-                    }
-                    else if (!_activeDownloads.ContainsKey(idx))
-                    {
-                        _ = SafeEnsureChunkAsync(idx, tokenNormal);
-                        pending++;
-                        activePreload = true;
-                        await Task.Delay(50, ct).ConfigureAwait(false);
-                    }
+                    // Достаточно буферизовано — стоп
+                    if (plannedAheadMs >= refillStopMs)
+                        break;
+
+                    long nextPosition = currentOffset + plannedAheadBytes;
+                    if (nextPosition >= _contentLength)
+                        break;
+
+                    int requestBytes = GetAlignedReadLength(nextPosition, _config.MinRequestSizeBytes);
+                    if (requestBytes <= 0)
+                        break;
+
+                    bool critical =
+                        plannedAheadMs < EmergencyRefillBufferMs
+                        || (pending == 0 && plannedAheadMs < CriticalRefillBufferMs);
+
+                    _ = SafeEnsureRangeAsync(nextPosition, requestBytes, token, critical);
+                    pending++;
+
+                    // На деградированной сети — один запрос за итерацию
+                    if (degradation != NetworkDegradationLevel.Normal)
+                        break;
+
+                    // На нормальной сети — только critical запросы идут цепочкой
+                    if (!critical)
+                        break;
                 }
 
-                if (Interlocked.Read(ref _downloadEpoch) != epochNormal)
-                    continue;
-
-                if (!activePreload) idleCycles++;
-                else idleCycles = 0;
-
-                bool isResumedPartialCache = _cacheEntry.DownloadedChunks > 0
-                    && !_cacheEntry.IsComplete
-                    && chunksAhead >= adaptiveReadAhead;
-
-                // Запуск фоновой докачки использует адаптивный порог
-                bool canBackgroundFill =
-                    !activePreload
-                    && (isResumedPartialCache || idleCycles >= _config.BackgroundFillIdleCycles)
-                    && pending < _config.MaxConcurrentDownloads
-                    && chunksAhead >= adaptiveMinBuffer
-                    && (_config.MaxBackgroundChunksPerSession == 0
-                        || _backgroundChunksLoaded < _config.MaxBackgroundChunksPerSession);
-
-                if (canBackgroundFill)
-                {
-                    if (Interlocked.Read(ref _downloadEpoch) != epochNormal)
-                        continue;
-
-                    int fillBatch = isResumedPartialCache
-                        ? Math.Min(3, _config.MaxConcurrentDownloads - pending)
-                        : 1;
-
-                    for (int f = 0; f < fillBatch; f++)
-                    {
-                        int? target = FindNearestMissingChunk(currentNormal);
-
-                        if (target.HasValue
-                            && target.Value < _totalChunks
-                            && !IsChunkAvailable(target.Value)
-                            && !_activeDownloads.ContainsKey(target.Value))
-                        {
-                            _ = SafeEnsureChunkAsync(target.Value, tokenNormal);
-                            _backgroundChunksLoaded++;
-                        }
-                        else
-                        {
-                            break;
-                        }
-                    }
-
-                    await Task.Delay(_config.BackgroundFillIntervalMs, ct).ConfigureAwait(false);
-                }
-
-                if (_ramChunks.Count > _config.MaxRamChunks)
+                // ── Trim RAM cache ──
+                if (_ramCache.TotalBytes > _config.MaxRamBytes)
                     ReleaseRamBuffers();
 
 #if DEBUG
@@ -219,98 +170,113 @@ public sealed partial class CachingStreamSource
                 if (progress != lastReportedProgress)
                 {
                     Log.Debug($"[CachingSource] Progress: {progress}% " +
-                              $"({_cacheEntry?.DownloadedChunks ?? 0}/{_cacheEntry?.TotalChunks ?? 0})");
+                              $"({_cacheEntry?.DownloadedBytes ?? 0}/{_cacheEntry?.TotalSize ?? 0} bytes)");
                     lastReportedProgress = progress;
                 }
 #endif
             }
             catch (OperationCanceledException) { break; }
-            catch { }
+            catch { /* Защита от неожиданных исключений в фоновом цикле */ }
         }
     }
 
-    private async Task SafeEnsureChunkAsync(int index, CancellationToken ct)
+    /// <summary>
+    /// Безопасная обёртка над <see cref="EnsureRangeAsync"/> для fire-and-forget вызовов.
+    /// </summary>
+    private async Task SafeEnsureRangeAsync(
+        long position, int minimumLength, CancellationToken ct, bool isCritical)
     {
         try
         {
-            await EnsureChunkAsync(index, ct);
+            await EnsureRangeAsync(position, minimumLength, ct, isCritical).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
         catch (ChunkDownloadFatalException ex)
         {
-            Log.Debug($"[Preload] Chunk {index} fatal: {ex.Message}");
+            Log.Debug($"[Preload] Range {position}: fatal: {ex.Message}");
         }
         catch (Exception ex)
         {
-            Log.Debug($"[Preload] Chunk {index} error: {ex.Message}");
+            Log.Debug($"[Preload] Range {position}: {ex.Message}");
         }
     }
 
     #endregion
 
-    #region Helpers
-
-    private int? FindNearestMissingChunk(int currentChunk)
-    {
-        if (_cacheEntry == null) return null;
-
-        int total = Math.Min(_cacheEntry.TotalChunks, _totalChunks);
-
-        for (int offset = 1; offset < total; offset++)
-        {
-            int forward = currentChunk + offset;
-            if (forward < total && !IsChunkAvailable(forward))
-                return forward;
-
-            int backward = currentChunk - offset;
-            if (backward >= 0 && !IsChunkAvailable(backward))
-                return backward;
-        }
-
-        return null;
-    }
+    #region Buffer Ranges
 
     /// <inheritdoc/>
     /// <remarks>
-    /// <para>Pre-sized list с начальной ёмкостью 8 (типичное количество
-    /// непрерывных диапазонов). Устраняет повторные resize List при каждом timer tick.</para>
+    /// Объединяет диапазоны из disk-кэша и RAM-кэша,
+    /// нормализует в <c>[0.0, 1.0]</c> относительно <see cref="_contentLength"/>.
     /// </remarks>
     public IReadOnlyList<(double Start, double End)> GetBufferedRanges()
     {
-        if (_cacheEntry == null) return [];
+        if (_cacheEntry == null || _contentLength <= 0)
+            return [];
 
-        int total = Math.Min(_cacheEntry.TotalChunks, _totalChunks);
-        if (total == 0) return [];
+        var diskRanges = _cacheEntry.GetDownloadedRangesSnapshot();
+        var ramBlocks = _ramCache.GetRangesSnapshot();
 
-        var ranges = new List<(double, double)>(8);
-        int? rangeStart = null;
+        if (diskRanges.Length == 0 && ramBlocks.Length == 0)
+            return [];
 
-        for (int i = 0; i < total; i++)
+        // ── Собираем все диапазоны в один массив и сортируем ──
+        var all = new List<(long Start, long End)>(diskRanges.Length + ramBlocks.Length);
+
+        for (int i = 0; i < diskRanges.Length; i++)
+            all.Add((diskRanges[i].Start, diskRanges[i].EndExclusive));
+
+        for (int i = 0; i < ramBlocks.Length; i++)
+            all.Add((ramBlocks[i].StartOffset, ramBlocks[i].EndOffsetExclusive));
+
+        all.Sort((a, b) => a.Start.CompareTo(b.Start));
+
+        // ── Merge overlapping ranges и нормализуем ──
+        var merged = new List<(double, double)>(all.Count);
+        long mergedStart = -1;
+        long mergedEnd = -1;
+
+        for (int i = 0; i < all.Count; i++)
         {
-            if (IsChunkAvailable(i))
+            var (s, e) = all[i];
+
+            if (mergedStart < 0)
             {
-                rangeStart ??= i;
+                mergedStart = s;
+                mergedEnd = e;
+                continue;
             }
-            else if (rangeStart.HasValue)
+
+            if (s <= mergedEnd)
             {
-                ranges.Add(((double)rangeStart.Value / total, (double)i / total));
-                rangeStart = null;
+                if (e > mergedEnd)
+                    mergedEnd = e;
+            }
+            else
+            {
+                merged.Add(((double)mergedStart / _contentLength, (double)mergedEnd / _contentLength));
+                mergedStart = s;
+                mergedEnd = e;
             }
         }
 
-        if (rangeStart.HasValue)
-            ranges.Add(((double)rangeStart.Value / total, BufferedRangeEnd));
+        if (mergedStart >= 0)
+            merged.Add(((double)mergedStart / _contentLength, (double)mergedEnd / _contentLength));
 
-        return ranges;
+        return merged;
     }
 
+    /// <summary>
+    /// Обновляет URL потока через <see cref="_urlRefresher"/> при истечении 403.
+    /// </summary>
     private async Task RefreshUrlAsync(CancellationToken ct)
     {
         if (_urlRefresher == null) return;
 
         try
         {
-            var newUrl = await _urlRefresher(ct);
+            var newUrl = await _urlRefresher(ct).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(newUrl))
             {
                 _currentUrl = newUrl;

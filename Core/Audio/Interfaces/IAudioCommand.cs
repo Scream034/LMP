@@ -1,3 +1,5 @@
+using LMP.Core.Audio;
+
 namespace LMP.Core.Audio.Interfaces;
 
 /// <summary>
@@ -61,11 +63,63 @@ public sealed record ResumeCommand(int SessionId) : IAudioCommand;
 /// </summary>
 /// <param name="Position">Целевая позиция.</param>
 /// <param name="SessionId">Уникальный ID сессии.</param>
+/// <param name="SeekGeneration">
+/// Монотонно возрастающее поколение seek-операции.
+/// Используется для отбрасывания устаревших deferred resume completion'ов.
+/// </param>
 /// <param name="Completion">Опциональный completion source для awaitable seek.</param>
 public sealed record SeekCommand(
     TimeSpan Position,
     int SessionId,
+    int SeekGeneration,
     TaskCompletionSource<bool>? Completion = null) : IAudioCommand;
+
+/// <summary>
+/// Команда deferred-resume после seek-buffering.
+/// </summary>
+/// <param name="SessionId">Сессия, в рамках которой был инициирован seek.</param>
+/// <param name="SeekGeneration">Поколение seek-операции.</param>
+/// <param name="Pipeline">Pipeline, для которого готовился resume.</param>
+/// <param name="ThresholdReached">
+/// <c>true</c>, если ring buffer достиг seek-threshold;
+/// <c>false</c>, если ожидание завершилось по timeout и resume должен быть форсирован.
+/// </param>
+/// <param name="BufferedSamples">Фактическое количество сэмплов в ring buffer на момент завершения ожидания.</param>
+public sealed record DeferredResumeCommand(
+    int SessionId,
+    int SeekGeneration,
+    AudioPipeline Pipeline,
+    bool ThresholdReached,
+    int BufferedSamples) : IAudioCommand;
+
+/// <summary>
+/// Команда уведомления actor loop о потере аудиоустройства.
+/// </summary>
+/// <param name="SessionId">Сессия на момент потери устройства.</param>
+/// <param name="Pipeline">Pipeline, связанный с устройством.</param>
+public sealed record DeviceLostCommand(
+    int SessionId,
+    AudioPipeline Pipeline) : IAudioCommand;
+
+/// <summary>
+/// Команда уведомления actor loop о появлении аудиоустройства.
+/// </summary>
+/// <param name="SessionId">Сессия на момент появления устройства.</param>
+/// <param name="Pipeline">Pipeline, ожидающий восстановления устройства.</param>
+public sealed record DeviceAvailableCommand(
+    int SessionId,
+    AudioPipeline Pipeline) : IAudioCommand;
+
+/// <summary>
+/// Команда доставки фоновой ошибки в actor loop.
+/// </summary>
+/// <param name="SessionId">Сессия, в рамках которой произошла ошибка.</param>
+/// <param name="Pipeline">Pipeline, из которого пришла ошибка.</param>
+/// <param name="Error">Исключение-ошибка.</param>
+public sealed record PlayerErrorCommand(
+    int SessionId,
+    AudioPipeline Pipeline,
+    Exception Error) : IAudioCommand;
 
 /// <summary>
 /// Команда финального уничтожения плеера и его инфраструктуры.
@@ -91,3 +145,18 @@ public sealed record TrackEndedCommand(int SessionId) : IAudioCommand;
 /// </summary>
 /// <param name="SessionId">Сессия на момент отправки команды.</param>
 public sealed record DeviceRecoveryCommand(int SessionId) : IAudioCommand;
+
+/// <summary>
+/// Команда уведомления actor loop о критическом опустошении аудиобуфера (starvation).
+/// </summary>
+/// <remarks>
+/// <para>Публикуется из fill thread backend'а через pipeline callback.
+/// Actor переводит плеер в Buffering и запускает deferred resume,
+/// вместо деструктивного CancelActiveReads, который убивает единственный живой HTTP-запрос
+/// на медленной сети.</para>
+/// </remarks>
+/// <param name="SessionId">Сессия на момент обнаружения starvation.</param>
+/// <param name="Pipeline">Pipeline, в котором произошёл starvation.</param>
+public sealed record StarvationCommand(
+    int SessionId,
+    AudioPipeline Pipeline) : IAudioCommand;

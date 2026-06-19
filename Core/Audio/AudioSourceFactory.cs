@@ -42,15 +42,15 @@ public static class AudioSourceFactory
 
     /// <summary>
     /// Обновляет конфигурацию стриминга.
-    /// Влияет на все новые источники (существующие не затрагиваются).
     /// </summary>
     public static void SetStreamingConfig(StreamingConfig config)
     {
         _currentConfig = config ?? throw new ArgumentNullException(nameof(config));
         Log.Info($"[AudioSourceFactory] Config updated: " +
-                 $"chunk={config.ChunkSizeBytes / 1024}KB, " +
-                 $"concurrent={config.MaxConcurrentDownloads}, " +
-                 $"readAhead={config.ReadAheadChunks}");
+                 $"align={config.RequestAlignmentBytes / 1024}KB, " +
+                 $"request={config.MinRequestSizeBytes / 1024}-{config.MaxRequestSizeBytes / 1024}KB, " +
+                 $"targetBuffer={config.TargetBufferMs}ms, " +
+                 $"concurrent={config.MaxConcurrentDownloads}");
     }
 
     /// <summary>
@@ -112,26 +112,6 @@ public static class AudioSourceFactory
     /// <summary>
     /// Создаёт аудио источник.
     /// </summary>
-    /// <param name="url">URL потока. Пустой = искать в кэше по trackId.</param>
-    /// <param name="httpClient">HTTP клиент для загрузки.</param>
-    /// <param name="urlRefresher">Callback обновления протухшего URL.</param>
-    /// <param name="trackId">ID трека.</param>
-    /// <param name="bitrateHint">
-    /// Реальный битрейт (kbps), НЕ нормализованный.
-    /// Используется для:
-    /// <list type="bullet">
-    ///   <item>Генерации ключа кэша (нормализуется внутри <see cref="BuildCacheKey"/>)</item>
-    ///   <item>Логирования реального битрейта</item>
-    ///   <item>Создания <see cref="CachingStreamSource"/> с реальным битрейтом</item>
-    /// </list>
-    /// 0 = определить автоматически из кэша или URL.
-    /// </param>
-    /// <param name="config">Конфигурация стриминга. null = текущий глобальный профиль.</param>
-    /// <param name="ct">Токен отмены.</param>
-    /// <returns>
-    /// Аудио источник. Если вернули <see cref="LocalFileSource"/> из кэша,
-    /// реальный битрейт берётся из <c>CacheEntry.Bitrate</c> (НЕ нормализованный).
-    /// </returns>
     public static async Task<IAudioSource> CreateAsync(
           string url,
           HttpClient httpClient,
@@ -156,7 +136,6 @@ public static class AudioSourceFactory
             if (cached != null)
             {
                 Log.Info($"[AudioSourceFactory] Using cached: {trackId} ({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
-                // Прокидываем trackId в LocalFileSource
                 return new LocalFileSource(cached.Value.Path, cached.Value.Entry.TotalSize, trackId);
             }
 
@@ -180,7 +159,6 @@ public static class AudioSourceFactory
             {
                 var exactEntry = _globalCacheManager.GetCacheInfo(cacheKey);
                 Log.Info($"[AudioSourceFactory] Exact cache hit: {cacheKey}");
-                // Прокидываем trackId в LocalFileSource
                 return new LocalFileSource(cachePath, exactEntry?.TotalSize ?? 0, trackId);
             }
         }

@@ -54,15 +54,29 @@ public sealed partial class AudioPlayer
         _bufferTimer = null;
     }
 
-    /// <summary>Публикует текущее состояние буфера и расчетную скорость загрузки.</summary>
+    /// <summary>
+    /// Публикует текущее состояние буфера и сетевые метрики источника.
+    /// </summary>
+    /// <remarks>
+    /// <para>Авто-resume после deferred seek выполняется НЕ здесь,
+    /// а через <see cref="AwaitDeferredSeekBufferAndResumeAsync"/>,
+    /// потому что backend buffer не отражает реальную готовность
+    /// decoder/ring buffer при закрытом gate.</para>
+    /// </remarks>
     private void RaiseBufferState()
     {
         var pipeline = _activePipeline;
         if (pipeline == null) return;
 
         var source = pipeline.Source;
-        double speed = source is Sources.CachingStreamSource caching ? caching.EstimatedSpeedBytesPerSec : 0;
-        double ping = source is Sources.CachingStreamSource c ? c.AveragePingMs : 0;
+
+        double speed = source is Sources.CachingStreamSource caching
+            ? caching.EstimatedSpeedBytesPerSec
+            : 0;
+
+        double ping = source is Sources.CachingStreamSource c
+            ? c.AveragePingMs
+            : 0;
 
         _events.RaiseBufferState(new BufferState(
             source.BufferProgress,

@@ -42,26 +42,24 @@ public static class PlayerStateTransitions
     {
         return (from, to) switch
         {
-            // Из Idle
             (PlayerState.Idle, PlayerState.Loading) => true,
             (PlayerState.Idle, PlayerState.Disposed) => true,
 
-            // Из Loading
             (PlayerState.Loading, PlayerState.Buffering) => true,
             (PlayerState.Loading, PlayerState.Error) => true,
             (PlayerState.Loading, PlayerState.Idle) => true,
             (PlayerState.Loading, PlayerState.Loading) => true,
             (PlayerState.Loading, PlayerState.Disposed) => true,
 
-            // Из Buffering
             (PlayerState.Buffering, PlayerState.Playing) => true,
             (PlayerState.Buffering, PlayerState.Error) => true,
             (PlayerState.Buffering, PlayerState.Idle) => true,
             (PlayerState.Buffering, PlayerState.Loading) => true,
             (PlayerState.Buffering, PlayerState.Paused) => true,
+            (PlayerState.Buffering, PlayerState.Seeking) => true,
             (PlayerState.Buffering, PlayerState.Disposed) => true,
 
-            // Из Playing
+            (PlayerState.Playing, PlayerState.Buffering) => true,
             (PlayerState.Playing, PlayerState.Paused) => true,
             (PlayerState.Playing, PlayerState.Seeking) => true,
             (PlayerState.Playing, PlayerState.Idle) => true,
@@ -69,25 +67,25 @@ public static class PlayerStateTransitions
             (PlayerState.Playing, PlayerState.Error) => true,
             (PlayerState.Playing, PlayerState.Disposed) => true,
 
-            // Из Paused
             (PlayerState.Paused, PlayerState.Playing) => true,
             (PlayerState.Paused, PlayerState.Seeking) => true,
             (PlayerState.Paused, PlayerState.Idle) => true,
             (PlayerState.Paused, PlayerState.Loading) => true,
             (PlayerState.Paused, PlayerState.Buffering) => true,
+            (PlayerState.Paused, PlayerState.Error) => true,
             (PlayerState.Paused, PlayerState.Disposed) => true,
 
-            // Из Seeking
             (PlayerState.Seeking, PlayerState.Playing) => true,
+            (PlayerState.Seeking, PlayerState.Buffering) => true,
             (PlayerState.Seeking, PlayerState.Paused) => true,
             (PlayerState.Seeking, PlayerState.Idle) => true,
             (PlayerState.Seeking, PlayerState.Loading) => true,
             (PlayerState.Seeking, PlayerState.Error) => true,
             (PlayerState.Seeking, PlayerState.Disposed) => true,
 
-            // Из Error
             (PlayerState.Error, PlayerState.Idle) => true,
             (PlayerState.Error, PlayerState.Loading) => true,
+            (PlayerState.Error, PlayerState.Buffering) => true,
             (PlayerState.Error, PlayerState.Disposed) => true,
 
             _ => false
@@ -106,18 +104,26 @@ public static class PlayerStateTransitions
         {
             PlayCommand => true,
             StopCommand => state is not PlayerState.Idle,
-            PauseCommand => state is PlayerState.Playing,
+
+            PauseCommand => state is PlayerState.Playing or PlayerState.Buffering or PlayerState.Seeking,
             ResumeCommand => state is PlayerState.Paused,
-            SeekCommand => state is PlayerState.Playing or PlayerState.Paused,
-            DisposeCommand => true,
 
-            // Natural end-of-track доставляется через actor channel.
-            // Разрешаем обработку в состояниях, где текущий pipeline ещё легитимно активен.
-            TrackEndedCommand => state is PlayerState.Buffering or PlayerState.Playing or PlayerState.Paused,
+            SeekCommand => state is PlayerState.Playing or PlayerState.Paused or PlayerState.Buffering,
 
-            // Recovery принимается из Buffering (Resume переключает Paused → Buffering
-            // до отправки команды) и из Paused (race-safe fallback).
+            StarvationCommand => state is PlayerState.Playing,
+
+            DeferredResumeCommand => state is PlayerState.Buffering or PlayerState.Seeking or PlayerState.Paused or PlayerState.Playing,
+
+            TrackEndedCommand => state is PlayerState.Buffering or PlayerState.Playing or PlayerState.Paused or PlayerState.Seeking,
+
+            DeviceLostCommand => state is not (PlayerState.Idle or PlayerState.Disposed),
+            DeviceAvailableCommand => state is not (PlayerState.Idle or PlayerState.Disposed),
+
             DeviceRecoveryCommand => state is PlayerState.Buffering or PlayerState.Paused or PlayerState.Error,
+
+            PlayerErrorCommand => state is not PlayerState.Disposed,
+
+            DisposeCommand => true,
 
             _ => false
         };

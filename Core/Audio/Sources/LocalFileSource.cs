@@ -199,10 +199,8 @@ public sealed class LocalFileSource : IAudioSource
 
     /// <inheritdoc/>
     /// <remarks>
-    /// <para><b>Surgical Cache Repair:</b> при обнаружении коррупции в файле кэша 
-    /// мы НЕ удаляем его целиком. Вместо этого мы точечно сбрасываем бит повреждённого чанка в ноль, 
-    /// сохраняя весь остальной файл на диске, и инициируем ретрай. Новый CachingStreamSource откроет 
-    /// этот же файл и докачает из сети ТОЛЬКО повреждённый 64KB-сегмент.</para>
+    /// <para><b>Surgical Cache Repair:</b> при обнаружении коррупции в файле кэша
+    /// выполняется точечная range-based инвалидация повреждённого сегмента на диске.</para>
     /// </remarks>
     public async ValueTask<AudioFrame?> ReadFrameAsync(CancellationToken ct = default)
     {
@@ -226,45 +224,59 @@ public sealed class LocalFileSource : IAudioSource
             {
                 if (ct.IsCancellationRequested) throw;
 
-                // Сценарий А: Файл открыт из кэша. Запускаем хирургическую точечную инвалидацию чанка
+                int alignmentBytes = ResolveRepairAlignmentBytes();
+                long alignedStart = ex.AbsoluteBytePosition - (ex.AbsoluteBytePosition % alignmentBytes);
+                int logicalIndex = (int)(alignedStart / alignmentBytes);
+
                 if (!string.IsNullOrEmpty(_trackId) && _expectedSize > 0)
                 {
-                    int chunkSize = ChunkSize;
-                    int chunkIndex = (int)(ex.AbsoluteBytePosition / chunkSize);
+                    Log.Warn($"[LocalFileSource] Cache corruption detected for track {_trackId} " +
+                             $"at byte {ex.AbsoluteBytePosition} " +
+                             $"(Range {alignedStart}-{alignedStart + alignmentBytes - 1}). " +
+                             $"Performing surgical invalidation.");
 
-                    Log.Warn($"[LocalFileSource] Cache corruption detected for track {_trackId} at byte {ex.AbsoluteBytePosition} (Chunk {chunkIndex}). Performing surgical invalidation.");
-
-                    // Хирургически инвалидируем только поврежденный чанк, сохраняя остальной файл целым!
-                    AudioSourceFactory.GlobalCache?.InvalidateCacheChunkByTrackId(_trackId, chunkIndex);
+                    AudioSourceFactory.GlobalCache?.InvalidateRangeByTrackId(_trackId, alignedStart, alignmentBytes);
 
                     throw new CacheInvalidatedException(
-                        $"Cache corruption detected at byte {ex.AbsoluteBytePosition} (Chunk {chunkIndex})",
+                        $"Cache corruption detected at byte {ex.AbsoluteBytePosition} " +
+                        $"(Range {alignedStart}-{alignedStart + alignmentBytes - 1})",
                         CacheInvalidationKind.ParserResync,
                         isRecoverable: true,
                         trackId: _trackId,
-                        chunkIndex: chunkIndex,
+                        chunkIndex: logicalIndex,
                         inner: ex);
                 }
 
-                // Сценарий Б: Это кастомный локальный файл или мы оффлайн. Пропускаем битый чанк
                 Log.Warn($"[LocalFileSource] Offline fallback: skipping corrupted range around byte {ex.AbsoluteBytePosition}");
 
-                int chunkIndexFallback = (int)(ex.AbsoluteBytePosition / ChunkSize);
-                long nextChunkBoundary = (long)(chunkIndexFallback + 1) * ChunkSize;
+                long nextBoundary = Math.Min(alignedStart + alignmentBytes, _fileStream!.Length);
+                if (nextBoundary >= _fileStream.Length)
+                    return null;
 
-                if (nextChunkBoundary >= _fileStream!.Length)
-                {
-                    return null; // Безопасный EOF
-                }
-
-                _fileStream.Position = nextChunkBoundary;
+                _fileStream.Position = nextBoundary;
                 _parser.RequireResync();
 
-                Volatile.Write(ref _positionMs, DurationMs * nextChunkBoundary / _fileStream.Length);
+                Volatile.Write(ref _positionMs, DurationMs * nextBoundary / _fileStream.Length);
             }
         }
 
         throw new InvalidDataException("Unrecoverable local file corruption after maximum resync attempts.");
+    }
+
+    /// <summary>
+    /// Определяет байтовое выравнивание для точечной инвалидации и resync fallback.
+    /// </summary>
+    /// <returns>Размер выровненного диапазона в байтах.</returns>
+    private int ResolveRepairAlignmentBytes()
+    {
+        if (!string.IsNullOrEmpty(_trackId))
+        {
+            int alignment = AudioSourceFactory.GlobalCache?.FindBestCache(_trackId)?.AlignmentBytes ?? 0;
+            if (alignment > 0)
+                return alignment;
+        }
+
+        return ChunkSize;
     }
 
     #endregion

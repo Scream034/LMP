@@ -1,5 +1,3 @@
-using System.Buffers;
-
 namespace LMP.Core.Audio.Sources;
 
 public sealed partial class CachingStreamSource
@@ -7,18 +5,11 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Stream-обёртка над <see cref="CachingStreamSource"/> для парсеров контейнеров (WebM/MP4).
     ///
-    /// <para>Предыдущая реализация создавала новый CTS в <c>Position</c> setter —
-    /// каждый вызов <c>_stream.Position += N</c> из Mp4Parser (SkipBytesAsync)
-    /// аллоцировал CTS + Cancel + ThreadPool.QueueUserWorkItem (~десятки раз per fragment).
-    /// Теперь:</para>
+    /// <para><b>Оптимизация Position setter:</b></para>
     /// <list type="bullet">
-    ///   <item><c>Position setter</c> — лёгкий <c>Volatile.Write</c>, без CTS</item>
-    ///   <item><see cref="SeekAndCancelPendingReads"/> — явный cancel для внешнего seek
-    ///     (вызывается только из <see cref="SeekAsync"/>)</item>
+    ///   <item><c>Position setter</c> — лёгкий <c>Volatile.Write</c>, без CTS-аллокаций</item>
+    ///   <item><see cref="SeekAndCancelPendingReads"/> — явный cancel для внешнего seek</item>
     /// </list>
-    /// <para>Безопасность: парсер однопоточен (read → skip → read), во время skip
-    /// нет pending ReadAsync. Внешний seek использует <see cref="SeekAndCancelPendingReads"/>,
-    /// который корректно отменяет in-flight ReadAsync через CTS.</para>
     /// </summary>
     private sealed class AsyncCachingReadStream : Stream
     {
@@ -27,19 +18,12 @@ public sealed partial class CachingStreamSource
 
         /// <summary>
         /// CTS, привязанный к текущей логической позиции потока.
-        /// Заменяется только через <see cref="SeekAndCancelPendingReads"/> — при внешнем seek.
-        /// Все pending ReadAsync немедленно отменяются.
+        /// Заменяется только через <see cref="SeekAndCancelPendingReads"/>.
         /// </summary>
         private CancellationTokenSource _readCts = new();
 
-        /// <summary>
-        /// Создаёт Stream-обёртку над источником.
-        /// </summary>
-        /// <param name="source">Родительский <see cref="CachingStreamSource"/>.</param>
-        public AsyncCachingReadStream(CachingStreamSource source)
-        {
-            _source = source;
-        }
+        /// <summary>Создаёт Stream-обёртку над источником.</summary>
+        public AsyncCachingReadStream(CachingStreamSource source) => _source = source;
 
         #region Stream Properties
 
@@ -57,9 +41,8 @@ public sealed partial class CachingStreamSource
 
         /// <inheritdoc/>
         /// <remarks>
-        /// <para>Вызывается из парсера (SkipBytesAsync) десятки раз per fragment.
-        /// Прежняя реализация аллоцировала CTS + Cancel + QueueUserWorkItem на каждый вызов.
-        /// Теперь cancel CTS выполняется только через <see cref="SeekAndCancelPendingReads"/>.</para>
+        /// Lightweight setter: только <c>Volatile.Write</c>.
+        /// Cancel CTS выполняется только через <see cref="SeekAndCancelPendingReads"/>.
         /// </remarks>
         public override long Position
         {
@@ -67,16 +50,14 @@ public sealed partial class CachingStreamSource
             set => Volatile.Write(ref _position, value);
         }
 
+        #endregion
+
+        #region Seek & Cancel
+
         /// <summary>
         /// Устанавливает позицию потока И отменяет все pending ReadAsync.
-        /// Вызывается ТОЛЬКО из <see cref="SeekAsync"/>
-        /// при внешнем seek — не из парсера.
+        /// Вызывается ТОЛЬКО из <see cref="CachingStreamSource.SeekAsync"/> при внешнем seek.
         /// </summary>
-        /// <remarks>
-        /// <para>Создаёт новый CTS, cancel'ит старый. Deferred dispose через ThreadPool
-        /// предотвращает ObjectDisposedException в reader-потоке, который может держать
-        /// ссылку на старый CTS между <see cref="Volatile.Read{T}"/> и <c>.Token</c>.</para>
-        /// </remarks>
         /// <param name="position">Новая абсолютная позиция в байтах.</param>
         internal void SeekAndCancelPendingReads(long position)
         {
@@ -86,19 +67,16 @@ public sealed partial class CachingStreamSource
             catch (ObjectDisposedException) { }
 
             DeferDisposeCancellationTokenSource(oldCts, 500);
-
             Volatile.Write(ref _position, position);
         }
 
         /// <summary>
-        /// Мгновенно отменяет активный CTS чтения, прерывая любые заблокированные сетевые запросы.
-        /// Выполняется асинхронно для защиты от блокировок сокетов.
+        /// Мгновенно отменяет активный CTS чтения, прерывая заблокированные сетевые запросы.
         /// </summary>
         internal void CancelActiveReads()
         {
             var oldCts = Interlocked.Exchange(ref _readCts, new CancellationTokenSource());
 
-            // Делегируем закрытие потоков и сокетов пулу
             ThreadPool.UnsafeQueueUserWorkItem(static state =>
             {
                 try { ((CancellationTokenSource)state!).Cancel(); }
@@ -108,16 +86,9 @@ public sealed partial class CachingStreamSource
             DeferDisposeCancellationTokenSource(oldCts, 500);
         }
 
-        #endregion
-
-        #region Read
-
         /// <summary>
         /// Безопасно извлекает <see cref="CancellationToken"/> из текущего <see cref="_readCts"/>.
-        /// Обрабатывает гонку с <see cref="SeekAndCancelPendingReads"/>, который может задиспозить CTS
-        /// между <see cref="Volatile.Read{T}"/> и обращением к <c>.Token</c>.
         /// </summary>
-        /// <returns>Актуальный токен или отменённый токен при гонке.</returns>
         private CancellationToken GetCurrentReadToken()
         {
             try
@@ -130,91 +101,28 @@ public sealed partial class CachingStreamSource
             }
         }
 
+        #endregion
+
+        #region Read
+
         /// <inheritdoc/>
         /// <remarks>
-        /// <para><b>Оптимизированный гибридный метод:</b> Если данные чанка уже доступны локально 
-        /// (в оперативной памяти или на диске), чтение происходит абсолютно синхронно без аллокаций
-        /// и без блокировок Task-планировщика.</para>
+        /// Горячий путь: если данные в RAM — синхронное копирование без планировщика.
+        /// Холодный путь: sync-over-async fallback для парсеров, вызывающих <c>Read</c>.
         /// </remarks>
         public override int Read(byte[] buffer, int offset, int count)
         {
             long posBefore = Volatile.Read(ref _position);
             if (posBefore >= _source._contentLength) return 0;
 
-            int chunkIndex = (int)(posBefore / _source._chunkSize);
-
-            // Проверяем локальную доступность чанка в кэше
-            if (_source.IsChunkAvailable(chunkIndex))
+            // Быстрый путь: данные уже в RAM
+            if (_source._ramCache.TryRead(posBefore, buffer.AsMemory(offset, count), out int ramRead))
             {
-                int offsetInChunk = (int)(posBefore % _source._chunkSize);
-
-                // А. Прямое быстрое чтение из RAM-кэша (Lock-Free)
-                if (_source._ramChunks.TryGetValue(chunkIndex, out var ramEntry))
-                {
-                    int read = CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer.AsMemory(offset, count));
-                    Volatile.Write(ref _position, posBefore + read);
-                    return read;
-                }
-
-                // Б. Прямое СИНХРОННОЕ чтение с диска (без async-планировщика и .GetResult())
-                try
-                {
-                    var entry = _source._cacheEntry;
-                    if (entry != null)
-                    {
-                        var filePath = _source._cacheManager.GetCachePath(_source._cacheKey);
-                        if (File.Exists(filePath))
-                        {
-                            long chunkOffset = (long)chunkIndex * entry.ChunkSize;
-                            int size = (int)Math.Min(entry.ChunkSize, entry.TotalSize - chunkOffset);
-                            if (size > 0)
-                            {
-                                using var fs = new FileStream(
-                                    filePath,
-                                    FileMode.Open,
-                                    FileAccess.Read,
-                                    FileShare.ReadWrite,
-                                    bufferSize: 4096,
-                                    useAsync: false); // Чисто синхронный дескриптор ввода-вывода
-
-                                fs.Position = chunkOffset;
-
-                                byte[] chunkBuf = ArrayPool<byte>.Shared.Rent(size);
-                                try
-                                {
-                                    int totalRead = 0;
-                                    while (totalRead < size)
-                                    {
-                                        int readBytes = fs.Read(chunkBuf, totalRead, size - totalRead);
-                                        if (readBytes == 0) break;
-                                        totalRead += readBytes;
-                                    }
-
-                                    if (totalRead == size)
-                                    {
-                                        int read = CopyFromChunk(chunkBuf.AsSpan(0, size), size, offsetInChunk, buffer.AsMemory(offset, count));
-                                        Volatile.Write(ref _position, posBefore + read);
-
-                                        _source._cacheManager.Touch(_source._cacheKey);
-                                        return read;
-                                    }
-                                }
-                                finally
-                                {
-                                    ArrayPool<byte>.Shared.Return(chunkBuf);
-                                }
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"[ReadStream] Synchronous disk read failed for {_source._cacheKey}: {ex.Message}");
-                }
+                Volatile.Write(ref _position, posBefore + ramRead);
+                return ramRead;
             }
 
-            // Медленный путь (сетевой запрос) с контролируемым Sync-over-Async.
-            // На горячем пути WebM/Opus воспроизведения этот метод не вызывается (вызывается ReadAsync).
+            // Медленный путь: сетевой запрос через sync-over-async
             try
             {
                 return ReadAsyncCore(buffer.AsMemory(offset, count), GetCurrentReadToken())
@@ -225,7 +133,7 @@ public sealed partial class CachingStreamSource
             }
             catch (OperationCanceledException) { return 0; }
             catch (AggregateException ex) when (ex.InnerException is OperationCanceledException) { return 0; }
-            catch (Exception ex) when (ex is IOException || ex is System.Net.Sockets.SocketException)
+            catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException)
             {
                 return 0;
             }
@@ -244,12 +152,9 @@ public sealed partial class CachingStreamSource
         }
 
         /// <summary>
-        /// Ядро чтения: делегирует в <see cref="ReadAtAsync"/> и
+        /// Ядро чтения: делегирует в <see cref="CachingStreamSource.ReadAtAsync"/> и
         /// атомарно продвигает позицию только если seek не произошёл во время чтения.
         /// </summary>
-        /// <param name="buffer">Целевой буфер.</param>
-        /// <param name="ct">Токен отмены (включает readToken текущей позиции).</param>
-        /// <returns>Количество прочитанных байт.</returns>
         private async ValueTask<int> ReadAsyncCore(Memory<byte> buffer, CancellationToken ct)
         {
             long posBefore = Volatile.Read(ref _position);

@@ -2,7 +2,6 @@ namespace LMP.Core.Services;
 
 /// <summary>
 /// Фабрика профилей стриминга для разных условий сети.
-/// Каждый профиль — набор предварительно настроенных параметров <see cref="StreamingConfig"/>.
 /// </summary>
 public static class StreamingProfiles
 {
@@ -19,18 +18,18 @@ public static class StreamingProfiles
     };
 
     /// <summary>
-    /// Экономия трафика и высокая скорость (смещено из старого Medium / Normal).
-    /// Чанк 16 КБ дает минимальный seek latency и быстрый холодный старт при нестабильном соединении.
+    /// Экономия трафика и высокая отзывчивость.
     /// </summary>
     public static StreamingConfig Low { get; } = new()
     {
-        ChunkSizeBytes = 16 * 1024,
-        ReadAheadChunks = 4,
-        MaxRamChunks = 256,
-        RamEvictionDistance = 16,
+        RequestAlignmentBytes = 8 * 1024,
+        MinRequestSizeBytes = 8 * 1024,
+        MaxRequestSizeBytes = 96 * 1024,
+
+        MaxRamBytes = 4 * 1024 * 1024,
+        RamEvictionWindowBytes = 768 * 1024,
 
         MaxConcurrentDownloads = 2,
-        DownloadTimeoutMs = 30_000,
         DownloadSlotTimeoutMs = 800,
 
         MaxNetworkRetries = 4,
@@ -40,30 +39,32 @@ public static class StreamingProfiles
         RefreshCooldownMs = 5000,
         PostRefreshDelayMs = 800,
 
-        InitialChunksToLoad = 4,
-        SeekPreloadChunks = 6,
+        TargetBufferMs = 10_000,
+        InitialPrebufferBytes = 64 * 1024,
+        SeekPreloadBytes = 96 * 1024,
+        MinBufferAheadForBackgroundFillMs = 3000,
 
         BackgroundFillIdleCycles = 8,
         BackgroundFillIntervalMs = 5000,
-        MaxBackgroundChunksPerSession = 60,
-        MinBufferAheadForBackgroundFill = 3,
+        MaxBackgroundRequestsPerSession = 60,
 
-        PreloadIntervalMs = 800
+        PreloadIntervalMs = 800,
+        ThrottleMultiplier = 2.0
     };
 
     /// <summary>
-    /// Сбалансированный средний профиль Normal (смещено из старого High).
-    /// Чанк 64 КБ — оптимальный баланс между накладными расходами HTTP-запросов и задержкой позиционирования.
+    /// Сбалансированный профиль.
     /// </summary>
     public static StreamingConfig Medium { get; } = new()
     {
-        ChunkSizeBytes = 64 * 1024,
-        ReadAheadChunks = 6,
-        MaxRamChunks = 96,
-        RamEvictionDistance = 14,
+        RequestAlignmentBytes = 16 * 1024,
+        MinRequestSizeBytes = 16 * 1024,
+        MaxRequestSizeBytes = 384 * 1024,
+
+        MaxRamBytes = 6 * 1024 * 1024,
+        RamEvictionWindowBytes = 1536 * 1024,
 
         MaxConcurrentDownloads = 3,
-        DownloadTimeoutMs = 15_000,
         DownloadSlotTimeoutMs = 300,
 
         MaxNetworkRetries = 3,
@@ -73,30 +74,32 @@ public static class StreamingProfiles
         RefreshCooldownMs = 3000,
         PostRefreshDelayMs = 500,
 
-        InitialChunksToLoad = 4,
-        SeekPreloadChunks = 6,
+        TargetBufferMs = 12_000,
+        InitialPrebufferBytes = 128 * 1024,
+        SeekPreloadBytes = 256 * 1024,
+        MinBufferAheadForBackgroundFillMs = 4000,
 
         BackgroundFillIdleCycles = 5,
         BackgroundFillIntervalMs = 3000,
-        MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 4,
+        MaxBackgroundRequestsPerSession = 0,
 
-        PreloadIntervalMs = 500
+        PreloadIntervalMs = 500,
+        ThrottleMultiplier = 3.0
     };
 
     /// <summary>
-    /// Стабильное высокое качество (смещено из старого Ultra).
-    /// Чанк 128 КБ ориентирован на непрерывное вещание на быстрых домашних и мобильных сетях.
+    /// Профиль для быстрых и стабильных сетей.
     /// </summary>
     public static StreamingConfig High { get; } = new()
     {
-        ChunkSizeBytes = 128 * 1024,
-        ReadAheadChunks = 8,
-        MaxRamChunks = 64,
-        RamEvictionDistance = 16,
+        RequestAlignmentBytes = 32 * 1024,
+        MinRequestSizeBytes = 32 * 1024,
+        MaxRequestSizeBytes = 512 * 1024,
+
+        MaxRamBytes = 8 * 1024 * 1024,
+        RamEvictionWindowBytes = 2 * 1024 * 1024,
 
         MaxConcurrentDownloads = 4,
-        DownloadTimeoutMs = 20_000,
         DownloadSlotTimeoutMs = 300,
 
         MaxNetworkRetries = 2,
@@ -106,30 +109,32 @@ public static class StreamingProfiles
         RefreshCooldownMs = 2000,
         PostRefreshDelayMs = 300,
 
-        InitialChunksToLoad = 4,
-        SeekPreloadChunks = 6,
+        TargetBufferMs = 15_000,
+        InitialPrebufferBytes = 256 * 1024,
+        SeekPreloadBytes = 384 * 1024,
+        MinBufferAheadForBackgroundFillMs = 5000,
 
         BackgroundFillIdleCycles = 3,
         BackgroundFillIntervalMs = 1500,
-        MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 6,
+        MaxBackgroundRequestsPerSession = 0,
 
-        PreloadIntervalMs = 350
+        PreloadIntervalMs = 350,
+        ThrottleMultiplier = 0
     };
 
     /// <summary>
-    /// Сверхвысокое качество для гигабитного интернета и максимального сетевого throughput.
-    /// Чанк 256 КБ обеспечивает минимальный overhead HTTP-заголовков.
+    /// Профиль для максимально быстрого канала.
     /// </summary>
     public static StreamingConfig Ultra { get; } = new()
     {
-        ChunkSizeBytes = 256 * 1024,
-        ReadAheadChunks = 10,
-        MaxRamChunks = 48,
-        RamEvictionDistance = 20,
+        RequestAlignmentBytes = 64 * 1024,
+        MinRequestSizeBytes = 64 * 1024,
+        MaxRequestSizeBytes = 1024 * 1024,
+
+        MaxRamBytes = 12 * 1024 * 1024,
+        RamEvictionWindowBytes = 3 * 1024 * 1024,
 
         MaxConcurrentDownloads = 4,
-        DownloadTimeoutMs = 25_000,
         DownloadSlotTimeoutMs = 300,
 
         MaxNetworkRetries = 2,
@@ -139,14 +144,16 @@ public static class StreamingProfiles
         RefreshCooldownMs = 2000,
         PostRefreshDelayMs = 300,
 
-        InitialChunksToLoad = 4,
-        SeekPreloadChunks = 6,
+        TargetBufferMs = 18_000,
+        InitialPrebufferBytes = 512 * 1024,
+        SeekPreloadBytes = 768 * 1024,
+        MinBufferAheadForBackgroundFillMs = 6000,
 
         BackgroundFillIdleCycles = 3,
         BackgroundFillIntervalMs = 1500,
-        MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 8,
+        MaxBackgroundRequestsPerSession = 0,
 
-        PreloadIntervalMs = 300
+        PreloadIntervalMs = 300,
+        ThrottleMultiplier = 0
     };
 }

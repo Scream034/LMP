@@ -10,133 +10,234 @@ public sealed partial class CachingStreamSource
 {
     #region Nested Types
 
-    /// <summary>
-    /// Данные одного загруженного чанка с явной моделью владения буфером.
-    /// </summary>
-    /// <remarks>
-    /// Инкапсулирует <see cref="IMemoryOwner{T}"/>, полученный из <see cref="MemoryPool{T}.Shared"/>.
-    /// Вызов <see cref="Dispose"/> возвращает буфер в пул. Владелец объекта —
-    /// <c>_ramChunks</c>; при эвикции вызывается <see cref="Dispose"/>.
-    /// </remarks>
-    internal sealed class ChunkData : IDisposable
+    private enum RangeDownloadResult
+    {
+        Success, Forbidden403, NetworkError, Fatal, Cancelled, SlotTimeout, OutOfRange
+    }
+
+    internal sealed class RamRangeBlock : IDisposable
     {
         private IMemoryOwner<byte>? _owner;
-        private volatile bool _disposed;
-
-        /// <summary>Слайс памяти, ограниченный реальной длиной данных чанка.</summary>
+        private int _disposed;
+        public long StartOffset { get; }
+        public long EndOffsetExclusive => StartOffset + Length;
+        public int Length { get; }
         public Memory<byte> Memory { get; }
 
-        /// <summary>Реальная длина данных (может быть меньше размера арендованного буфера).</summary>
-        public int Length { get; }
-
-        /// <summary>
-        /// Создаёт обёртку над арендованным буфером, принимая владение.
-        /// </summary>
-        /// <param name="owner">
-        /// Владение передаётся в этот объект — вызывающий НЕ должен вызывать Dispose на owner после этого.
-        /// </param>
-        /// <param name="actualLength">Реальное количество байт данных в буфере.</param>
-        public ChunkData(IMemoryOwner<byte> owner, int actualLength)
+        public RamRangeBlock(long startOffset, IMemoryOwner<byte> owner, int actualLength)
         {
+            StartOffset = startOffset;
             _owner = owner;
             Length = actualLength;
             Memory = owner.Memory[..actualLength];
         }
 
-        /// <summary>Возвращает буфер в <see cref="MemoryPool{T}.Shared"/>.</summary>
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             _owner?.Dispose();
             _owner = null;
         }
     }
 
-    #endregion
-
-    private readonly SemaphoreSlim _refreshLock = new(1, 1);
-    private DateTime _lastRefreshTime = DateTime.MinValue;
-    private int _consecutive403Count;
-    private int _requestSequenceNumber;
-    private int _consecutiveRefreshFailures;
-
-    #region Chunk Download Result
-
-    /// <summary>Результат попытки загрузки одного чанка.</summary>
-    private enum ChunkDownloadResult
+    internal sealed class SlidingRamCache : IDisposable
     {
-        /// <summary>Чанк успешно загружен или уже был доступен.</summary>
-        Success,
+        private readonly Lock _lock = new();
+        private readonly List<RamRangeBlock> _blocks = new(32);
+        private long _totalBytes;
 
-        /// <summary>Сервер вернул 403 Forbidden — требуется refresh URL.</summary>
-        Forbidden403,
+        public long TotalBytes
+        {
+            get { lock (_lock) return _totalBytes; }
+        }
 
-        /// <summary>Сетевая ошибка — допускается retry с backoff.</summary>
-        NetworkError,
+        public bool TryAdd(RamRangeBlock block)
+        {
+            lock (_lock)
+            {
+                int insertAt = _blocks.Count;
+                for (int i = 0; i < _blocks.Count; i++)
+                {
+                    var current = _blocks[i];
+                    if (current.EndOffsetExclusive <= block.StartOffset) continue;
+                    if (block.EndOffsetExclusive <= current.StartOffset) { insertAt = i; break; }
+                    return false;
+                }
+                _blocks.Insert(insertAt, block);
+                _totalBytes += block.Length;
+                return true;
+            }
+        }
 
-        /// <summary>Неустранимая ошибка — дальнейшие попытки бессмысленны.</summary>
-        Fatal,
+        public bool TryRead(long position, Memory<byte> destination, out int read)
+        {
+            lock (_lock)
+            {
+                for (int i = 0; i < _blocks.Count; i++)
+                {
+                    var current = _blocks[i];
+                    if (current.StartOffset > position) break;
+                    if (position >= current.EndOffsetExclusive) continue;
+                    int offsetInBlock = (int)(position - current.StartOffset);
+                    read = Math.Min(destination.Length, current.Length - offsetInBlock);
+                    if (read <= 0) { read = 0; return false; }
+                    current.Memory.Span.Slice(offsetInBlock, read).CopyTo(destination.Span);
+                    return true;
+                }
+            }
+            read = 0; return false;
+        }
 
-        /// <summary>Операция отменена через CancellationToken.</summary>
-        Cancelled,
+        public bool ContainsRange(long startOffset, int length)
+        {
+            long endExclusive = startOffset + length;
+            lock (_lock)
+            {
+                for (int i = 0; i < _blocks.Count; i++)
+                {
+                    var current = _blocks[i];
+                    if (current.StartOffset > startOffset) break;
+                    if (current.EndOffsetExclusive <= startOffset) continue;
+                    return current.StartOffset <= startOffset && current.EndOffsetExclusive >= endExclusive;
+                }
+            }
+            return false;
+        }
 
-        /// <summary>Истёк таймаут ожидания слота параллелизма.</summary>
-        SlotTimeout,
+        public long GetContiguousBytesFrom(long position)
+        {
+            lock (_lock)
+            {
+                for (int i = 0; i < _blocks.Count; i++)
+                {
+                    var current = _blocks[i];
+                    if (current.StartOffset > position) break;
+                    if (position >= current.EndOffsetExclusive) continue;
+                    return current.EndOffsetExclusive - position;
+                }
+            }
+            return 0;
+        }
 
-        /// <summary>Запрошенный диапазон за пределами контента.</summary>
-        OutOfRange
+        public bool TryRemoveContaining(long position, out RamRangeBlock? block)
+        {
+            lock (_lock)
+            {
+                for (int i = 0; i < _blocks.Count; i++)
+                {
+                    var current = _blocks[i];
+                    if (current.StartOffset > position) break;
+                    if (position >= current.EndOffsetExclusive) continue;
+                    _blocks.RemoveAt(i);
+                    _totalBytes -= current.Length;
+                    block = current;
+                    return true;
+                }
+            }
+            block = null; return false;
+        }
+
+        public RamRangeBlock[] GetRangesSnapshot()
+        {
+            lock (_lock) { return _blocks.Count == 0 ? [] : _blocks.ToArray(); }
+        }
+
+        public void Trim(long centerOffset, long evictionWindowBytes, long maxRamBytes)
+        {
+            lock (_lock)
+            {
+                for (int i = _blocks.Count - 1; i >= 0; i--)
+                {
+                    var current = _blocks[i];
+                    if (current.EndOffsetExclusive < centerOffset - evictionWindowBytes || current.StartOffset > centerOffset + evictionWindowBytes)
+                    {
+                        _blocks.RemoveAt(i);
+                        _totalBytes -= current.Length;
+                        current.Dispose();
+                    }
+                }
+                while (_totalBytes > maxRamBytes && _blocks.Count > 0)
+                {
+                    int removeIndex = ChooseFarthestIndex(centerOffset);
+                    var removed = _blocks[removeIndex];
+                    _blocks.RemoveAt(removeIndex);
+                    _totalBytes -= removed.Length;
+                    removed.Dispose();
+                }
+            }
+        }
+
+        public void DisposeAll()
+        {
+            lock (_lock)
+            {
+                for (int i = 0; i < _blocks.Count; i++) _blocks[i].Dispose();
+                _blocks.Clear();
+                _totalBytes = 0;
+            }
+        }
+
+        public void Dispose() => DisposeAll();
+
+        private int ChooseFarthestIndex(long centerOffset)
+        {
+            int chosen = 0;
+            long farthestDistance = long.MinValue;
+            for (int i = 0; i < _blocks.Count; i++)
+            {
+                long blockCenter = _blocks[i].StartOffset + (_blocks[i].Length >> 1);
+                long distance = blockCenter >= centerOffset ? blockCenter - centerOffset : centerOffset - blockCenter;
+                if (distance > farthestDistance) { farthestDistance = distance; chosen = i; }
+            }
+            return chosen;
+        }
     }
 
+    private sealed class ActiveRangeDownload
+    {
+        public long Start { get; }
+        public int Length { get; }
+        public long EndExclusive => Start + Length;
+        public Lazy<Task<RangeDownloadResult>> LazyTask { get; }
+
+        public ActiveRangeDownload(long start, int length, Lazy<Task<RangeDownloadResult>> lazyTask)
+        {
+            Start = start;
+            Length = length;
+            LazyTask = lazyTask;
+        }
+    }
+
+    private readonly record struct DownloadPlan(long Start, int Length);
+
     #endregion
 
-    #region Adaptive Latency Calculations
+    #region Adaptive Metrics
 
-    /// <summary>
-    /// Сохраняет измеренную задержку последнего успешного сетевого запроса (TTFB).
-    /// </summary>
-    /// <param name="latencyMs">Задержка в миллисекундах.</param>
     private void SaveLatency(double latencyMs)
     {
         double currentAverage;
         lock (_latencyLock)
         {
-            _latency2 = _latency1;
-            _latency1 = _latency0;
-            _latency0 = latencyMs;
+            _latency2 = _latency1; _latency1 = _latency0; _latency0 = latencyMs;
             currentAverage = GetAverageLatencyInternal();
         }
-
         Log.Debug($"[CachingSource] Latency: {latencyMs:F1}ms (Average Trend: {currentAverage:F1}ms)");
     }
 
-    /// <summary>
-    /// Накапливает замеры пропускной способности сети с использованием экспоненциального скользящего среднего (EWMA).
-    /// </summary>
-    /// <param name="speedBytesPerSec">Мгновенная скорость чтения данных из сокета.</param>
     private void SaveBandwidth(double speedBytesPerSec)
     {
         double currentSpeed;
         lock (_latencyLock)
         {
-            if (_estimatedBandwidthBytesPerSec <= 0)
-            {
-                _estimatedBandwidthBytesPerSec = speedBytesPerSec;
-            }
-            else
-            {
-                _estimatedBandwidthBytesPerSec = (0.3 * speedBytesPerSec) + (0.7 * _estimatedBandwidthBytesPerSec);
-            }
+            if (_estimatedBandwidthBytesPerSec <= 0) _estimatedBandwidthBytesPerSec = speedBytesPerSec;
+            else _estimatedBandwidthBytesPerSec = (0.3 * speedBytesPerSec) + (0.7 * _estimatedBandwidthBytesPerSec);
             currentSpeed = _estimatedBandwidthBytesPerSec;
         }
-
         double speedMbps = (currentSpeed * 8) / 1000_000.0;
-        Log.Debug($"[CachingSource] Real-time Throughput: {speedMbps:F2} Mbps ({currentSpeed / 1024.0:F1} KB/s)");
+        Log.Debug($"[CachingSource] Throughput: {speedMbps:F2} Mbps ({currentSpeed / 1024.0:F1} KB/s)");
     }
 
-    /// <summary>
-    /// Возвращает среднюю сетевую задержку.
-    /// </summary>
     private double GetAverageLatencyInternal()
     {
         if (_latency0 <= 0) return 0;
@@ -145,117 +246,253 @@ public sealed partial class CachingStreamSource
         return (_latency0 + _latency1 + _latency2) / 3.0;
     }
 
-    /// <summary>
-    /// Динамически вычисляет параметры окна предзагрузки на основе задержки сети.
-    /// Чем выше пинг, тем шире окно предзагрузки, чтобы предотвратить истощение буфера.
-    /// </summary>
-    internal void GetAdaptivePreloadParams(out int readAhead, out int minBuffer, out int evictionDistance)
+    private double GetThrottleTargetBytesPerSec()
     {
-        double avg;
-        lock (_latencyLock) avg = GetAverageLatencyInternal();
-
-        double multiplier = 1.0;
-        if (avg > 800) multiplier = 3.0;       // Экстремальный пинг -> Огромное окно (ранее реагирование)
-        else if (avg > 400) multiplier = 2.0;  // Высокий пинг -> Удвоенное окно
-        else if (avg > 150) multiplier = 1.5;  // Заметная задержка -> +50%
-
-        readAhead = (int)Math.Round(_config.ReadAheadChunks * multiplier);
-        minBuffer = (int)Math.Round(_config.MinBufferAheadForBackgroundFill * multiplier);
-
-        // Математика защиты памяти: Дистанция вытеснения ОБЯЗАНА быть больше окна предзагрузки,
-        // иначе мы начнем удалять чанки, которые только что загрузили "про запас".
-        int safeEviction = Math.Max(_config.RamEvictionDistance, readAhead + 4);
-
-        // Жесткий лимит: защищаем сборщик мусора от нехватки памяти (OOM)
-        evictionDistance = Math.Min(safeEviction, Math.Max(2, _config.MaxRamChunks - 8));
+        double multiplier = _config.ThrottleMultiplier;
+        if (multiplier <= 0) return 0;
+        double bitrateBytesPerSec = Math.Max(1, _bitrate) * 1000.0 / 8.0;
+        return bitrateBytesPerSec * multiplier;
     }
 
-    /// <summary>
-    /// Вычисляет адаптивное количество чанков для загрузки в одном пакетном запросе.
-    /// </summary>
-    private int GetAdaptiveBatchCount(int startIndex)
+    private int ComputePacingDelayMs(int downloadedBytes, double elapsedMs)
     {
-        int batchCount = 1;
-        double avgLatencyMs;
-        double estBandwidth;
-        bool isIncreasing;
+        double targetBps = GetThrottleTargetBytesPerSec();
+        if (targetBps <= 0) return 0;
+        double targetMs = (downloadedBytes / targetBps) * 1000.0;
+        int delayMs = (int)(targetMs - elapsedMs);
+        return delayMs > 10 ? delayMs : 0;
+    }
 
+    #endregion
+
+    #region Range Planning
+
+    private DownloadPlan BuildDownloadPlan(long requestedPosition, int minimumLength, bool isCritical)
+    {
+        long start = AlignDown(requestedPosition, _requestAlignmentBytes);
+
+        long localAvailable = GetBufferedBytesAhead(start);
+        if (localAvailable > 0)
+        {
+            long adjustedStart = AlignUp(start + localAvailable, _requestAlignmentBytes);
+            if (adjustedStart < _contentLength && adjustedStart <= requestedPosition + minimumLength)
+                start = adjustedStart;
+        }
+
+        int minLengthAligned = AlignUp(Math.Max(minimumLength, _config.MinRequestSizeBytes), _requestAlignmentBytes);
+
+        long currentPosition = Volatile.Read(ref _currentReadOffset);
+        if (currentPosition < 0 || currentPosition >= _contentLength)
+            currentPosition = requestedPosition;
+
+        long bufferedAheadBytes = GetBufferedBytesAheadIncludingInflight(currentPosition);
+        double bitrateBytesPerSec = Math.Max(1, _bitrate) * 1000.0 / 8.0;
+        double currentBufferSec = bufferedAheadBytes / bitrateBytesPerSec;
+
+        int adaptiveTargetBufferMs = GetAdaptiveTargetBufferMs();
+        double targetBufferSec = adaptiveTargetBufferMs / 1000.0;
+        double demandBytes = bitrateBytesPerSec * Math.Max(0, targetBufferSec - currentBufferSec);
+
+        double avgLatencyMs;
+        double estimatedBandwidth;
         lock (_latencyLock)
         {
             avgLatencyMs = GetAverageLatencyInternal();
-            estBandwidth = _estimatedBandwidthBytesPerSec;
-            isIncreasing = _latency0 > 0 && _latency1 > 0 && _latency2 > 0
-                           && _latency0 > _latency1 && _latency1 > _latency2;
+            estimatedBandwidth = _estimatedBandwidthBytesPerSec;
         }
 
-        if (avgLatencyMs > 0)
+        var degradation = GetNetworkDegradationLevel();
+        int effectiveMaxLength = _config.MaxRequestSizeBytes;
+
+        if (!isCritical)
         {
-            if (avgLatencyMs > 1000) batchCount = 4;
-            else if (avgLatencyMs > 500) batchCount = 3;
-            else if (avgLatencyMs > 200) batchCount = 2;
-
-            if (isIncreasing)
+            effectiveMaxLength = degradation switch
             {
-                batchCount = Math.Min(batchCount + 1, 4);
-            }
-
-            if (estBandwidth > 0)
-            {
-                double latencySeconds = avgLatencyMs / 1000.0;
-                double bdpBytes = estBandwidth * latencySeconds;
-                double bdpChunks = bdpBytes / _chunkSize;
-
-                int maxBdpBatch = (int)Math.Max(1, Math.Round(bdpChunks * 1.5));
-                batchCount = Math.Min(batchCount, maxBdpBatch);
-            }
+                NetworkDegradationLevel.Critical => Math.Min(effectiveMaxLength, _requestAlignmentBytes * 2),
+                NetworkDegradationLevel.Degraded => Math.Min(effectiveMaxLength, _requestAlignmentBytes * 4),
+                _ => effectiveMaxLength
+            };
         }
-
-        int availableBatch = 1;
-        for (int i = 1; i < batchCount; i++)
+        else
         {
-            int idx = startIndex + i;
-            if (idx >= _totalChunks) break;
-            if (IsChunkAvailable(idx) || _activeDownloads.ContainsKey(idx)) break;
-            availableBatch++;
+            effectiveMaxLength = degradation switch
+            {
+                NetworkDegradationLevel.Critical => Math.Min(effectiveMaxLength, _requestAlignmentBytes * 4),
+                NetworkDegradationLevel.Degraded => Math.Min(effectiveMaxLength, _requestAlignmentBytes * 6),
+                _ => effectiveMaxLength
+            };
         }
 
-        return availableBatch;
+        double throttleBps = GetThrottleTargetBytesPerSec();
+        if (throttleBps > 0)
+        {
+            double pacingWindow = Math.Max(1.0, _config.PreloadIntervalMs / 1000.0);
+            int throttleCap = AlignUp((int)(throttleBps * pacingWindow), _requestAlignmentBytes);
+            effectiveMaxLength = Math.Min(throttleCap, effectiveMaxLength);
+        }
+
+        int maxLength = Math.Max(minLengthAligned, effectiveMaxLength);
+
+        double safeBytes = 0;
+        if (estimatedBandwidth > 0)
+        {
+            double timeLeftSec = Math.Max(0.050, currentBufferSec - (avgLatencyMs / 1000.0));
+            safeBytes = estimatedBandwidth * timeLeftSec;
+        }
+
+        long selectedBytes;
+        if (safeBytes > 0 && demandBytes > 0) selectedBytes = (long)Math.Min(demandBytes, safeBytes);
+        else if (demandBytes > 0) selectedBytes = (long)demandBytes;
+        else if (safeBytes > 0) selectedBytes = (long)safeBytes;
+        else selectedBytes = minLengthAligned;
+
+        if (selectedBytes < minLengthAligned) selectedBytes = minLengthAligned;
+
+        if (estimatedBandwidth > 0 && avgLatencyMs > 600)
+        {
+            double latencySec = avgLatencyMs / 1000.0;
+            long bdpBytes = (long)(estimatedBandwidth * latencySec);
+            long bdpFloor = AlignUp(Math.Max(minLengthAligned, bdpBytes * 2), _requestAlignmentBytes);
+            if (bdpFloor > selectedBytes) selectedBytes = bdpFloor;
+        }
+
+        int bufferedAheadMs = ConvertBufferedBytesToMs(bufferedAheadBytes);
+        bool lowBuffer = bufferedAheadMs < CriticalRefillBufferMs;
+
+        if (!isCritical && !lowBuffer && avgLatencyMs < 800 && demandBytes > 0)
+        {
+            long demandAligned = AlignUp((long)demandBytes, _requestAlignmentBytes);
+            long softCap = demandAligned + _requestAlignmentBytes;
+            if (selectedBytes > softCap) selectedBytes = softCap;
+        }
+
+        if (isCritical || lowBuffer)
+        {
+            long criticalFloor = minLengthAligned;
+            if (avgLatencyMs > 1200) criticalFloor = Math.Max(criticalFloor, Math.Min(maxLength, minLengthAligned * 2L));
+            if (selectedBytes < criticalFloor) selectedBytes = criticalFloor;
+        }
+
+        if (selectedBytes > maxLength) selectedBytes = maxLength;
+        selectedBytes = AlignUp(selectedBytes, _requestAlignmentBytes);
+
+        long remaining = _contentLength - start;
+        if (remaining <= 0) return new DownloadPlan(start, 0);
+
+        if (selectedBytes > remaining) selectedBytes = remaining;
+        if (selectedBytes < minimumLength) selectedBytes = Math.Min(AlignUp(minimumLength, _requestAlignmentBytes), remaining);
+
+        int plannedLength = (int)selectedBytes;
+
+        // если хвост планируемого aligned range уже есть локально / in-flight,
+        // скачиваем только первый missing gap, а не весь chunk целиком.
+        // Иначе RAM cache отвергнет overlap, и успешно скачанные байты исчезнут.
+        int trimmedLength = TrimLengthToFirstKnownCoverage(start, plannedLength, includeInflight: true);
+        if (trimmedLength > 0 && trimmedLength < plannedLength)
+        {
+            plannedLength = trimmedLength;
+        }
+
+        return new DownloadPlan(start, plannedLength);
     }
+
+    private long GetBufferedBytesAhead(long position)
+    {
+        long ramBytes = _ramCache.GetContiguousBytesFrom(position);
+        long diskBytes = _cacheEntry?.GetContiguousDownloadedBytesFrom(position) ?? 0;
+        return ramBytes >= diskBytes ? ramBytes : diskBytes;
+    }
+
+    private long GetBufferedBytesAheadIncludingInflight(long position)
+    {
+        long localBuffered = GetBufferedBytesAhead(position);
+        long endExclusive = position + localBuffered;
+        if (endExclusive >= _contentLength) return _contentLength - position;
+
+        bool extended;
+        do
+        {
+            extended = false;
+            lock (_activeDownloadsLock)
+            {
+                foreach (var active in _activeDownloads.Values)
+                {
+                    if (active.Start > endExclusive) continue;
+                    if (active.EndExclusive <= endExclusive) continue;
+                    if (active.EndExclusive <= position) continue;
+                    endExclusive = active.EndExclusive;
+                    extended = true;
+                }
+            }
+        }
+        while (extended && endExclusive < _contentLength);
+
+        return endExclusive - position;
+    }
+
+    private bool IsRangeLocallyAvailable(long position, int length)
+    {
+        if (length <= 0) return true;
+        if (position < 0 || position >= _contentLength) return false;
+        if (_ramCache.ContainsRange(position, length)) return true;
+        return _cacheEntry?.IsRangeDownloaded(position, length) == true;
+    }
+
+    private int GetAlignedReadLength(long position, int minimumLength)
+    {
+        if (position >= _contentLength) return 0;
+        long remaining = _contentLength - position;
+        int aligned = AlignUp(Math.Max(minimumLength, _config.MinRequestSizeBytes), _requestAlignmentBytes);
+        if (aligned > remaining) aligned = (int)remaining;
+        return aligned;
+    }
+
+    private static long AlignDown(long value, int alignment) => value - (value % alignment);
+    private static int AlignUp(int value, int alignment) { int remainder = value % alignment; return remainder == 0 ? value : value + (alignment - remainder); }
+    private static long AlignUp(long value, int alignment) { long remainder = value % alignment; return remainder == 0 ? value : value + (alignment - remainder); }
 
     #endregion
 
     #region ReadAtAsync
 
     /// <summary>
-    /// Читает данные из позиции <paramref name="position"/>, загружая чанк при необходимости.
-    /// Порядок поиска: RAM-кэш → диск → сеть.
+    /// Создаёт фатальное исключение для диапазона, который source не смог получить
+    /// после исчерпания всех локальных и сетевых стратегий.
     /// </summary>
-    /// <remarks>
-    /// <para><b>ИСПРАВЛЕНИЕ (epoch retry):</b> Epoch-retry guard теперь проверяет
-    /// <paramref name="ct"/> (внешний токен декодера), а НЕ linked token.</para>
-    /// </remarks>
-    /// <param name="position">Абсолютная байтовая позиция в контенте.</param>
-    /// <param name="buffer">Целевой буфер.</param>
-    /// <param name="ct">Токен отмены — ВНЕШНИЙ (decoder CTS), НЕ linked с epoch.</param>
-    /// <returns>Количество прочитанных байт; 0 если позиция за EOF.</returns>
+    /// <param name="position">Позиция чтения, на которой зафиксирован terminal failure.</param>
+    /// <returns>
+    /// Экземпляр <see cref="ChunkDownloadFatalException"/>, сигнализирующий верхнему слою,
+    /// что повторять чтение этого же диапазона на уровне decoder loop больше нельзя.
+    /// </returns>
+    private ChunkDownloadFatalException CreateReadAtFatalException(long position)
+    {
+        long alignedStart = AlignDown(position, _requestAlignmentBytes);
+        int logicalIndex = (int)(alignedStart / _requestAlignmentBytes);
+        int consecutive403 = Volatile.Read(ref _consecutive403Count);
+
+        Exception inner = _lastDownloadException
+            ?? new IOException($"Failed to load range at {position} after {ReadAtMaxEpochRetries} retries");
+
+        return new ChunkDownloadFatalException(
+            message: $"Failed to load range at {position} after {ReadAtMaxEpochRetries} retries",
+            chunkIndex: logicalIndex,
+            consecutiveFailures: consecutive403,
+            reason: ChunkDownloadFailureReason.MaxRetriesExceeded,
+            trackId: _trackId,
+            httpStatusCode: null,
+            innerException: inner);
+    }
+
     internal async Task<int> ReadAtAsync(long position, Memory<byte> buffer, CancellationToken ct)
     {
         if (position >= _contentLength) return 0;
+        int requiredLength = (int)Math.Min(buffer.Length, _contentLength - position);
 
-        int chunkIndex = (int)(position / _chunkSize);
-        int offsetInChunk = (int)(position % _chunkSize);
+        if (_ramCache.TryRead(position, buffer, out int ramRead)) return ramRead;
 
-        if (chunkIndex >= _totalChunks) return 0;
+        int diskRead = await TryLoadRangeFromDiskAsync(position, requiredLength, buffer, ct).ConfigureAwait(false);
+        if (diskRead > 0) return diskRead;
 
-        // 1. RAM-кэш
-        if (_ramChunks.TryGetValue(chunkIndex, out var ramEntry))
-            return CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer);
-
-        // 2. Диск
-        if (await TryLoadChunkFromDiskAsync(chunkIndex, ct).ConfigureAwait(false) is { } diskEntry)
-            return CopyFromChunk(diskEntry.Memory.Span, diskEntry.Length, offsetInChunk, buffer);
-
-        // 3. Сеть — с retry по смене эпохи
         for (int attempt = 0; attempt < ReadAtMaxEpochRetries; attempt++)
         {
             ct.ThrowIfCancellationRequested();
@@ -265,578 +502,495 @@ public sealed partial class CachingStreamSource
                 var downloadToken = CurrentDownloadToken;
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, downloadToken);
 
-                // Чтение данных, ожидаемых декодером прямо сейчас — это критический запрос.
-                var result = await EnsureChunkAsync(chunkIndex, linkedCts.Token, isCritical: true).ConfigureAwait(false);
+                var result = await EnsureRangeAsync(position, requiredLength, linkedCts.Token, isCritical: true)
+                    .ConfigureAwait(false);
 
-                if (result == ChunkDownloadResult.OutOfRange) return 0;
+                if (result == RangeDownloadResult.OutOfRange) return 0;
 
-                if (_ramChunks.TryGetValue(chunkIndex, out ramEntry))
-                    return CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer);
+                if (_ramCache.TryRead(position, buffer, out ramRead)) return ramRead;
 
-                if (await TryLoadChunkFromDiskAsync(chunkIndex, ct).ConfigureAwait(false) is { } afterNetworkDisk)
-                    return CopyFromChunk(afterNetworkDisk.Memory.Span, afterNetworkDisk.Length, offsetInChunk, buffer);
+                diskRead = await TryLoadRangeFromDiskAsync(position, requiredLength, buffer, ct).ConfigureAwait(false);
+                if (diskRead > 0) return diskRead;
             }
-            catch (ChunkDownloadFatalException) { throw; }
+            catch (ChunkDownloadFatalException)
+            {
+                throw;
+            }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                Log.Debug($"[CachingSource] ReadAt chunk {chunkIndex}: epoch changed, " +
-                          $"retry {attempt + 1}/{ReadAtMaxEpochRetries}");
+                Log.Debug($"[CachingSource] ReadAt at {position}: epoch changed, retry {attempt + 1}/{ReadAtMaxEpochRetries}");
                 await Task.Delay(ReadAtEpochRetryDelayMs, ct).ConfigureAwait(false);
             }
         }
 
         ct.ThrowIfCancellationRequested();
-        throw new IOException($"Failed to load chunk {chunkIndex} after {ReadAtMaxEpochRetries} retries");
+        throw CreateReadAtFatalException(position);
     }
 
-    /// <summary>
-    /// Пытается загрузить чанк с диска и добавить в RAM-кэш.
-    /// </summary>
-    private async Task<ChunkData?> TryLoadChunkFromDiskAsync(int chunkIndex, CancellationToken ct)
+    private async Task<int> TryLoadRangeFromDiskAsync(long position, int minimumLength, Memory<byte> target, CancellationToken ct)
     {
-        var diskResult = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct).ConfigureAwait(false);
-        if (diskResult.HasValue)
-        {
-            var (owner, length) = diskResult.Value;
-            var chunkData = new ChunkData(owner, length);
+        if (_cacheEntry == null) return 0;
+        if (!_cacheEntry.TryGetContainingRange(position, out long rangeStart, out long rangeEndExclusive)) return 0;
 
-            if (_ramChunks.TryAdd(chunkIndex, chunkData))
-                return chunkData;
+        long loadStart = AlignDown(position, _requestAlignmentBytes);
+        if (loadStart < rangeStart) loadStart = rangeStart;
 
-            // Гонка: другой поток уже добавил этот чанк — возвращаем буфер и читаем из существующего.
-            chunkData.Dispose();
-            return _ramChunks.TryGetValue(chunkIndex, out var existing) ? existing : null;
-        }
-
-        if (_cacheEntry != null && _cacheEntry.IsChunkDownloaded(chunkIndex))
-        {
-            var filePath = _cacheManager.GetCachePath(_cacheKey);
-            if (!File.Exists(filePath) || _cacheManager.GetCacheInfo(_cacheKey) == null)
-            {
-                throw new FileNotFoundException(
-                    $"Cache for track {_trackId} was invalidated or deleted on disk during active playback.", filePath);
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Копирует данные из чанка в целевой буфер с учётом смещения <paramref name="offset"/>.
-    /// </summary>
-    private static int CopyFromChunk(
-        ReadOnlySpan<byte> chunkData, int chunkLength, int offset, Memory<byte> buffer)
-    {
-        int available = Math.Min(buffer.Length, chunkLength - offset);
+        int desiredLength = AlignUp(Math.Max(minimumLength, _config.MinRequestSizeBytes), _requestAlignmentBytes);
+        long available = rangeEndExclusive - loadStart;
         if (available <= 0) return 0;
-        chunkData.Slice(offset, available).CopyTo(buffer.Span);
+        if (desiredLength > available) desiredLength = (int)available;
+
+        var diskResult = await _cacheManager.ReadRangeAsync(_cacheKey, loadStart, desiredLength, ct).ConfigureAwait(false);
+        if (!diskResult.HasValue) return 0;
+
+        var (owner, length) = diskResult.Value;
+        var block = new RamRangeBlock(loadStart, owner, length);
+        int copied = CopyFromBlock(block.Memory.Span, (int)(position - loadStart), target);
+
+        if (!_ramCache.TryAdd(block)) block.Dispose();
+        return copied;
+    }
+
+    private static int CopyFromBlock(ReadOnlySpan<byte> blockData, int offset, Memory<byte> buffer)
+    {
+        int available = Math.Min(buffer.Length, blockData.Length - offset);
+        if (available <= 0) return 0;
+        blockData.Slice(offset, available).CopyTo(buffer.Span);
         return available;
     }
 
     #endregion
 
-    #region EnsureChunkAsync
+    #region Active Download Coordination
+
+    private int GetActiveDownloadCount() { lock (_activeDownloadsLock) return _activeDownloads.Count; }
 
     /// <summary>
-    /// Гарантирует доступность чанка с заданным индексом.
-    /// Использует retry-логику, circuit breaker и координацию параллельных загрузок.
+    /// Строгая защита от пересекающихся (overlapping) загрузок. 
+    /// Это критически важно на слабой сети, чтобы не качать одни и те же байты дважды.
     /// </summary>
-    private async Task<ChunkDownloadResult> EnsureChunkAsync(int index, CancellationToken ct, bool isCritical = false)
+    private bool TryGetOverlappingActiveDownload(long start, int length, out ActiveRangeDownload? active)
     {
-        if (_cacheEntry!.IsChunkCorruptedOffline(index))
-            return ChunkDownloadResult.Fatal;
-        else if (index < 0 || index >= _totalChunks) return ChunkDownloadResult.OutOfRange;
-
-        long chunkStart = (long)index * _chunkSize;
-        if (chunkStart >= _contentLength) return ChunkDownloadResult.OutOfRange;
-
-        if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
-
-        ct.ThrowIfCancellationRequested();
-        CheckCircuitBreaker(index);
-
-        int maxAttempts = _config.MaxNetworkRetries + _config.Max403BeforeCircuitBreak;
-
-        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        long endExclusive = start + length;
+        lock (_activeDownloadsLock)
         {
-            ct.ThrowIfCancellationRequested();
-
-            if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
-
-            var newLazy = CreateChunkDownloadLazy(index, ct, isCritical);
-            var actualLazy = _activeDownloads.GetOrAdd(index, newLazy);
-
-            if (ReferenceEquals(newLazy, actualLazy))
+            foreach (var current in _activeDownloads.Values)
             {
-                ChunkDownloadResult result;
-
-                try
+                if (start < current.EndExclusive && endExclusive > current.Start)
                 {
-                    result = await actualLazy.Value.ConfigureAwait(false);
+                    active = current;
+                    return true;
                 }
-                catch (ChunkDownloadFatalException) { throw; }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                {
-                    continue;
-                }
-                finally
-                {
-                    RemoveActiveDownloadIfOwner(index, actualLazy);
-                    // Очистка возможных параллельных регистраций для пакета (максимум до 4)
-                    for (int i = 1; i < 4; i++)
-                    {
-                        RemoveActiveDownloadIfOwner(index + i, actualLazy);
-                    }
-                }
-
-                switch (result)
-                {
-                    case ChunkDownloadResult.Success:
-                    case ChunkDownloadResult.OutOfRange:
-                        return result;
-
-                    case ChunkDownloadResult.Forbidden403:
-                        await CoordinatedRefreshAsync(ct).ConfigureAwait(false);
-                        continue;
-
-                    case ChunkDownloadResult.NetworkError:
-                        int delay = attempt == 0 ? 50 : ComputeRetryDelay(attempt);
-                        Log.Warn($"[CachingSource] Chunk {index}: network retry {attempt + 1}/{maxAttempts}, delay={delay}ms");
-
-                        if (attempt == maxAttempts / 2)
-                        {
-                            var warningException = _lastDownloadException
-                                ?? new TimeoutException($"Slow connection: Chunk download taking longer than expected (Attempt {attempt + 1}/{maxAttempts}).");
-                            RaiseSourceWarning(index, warningException);
-                        }
-
-                        await Task.Delay(delay, ct).ConfigureAwait(false);
-                        continue;
-                    case ChunkDownloadResult.SlotTimeout:
-                        await Task.Delay(200, ct).ConfigureAwait(false);
-                        continue;
-
-                    case ChunkDownloadResult.Cancelled:
-                        if (!ct.IsCancellationRequested)
-                        {
-                            continue;
-                        }
-
-                        ct.ThrowIfCancellationRequested();
-                        return result;
-
-                    case ChunkDownloadResult.Fatal:
-                        return result;
-                }
-            }
-            else
-            {
-                await WaitForActiveDownloadAsync(actualLazy.Value, ct).ConfigureAwait(false);
-
-                if (IsChunkAvailable(index))
-                    return ChunkDownloadResult.Success;
             }
         }
-
-        throw new ChunkDownloadFatalException(
-            $"Failed to download chunk {index} after {maxAttempts} attempts",
-            chunkIndex: index,
-            consecutiveFailures: Volatile.Read(ref _consecutive403Count),
-            reason: ChunkDownloadFailureReason.MaxRetriesExceeded,
-            trackId: _trackId,
-            httpStatusCode: null,
-            innerException: _lastDownloadException ?? new TimeoutException("Connection timed out."));
+        active = null; return false;
     }
 
-    /// <summary>
-    /// Создаёт ленивую single-flight задачу загрузки чанка.
-    /// </summary>
-    private Lazy<Task<ChunkDownloadResult>> CreateChunkDownloadLazy(int index, CancellationToken ct, bool isCritical)
+    private ActiveRangeDownload RegisterOrGetActiveDownload(ActiveRangeDownload candidate)
     {
-        return new Lazy<Task<ChunkDownloadResult>>(
-            () => DownloadChunkCoreAsync(index, ct, isCritical),
-            LazyThreadSafetyMode.ExecutionAndPublication);
+        long candidateEnd = candidate.EndExclusive;
+        lock (_activeDownloadsLock)
+        {
+            foreach (var current in _activeDownloads.Values)
+            {
+                if (candidate.Start < current.EndExclusive && candidateEnd > current.Start)
+                    return current;
+            }
+
+            if (_activeDownloads.TryGetValue(candidate.Start, out var sameStart))
+                return sameStart;
+
+            _activeDownloads.Add(candidate.Start, candidate);
+            return candidate;
+        }
     }
 
-    /// <summary>
-    /// Удаляет запись об активной загрузке только если текущий caller остаётся владельцем.
-    /// </summary>
-    private void RemoveActiveDownloadIfOwner(int index, Lazy<Task<ChunkDownloadResult>> ownerLazy)
+    private void RemoveActiveDownloadIfOwner(long key, ActiveRangeDownload owner)
     {
-        if (_activeDownloads.TryGetValue(index, out var current) && ReferenceEquals(current, ownerLazy))
-            _activeDownloads.TryRemove(index, out _);
+        lock (_activeDownloadsLock)
+        {
+            if (_activeDownloads.TryGetValue(key, out var current) && ReferenceEquals(current, owner))
+                _activeDownloads.Remove(key);
+        }
     }
 
-    /// <summary>
-    /// Ждёт завершения активной загрузки, поглощая epoch-отмены и прочие исключения.
-    /// </summary>
     private static async Task WaitForActiveDownloadAsync(Task task, CancellationToken ct)
     {
-        try { await task.WaitAsync(ct); }
+        try { await task.WaitAsync(ct).ConfigureAwait(false); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
         catch (ChunkDownloadFatalException) { throw; }
         catch { }
     }
 
-    /// <summary>Проверяет circuit breaker перед началом загрузки.</summary>
-    private void CheckCircuitBreaker(int index)
+    #endregion
+
+    #region EnsureRangeAsync
+
+    /// <summary>
+    /// Гарантирует наличие диапазона данных, предотвращая бесконечные ретраи (Retry Storm).
+    /// </summary>
+    private async Task<RangeDownloadResult> EnsureRangeAsync(long position, int minimumLength, CancellationToken ct, bool isCritical = false)
+    {
+        if (position < 0 || position >= _contentLength) return RangeDownloadResult.OutOfRange;
+        if (minimumLength <= 0) return RangeDownloadResult.Success;
+
+        minimumLength = (int)Math.Min(minimumLength, _contentLength - position);
+        long alignedStart = AlignDown(position, _requestAlignmentBytes);
+
+        if (IsRangeLocallyAvailable(position, minimumLength)) return RangeDownloadResult.Success;
+
+        ct.ThrowIfCancellationRequested();
+
+        // Стандарт: максимум ретраев на один конкретный чанк
+        int maxAttempts = _config.MaxNetworkRetries;
+        int chunkIoExceptions = 0;
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (IsRangeLocallyAvailable(position, minimumLength)) return RangeDownloadResult.Success;
+
+            if (TryGetOverlappingActiveDownload(position, minimumLength, out var overlapping))
+            {
+                await WaitForActiveDownloadAsync(overlapping!.LazyTask.Value, ct).ConfigureAwait(false);
+                continue;
+            }
+
+            var plan = BuildDownloadPlan(position, minimumLength, isCritical);
+            var ownerLazy = new Lazy<Task<RangeDownloadResult>>(() => DownloadRangeCoreAsync(plan, ct, isCritical), LazyThreadSafetyMode.ExecutionAndPublication);
+            var candidate = new ActiveRangeDownload(plan.Start, plan.Length, ownerLazy);
+            var actual = RegisterOrGetActiveDownload(candidate);
+
+            if (ReferenceEquals(actual, candidate))
+            {
+                RangeDownloadResult result;
+                try
+                {
+                    result = await actual.LazyTask.Value.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested) { continue; }
+                finally { RemoveActiveDownloadIfOwner(plan.Start, actual); }
+
+                switch (result)
+                {
+                    case RangeDownloadResult.Success:
+                        return RangeDownloadResult.Success;
+
+                    case RangeDownloadResult.Forbidden403:
+                        await CoordinatedRefreshAsync(ct).ConfigureAwait(false);
+                        continue;
+
+                    case RangeDownloadResult.NetworkError:
+                        chunkIoExceptions++;
+
+                        // Если это не первая ошибка I/O для этого чанка — URL подозрителен.
+                        // Принудительно обновляем URL, чтобы сменить GGC узел (Google Global Cache).
+                        if (chunkIoExceptions >= 2)
+                        {
+                            Log.Warn($"[CachingSource] Chunk {plan.Start} failed repeatedly. Forcing URL refresh...");
+                            await CoordinatedRefreshAsync(ct).ConfigureAwait(false);
+                            // Сбрасываем эпоху, чтобы закрыть все старые сокеты
+                            ResetDownloadEpoch();
+                        }
+
+                        // Экспоненциальный Backoff: 100ms, 400ms, 900ms...
+                        int delay = (int)Math.Min(2000, 100 * Math.Pow(attempt + 1, 2));
+                        await Task.Delay(delay, ct).ConfigureAwait(false);
+                        continue;
+
+                    case RangeDownloadResult.Cancelled:
+                        ct.ThrowIfCancellationRequested();
+                        return result;
+
+                    default:
+                        return result;
+                }
+            }
+            else
+            {
+                await WaitForActiveDownloadAsync(actual.LazyTask.Value, ct).ConfigureAwait(false);
+            }
+        }
+
+        return RangeDownloadResult.NetworkError;
+    }
+
+    private void CheckCircuitBreaker(int logicalIndex)
     {
         int failures = Volatile.Read(ref _consecutive403Count);
         if (failures >= _config.Max403BeforeCircuitBreak)
-        {
-            throw new ChunkDownloadFatalException(
-                $"Circuit breaker OPEN: {failures} consecutive 403s",
-                chunkIndex: index,
-                consecutiveFailures: failures,
-                reason: ChunkDownloadFailureReason.Forbidden403,
-                trackId: _trackId,
-                httpStatusCode: 403);
-        }
+            throw new ChunkDownloadFatalException($"Circuit breaker OPEN: {failures} consecutive 403s", chunkIndex: logicalIndex, consecutiveFailures: failures, reason: ChunkDownloadFailureReason.Forbidden403, trackId: _trackId, httpStatusCode: 403);
     }
 
-    /// <summary>
-    /// Вычисляет задержку retry с экспоненциальным backoff.
-    /// </summary>
     private int ComputeRetryDelay(int attempt)
     {
         int baseDelay = _config.NetworkRetryBaseDelayMs;
-        return _config.UseExponentialBackoff
-            ? Math.Min(baseDelay * (1 << attempt), 10_000)
-            : baseDelay;
+        return _config.UseExponentialBackoff ? Math.Min(baseDelay * (1 << attempt), 10_000) : baseDelay;
     }
 
     #endregion
 
-    #region DownloadChunkCoreAsync
+    #region DownloadRangeCoreAsync
 
-    /// <summary>
-    /// Вычисляет HTTP Range, валидирует его и инициирует загрузку.
-    /// Поддерживает адаптивное пакетное скачивание.
-    /// </summary>
-    private async Task<ChunkDownloadResult> DownloadChunkCoreAsync(int index, CancellationToken ct, bool isCritical)
+    private async Task<RangeDownloadResult> DownloadRangeCoreAsync(DownloadPlan plan, CancellationToken ct, bool isCritical)
     {
-        if (_disposed || _cacheEntry!.IsChunkDownloaded(index))
-            return _disposed ? ChunkDownloadResult.Cancelled : ChunkDownloadResult.Success;
-
-        // Вычисляем размер адаптивного пакета на основе текущей задержки
-        int batchCount = GetAdaptiveBatchCount(index);
-        long start = (long)index * _chunkSize;
-        long end = Math.Min(start + (batchCount * _chunkSize) - 1, _contentLength - 1);
-
-        if (start >= _contentLength || start > end)
-        {
-            Log.Debug($"[CachingSource] Chunk {index} out of range: start={start}, contentLength={_contentLength}");
-            return ChunkDownloadResult.OutOfRange;
-        }
-
+        if (_disposed) return RangeDownloadResult.Cancelled;
+        if (IsRangeLocallyAvailable(plan.Start, plan.Length)) return RangeDownloadResult.Success;
         bool gotSlot = false;
 
         try
         {
-            if (_disposed) return ChunkDownloadResult.Cancelled;
-
             if (!isCritical)
             {
                 gotSlot = await _downloadSlots.WaitAsync(_config.DownloadSlotTimeoutMs, ct).ConfigureAwait(false);
-                if (!gotSlot) return ChunkDownloadResult.SlotTimeout;
+                if (!gotSlot) return RangeDownloadResult.SlotTimeout;
             }
 
-            if (_disposed) return ChunkDownloadResult.Cancelled;
+            if (_disposed) return RangeDownloadResult.Cancelled;
+            if (ct.IsCancellationRequested) return RangeDownloadResult.Cancelled;
+            if (IsRangeLocallyAvailable(plan.Start, plan.Length)) return RangeDownloadResult.Success;
 
-            if (_cacheEntry.IsChunkDownloaded(index))
-                return ChunkDownloadResult.Success;
-
-            if (ct.IsCancellationRequested)
-                return ChunkDownloadResult.Cancelled;
-
-            // Регистрируем сопутствующие чанки пакета в _activeDownloads
-            if (batchCount > 1 && _activeDownloads.TryGetValue(index, out var currentLazy))
-            {
-                for (int i = 1; i < batchCount; i++)
-                {
-                    _activeDownloads.TryAdd(index + i, currentLazy);
-                }
-            }
-
-            return await DownloadChunkHttpAsync(index, start, end, batchCount, ct).ConfigureAwait(false);
+            return await DownloadRangeHttpAsync(plan, ct).ConfigureAwait(false);
         }
         catch (ChunkDownloadFatalException) { throw; }
-        catch (ObjectDisposedException) { return ChunkDownloadResult.Cancelled; }
-        catch (OperationCanceledException) { return ChunkDownloadResult.Cancelled; }
-        catch (Exception) when (ct.IsCancellationRequested || _disposed)
-        {
-            return ChunkDownloadResult.Cancelled;
-        }
+        catch (ObjectDisposedException) { return RangeDownloadResult.Cancelled; }
+        catch (OperationCanceledException) { return RangeDownloadResult.Cancelled; }
+        catch (Exception) when (ct.IsCancellationRequested || _disposed) { return RangeDownloadResult.Cancelled; }
         catch (Exception ex)
         {
-            Log.Warn($"[CachingSource] Chunk {index} unexpected: {ex.Message}");
-            return ChunkDownloadResult.NetworkError;
+            Log.Warn($"[CachingSource] Range {plan.Start} unexpected: {ex.Message}");
+            return RangeDownloadResult.NetworkError;
         }
         finally
         {
-            if (gotSlot)
-                try { _downloadSlots.Release(); } catch (ObjectDisposedException) { }
+            if (gotSlot) { try { _downloadSlots.Release(); } catch (ObjectDisposedException) { } }
         }
     }
 
     /// <summary>
-    /// HTTP-загрузка чанка/пакета с замером TTFB и чистой скорости скачивания контента.
+    /// Вычисляет длину префикса скачанного блока, который можно безопасно закоммитить в RAM без overlap.
     /// </summary>
-    private async Task<ChunkDownloadResult> DownloadChunkHttpAsync(
-        int index, long start, long end, int batchCount, CancellationToken ct)
+    /// <param name="start">Начало скачанного диапазона.</param>
+    /// <param name="actualLength">Фактически скачанная длина.</param>
+    /// <returns>
+    /// Длина начального non-overlapping gap.
+    /// Может быть меньше <paramref name="actualLength"/>, если хвост диапазона уже есть локально.
+    /// </returns>
+    private int ComputeRamCommitLength(long start, int actualLength)
+    {
+        if (actualLength <= 0) return 0;
+        return TrimLengthToFirstKnownCoverage(start, actualLength, includeInflight: false);
+    }
+
+    private async Task<RangeDownloadResult> DownloadRangeHttpAsync(DownloadPlan plan, CancellationToken ct)
     {
         int rn = Interlocked.Increment(ref _requestSequenceNumber);
-        Log.Debug($"[CachingSource] Chunk {index} (batch={batchCount}): GET rn={rn}, range={start}-{end}");
+        long end = plan.Start + plan.Length - 1;
+        int logicalIndex = (int)(plan.Start / _requestAlignmentBytes);
 
-        using var request = CreateChunkRequest(index, start, end, rn);
+        Log.Debug($"[CachingSource] Range {plan.Start}-{end}: GET rn={rn}");
 
+        using var request = CreateRangeRequest(logicalIndex, plan.Start, end, rn);
         HttpResponseMessage response;
         var sw = System.Diagnostics.Stopwatch.StartNew();
+
         try
         {
-            response = await _httpClient.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-
+            response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             sw.Stop();
-            if (response.IsSuccessStatusCode)
-            {
-                SaveLatency(sw.Elapsed.TotalMilliseconds);
-            }
+            if (response.IsSuccessStatusCode) SaveLatency(sw.Elapsed.TotalMilliseconds);
         }
-        catch (TaskCanceledException) when (ct.IsCancellationRequested || _disposed)
-        {
-            return ChunkDownloadResult.Cancelled;
-        }
-        catch (ObjectDisposedException) when (ct.IsCancellationRequested || _disposed)
-        {
-            return ChunkDownloadResult.Cancelled;
-        }
-        catch (HttpRequestException ex) when (IsCancelledSendFailure(ex, ct, _disposed))
-        {
-            return ChunkDownloadResult.Cancelled;
-        }
-        catch (TaskCanceledException)
-        {
-            return ChunkDownloadResult.NetworkError;
-        }
-        catch (HttpRequestException)
-        {
-            return ChunkDownloadResult.NetworkError;
-        }
+        catch (TaskCanceledException) when (ct.IsCancellationRequested || _disposed) { return RangeDownloadResult.Cancelled; }
+        catch (ObjectDisposedException) when (ct.IsCancellationRequested || _disposed) { return RangeDownloadResult.Cancelled; }
+        catch (HttpRequestException ex) when (IsCancelledSendFailure(ex, ct, _disposed)) { return RangeDownloadResult.Cancelled; }
+        catch (TaskCanceledException) { return RangeDownloadResult.NetworkError; }
+        catch (HttpRequestException) { return RangeDownloadResult.NetworkError; }
 
         using (response)
         {
-            if (ct.IsCancellationRequested) return ChunkDownloadResult.Cancelled;
+            if (ct.IsCancellationRequested) return RangeDownloadResult.Cancelled;
 
             if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
             {
                 Interlocked.Increment(ref _consecutive403Count);
-                await LogAndDiagnose403Async(index, request, response).ConfigureAwait(false);
-                return ChunkDownloadResult.Forbidden403;
+                await LogAndDiagnose403Async(logicalIndex, request, response).ConfigureAwait(false);
+                return RangeDownloadResult.Forbidden403;
             }
 
             if (response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
             {
-                Log.Debug($"[CachingSource] Chunk {index}: 416 (EOF)");
-                return ChunkDownloadResult.OutOfRange;
+                Log.Debug($"[CachingSource] Range {plan.Start}-{end}: 416 (EOF)");
+                return RangeDownloadResult.OutOfRange;
             }
 
             Interlocked.Exchange(ref _consecutive403Count, 0);
 
             if (response.Content.Headers.ContentType?.MediaType?.Contains("yt-ump") == true)
-            {
-                throw new ChunkDownloadFatalException(
-                    "YouTube returned encrypted UMP format",
-                    chunkIndex: index, consecutiveFailures: 0,
-                    reason: ChunkDownloadFailureReason.UmpFormat, trackId: _trackId);
-            }
+                throw new ChunkDownloadFatalException("YouTube returned encrypted UMP format", chunkIndex: logicalIndex, consecutiveFailures: 0, reason: ChunkDownloadFailureReason.UmpFormat, trackId: _trackId);
 
             response.EnsureSuccessStatusCode();
 
             try
             {
-                using var contentStream = await response.Content
-                    .ReadAsStreamAsync(ct).ConfigureAwait(false);
+                using var contentStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                IMemoryOwner<byte> memoryOwner = MemoryPool<byte>.Shared.Rent(plan.Length);
+                int actualLength;
+                var bodySw = System.Diagnostics.Stopwatch.StartNew();
 
-                for (int i = 0; i < batchCount; i++)
+                try
                 {
-                    int currentIndex = index + i;
-                    if (currentIndex >= _totalChunks) break;
+                    actualLength = await ReadStreamFullyAsync(contentStream, memoryOwner.Memory[..plan.Length], ct).ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                    memoryOwner.Dispose();
+                    throw new OperationCanceledException("HTTP stream disposed during read (seek/stop)");
+                }
+                catch (OperationCanceledException)
+                {
+                    memoryOwner.Dispose();
+                    throw;
+                }
+                catch (Exception ex) when (ct.IsCancellationRequested || _disposed || ex is IOException || ex is System.Net.Sockets.SocketException)
+                {
+                    _lastDownloadException = ex;
+                    memoryOwner.Dispose();
 
-                    long chunkStart = (long)currentIndex * _chunkSize;
-                    long chunkEnd = Math.Min(chunkStart + _chunkSize - 1, _contentLength - 1);
-                    int expectedBytes = (int)(chunkEnd - chunkStart + 1);
+                    if (ct.IsCancellationRequested || _disposed) return RangeDownloadResult.Cancelled;
 
-                    if (expectedBytes <= 0) break;
+                    Log.Warn($"[CachingSource] Range {plan.Start}-{end} read I/O error: {ex.Message}");
+                    return RangeDownloadResult.NetworkError;
+                }
+                catch (Exception ex)
+                {
+                    _lastDownloadException = ex;
+                    memoryOwner.Dispose();
 
-                    IMemoryOwner<byte> memoryOwner = MemoryPool<byte>.Shared.Rent(expectedBytes);
-                    int actualLength;
+                    Log.Warn($"[CachingSource] Range {plan.Start}-{end} read error: {ex.Message}");
+                    return RangeDownloadResult.NetworkError;
+                }
+                finally
+                {
+                    bodySw.Stop();
+                }
 
-                    // Замер чистой пропускной способности сокета (исключая RTT/пинг)
-                    var bodySw = System.Diagnostics.Stopwatch.StartNew();
-                    try
-                    {
-                        actualLength = await ReadStreamFullyAsync(
-                            contentStream, memoryOwner.Memory[..expectedBytes], ct).ConfigureAwait(false);
-                    }
-                    catch (ObjectDisposedException)
+                if (actualLength > 0 && bodySw.Elapsed.TotalMilliseconds > 5)
+                {
+                    double speedBytesPerSec = actualLength / (bodySw.Elapsed.TotalMilliseconds / 1000.0);
+                    SaveBandwidth(speedBytesPerSec);
+                }
+
+                if (ct.IsCancellationRequested)
+                {
+                    memoryOwner.Dispose();
+                    return RangeDownloadResult.Cancelled;
+                }
+
+                if (actualLength == 0)
+                {
+                    memoryOwner.Dispose();
+                    Log.Warn($"[CachingSource] Range {plan.Start}-{end}: empty response");
+                    return RangeDownloadResult.NetworkError;
+                }
+
+                if (actualLength < plan.Length)
+                {
+                    bool isNearEof = plan.Start + actualLength >= _contentLength;
+                    if (!isNearEof)
                     {
                         memoryOwner.Dispose();
-                        throw new OperationCanceledException("HTTP stream disposed during read (seek/stop)");
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        memoryOwner.Dispose();
-                        throw;
-                    }
-                    catch (Exception ex) when (ct.IsCancellationRequested || _disposed || ex is IOException || ex is System.Net.Sockets.SocketException)
-                    {
-                        _lastDownloadException = ex;
-                        memoryOwner.Dispose();
-                        if (ct.IsCancellationRequested || _disposed) return ChunkDownloadResult.Cancelled;
-
-                        Log.Warn($"[CachingSource] Chunk {currentIndex} read I/O error: {ex.Message}");
-                        return ChunkDownloadResult.NetworkError;
-                    }
-                    catch (Exception ex)
-                    {
-                        _lastDownloadException = ex;
-                        memoryOwner.Dispose();
-                        Log.Warn($"[CachingSource] Chunk {currentIndex} read error: {ex.Message}");
-                        return ChunkDownloadResult.NetworkError;
-                    }
-                    finally
-                    {
-                        bodySw.Stop();
-                    }
-
-                    if (actualLength > 0 && bodySw.Elapsed.TotalMilliseconds > 5)
-                    {
-                        double chunkSpeedBytesPerSec = actualLength / (bodySw.Elapsed.TotalMilliseconds / 1000.0);
-                        SaveBandwidth(chunkSpeedBytesPerSec);
-                    }
-
-                    if (ct.IsCancellationRequested)
-                    {
-                        memoryOwner.Dispose();
-                        return ChunkDownloadResult.Cancelled;
-                    }
-
-                    if (actualLength == 0)
-                    {
-                        memoryOwner.Dispose();
-                        if (i == 0)
-                        {
-                            Log.Warn($"[CachingSource] Chunk {currentIndex}: empty response");
-                            return ChunkDownloadResult.NetworkError;
-                        }
-                        break;
-                    }
-
-                    if (actualLength < expectedBytes)
-                    {
-                        bool isNearEof = chunkStart + actualLength >= _contentLength - _chunkSize;
-                        if (!isNearEof)
-                        {
-                            memoryOwner.Dispose();
-                            Log.Warn($"[CachingSource] Chunk {currentIndex} incomplete: {actualLength}/{expectedBytes}");
-                            return ChunkDownloadResult.NetworkError;
-                        }
-                        Log.Debug($"[CachingSource] Chunk {currentIndex}: partial {actualLength}/{expectedBytes} (near EOF)");
-                    }
-
-                    var chunkData = new ChunkData(memoryOwner, actualLength);
-
-                    if (!_ramChunks.TryAdd(currentIndex, chunkData))
-                    {
-                        chunkData.Dispose();
-                    }
-                    else
-                    {
-                        byte[] diskCopy = ArrayPool<byte>.Shared.Rent(actualLength);
-                        chunkData.Memory.Span.CopyTo(diskCopy.AsSpan(0, actualLength));
-                        _ = WriteToDiskFireAndForgetAsync(currentIndex, diskCopy, actualLength);
+                        Log.Warn($"[CachingSource] Range {plan.Start}-{end} incomplete: {actualLength}/{plan.Length}");
+                        return RangeDownloadResult.NetworkError;
                     }
                 }
 
-                if (_ramChunks.Count > _config.MaxRamChunks)
-                    EvictDistantRamChunks();
+                // disk copy создаётся всегда, независимо от того, удастся ли закоммитить блок в RAM.
+                // Иначе overlap-case превращается в "скачал и выбросил", после чего тот же range
+                // будет запрошен повторно бесконечно.
+                byte[] diskCopy = ArrayPool<byte>.Shared.Rent(actualLength);
+                memoryOwner.Memory.Span[..actualLength].CopyTo(diskCopy.AsSpan(0, actualLength));
 
-                return ChunkDownloadResult.Success;
+                int ramCommitLength = ComputeRamCommitLength(plan.Start, actualLength);
+                bool committedToRam = false;
+
+                if (ramCommitLength > 0)
+                {
+                    var block = new RamRangeBlock(plan.Start, memoryOwner, ramCommitLength);
+                    if (_ramCache.TryAdd(block))
+                    {
+                        committedToRam = true;
+                    }
+                    else
+                    {
+                        block.Dispose();
+                    }
+                }
+                else
+                {
+                    memoryOwner.Dispose();
+                }
+
+                _ = WriteToDiskFireAndForgetAsync(plan.Start, diskCopy, actualLength);
+
+                if (!committedToRam)
+                {
+                    Log.Debug($"[CachingSource] Range {plan.Start}-{end}: RAM overlap avoided, " +
+                              $"committed_prefix={ramCommitLength}/{actualLength}, disk_write=scheduled");
+                }
+
+                if (_ramCache.TotalBytes > _config.MaxRamBytes)
+                    _ramCache.Trim(Volatile.Read(ref _currentReadOffset), _config.RamEvictionWindowBytes, _config.MaxRamBytes);
+
+                return RangeDownloadResult.Success;
             }
             catch (OperationCanceledException)
             {
-                return ChunkDownloadResult.Cancelled;
+                return RangeDownloadResult.Cancelled;
             }
         }
     }
 
-    /// <summary>
-    /// Читает поток до <paramref name="buffer"/>.Length байт или EOF.
-    /// </summary>
-    private static async ValueTask<int> ReadStreamFullyAsync(
-        Stream stream, Memory<byte> buffer, CancellationToken ct)
+    private static async ValueTask<int> ReadStreamFullyAsync(Stream stream, Memory<byte> buffer, CancellationToken ct)
     {
         int totalRead = 0;
-
         while (totalRead < buffer.Length)
         {
-            int read = await stream.ReadAsync(buffer[totalRead..], ct);
+            int read = await stream.ReadAsync(buffer[totalRead..], ct).ConfigureAwait(false);
             if (read == 0) break;
             totalRead += read;
         }
-
         return totalRead;
     }
 
-    /// <summary>
-    /// Fire-and-forget запись чанка на диск.
-    /// </summary>
-    private async Task WriteToDiskFireAndForgetAsync(int index, byte[] rentedCopy, int length)
+    private async Task WriteToDiskFireAndForgetAsync(long offset, byte[] rentedCopy, int length)
     {
-        try
-        {
-            await _cacheManager.WriteChunkAsync(
-                _cacheKey, index, rentedCopy.AsMemory(0, length), CancellationToken.None);
-        }
-        catch (IOException ex)
-        {
-            Log.Warn($"[CachingSource] Disk write chunk {index}: {ex.Message}");
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rentedCopy);
-        }
+        try { await _cacheManager.WriteRangeAsync(_cacheKey, offset, rentedCopy.AsMemory(0, length), CancellationToken.None).ConfigureAwait(false); }
+        catch (IOException ex) { Log.Warn($"[CachingSource] Disk write range {offset}-{offset + length - 1}: {ex.Message}"); }
+        finally { ArrayPool<byte>.Shared.Return(rentedCopy); }
     }
 
     #endregion
 
     #region 403 Diagnostics
 
-    /// <summary>Логирует расширенную диагностику при 403 Forbidden.</summary>
-    private async Task LogAndDiagnose403Async(
-        int index, HttpRequestMessage request, HttpResponseMessage response)
+    private async Task LogAndDiagnose403Async(int logicalIndex, HttpRequestMessage request, HttpResponseMessage response)
     {
         int count = Volatile.Read(ref _consecutive403Count);
         var nParam = UrlEx.TryGetQueryParameterValue(_currentUrl, "n");
         var cParam = UrlEx.TryGetQueryParameterValue(_currentUrl, "c");
         var reqUa = request.Headers.UserAgent.ToString();
 
-        Log.Warn($"[CachingSource] 403 DIAGNOSTIC chunk {index} (consecutive={count})");
+        Log.Warn($"[CachingSource] 403 DIAGNOSTIC range@{logicalIndex} (consecutive={count})");
         Log.Warn($"[CachingSource]   c={cParam ?? "?"}, UA={reqUa[..Math.Min(reqUa.Length, 50)]}...");
-        Log.Warn($"[CachingSource]   n-token: {nParam ?? "MISSING"} " +
-                 $"(len={nParam?.Length ?? 0}, looks_encrypted={nParam?.Length is > 15 and < 25})");
+        Log.Warn($"[CachingSource]   n-token: {nParam ?? "MISSING"} (len={nParam?.Length ?? 0}, looks_encrypted={nParam?.Length is > 15 and < 25})");
 
         if (response.Headers.TryGetValues("X-Restrict-Formats-Hint", out var hints))
             Log.Warn($"[CachingSource]   Restrict-Hint: {string.Join(", ", hints)}");
 
         string responseBody = "";
-        try { responseBody = await response.Content.ReadAsStringAsync(CancellationToken.None); }
-        catch { }
-
-        if (responseBody.Length > 0)
-            Log.Warn($"[CachingSource]   Body: {responseBody[..Math.Min(responseBody.Length, 200)]}");
-
+        try { responseBody = await response.Content.ReadAsStringAsync(CancellationToken.None).ConfigureAwait(false); } catch { }
+        if (responseBody.Length > 0) Log.Warn($"[CachingSource]   Body: {responseBody[..Math.Min(responseBody.Length, 200)]}");
         Log.Warn("[CachingSource]══");
     }
 
@@ -844,54 +998,26 @@ public sealed partial class CachingStreamSource
 
     #region URL Refresh
 
-    /// <summary>
-    /// Координированный URL refresh: только один поток выполняет refresh, остальные ждут его завершения.
-    /// </summary>
     private async Task CoordinatedRefreshAsync(CancellationToken ct)
     {
         int refreshFailures = Volatile.Read(ref _consecutiveRefreshFailures);
         if (refreshFailures >= MaxRefreshFailuresBeforeCircuitBreak)
-        {
-            throw new ChunkDownloadFatalException(
-                $"URL refresh circuit breaker OPEN: {refreshFailures} consecutive failures (encrypted n-token?)",
-                chunkIndex: -1,
-                consecutiveFailures: Volatile.Read(ref _consecutive403Count),
-                reason: ChunkDownloadFailureReason.Forbidden403,
-                trackId: _trackId,
-                httpStatusCode: 403);
-        }
+            throw new ChunkDownloadFatalException($"URL refresh circuit breaker OPEN: {refreshFailures} consecutive failures", chunkIndex: -1, consecutiveFailures: Volatile.Read(ref _consecutive403Count), reason: ChunkDownloadFailureReason.Forbidden403, trackId: _trackId, httpStatusCode: 403);
 
         if (_disposed) return;
 
         bool acquired;
-        try
-        {
-            acquired = await _refreshLock.WaitAsync(0, ct);
-        }
-        catch (ObjectDisposedException) { return; }
+        try { acquired = await _refreshLock.WaitAsync(0, ct).ConfigureAwait(false); } catch (ObjectDisposedException) { return; }
 
         if (!acquired)
         {
             Log.Debug("[CachingSource] Waiting for concurrent refresh...");
-            try
-            {
-                await _refreshLock.WaitAsync(ct);
-                _refreshLock.Release();
-            }
-            catch (ObjectDisposedException) { return; }
+            try { await _refreshLock.WaitAsync(ct).ConfigureAwait(false); _refreshLock.Release(); } catch (ObjectDisposedException) { return; }
 
             if (Volatile.Read(ref _consecutiveRefreshFailures) >= MaxRefreshFailuresBeforeCircuitBreak)
-            {
-                throw new ChunkDownloadFatalException(
-                    "URL refresh circuit breaker OPEN after concurrent refresh",
-                    chunkIndex: -1,
-                    consecutiveFailures: Volatile.Read(ref _consecutive403Count),
-                    reason: ChunkDownloadFailureReason.Forbidden403,
-                    trackId: _trackId,
-                    httpStatusCode: 403);
-            }
+                throw new ChunkDownloadFatalException("URL refresh circuit breaker OPEN after concurrent refresh", chunkIndex: -1, consecutiveFailures: Volatile.Read(ref _consecutive403Count), reason: ChunkDownloadFailureReason.Forbidden403, trackId: _trackId, httpStatusCode: 403);
 
-            await Task.Delay(_config.PostRefreshDelayMs, ct);
+            await Task.Delay(_config.PostRefreshDelayMs, ct).ConfigureAwait(false);
             return;
         }
 
@@ -902,11 +1028,11 @@ public sealed partial class CachingStreamSource
             {
                 int waitMs = _config.RefreshCooldownMs - (int)elapsed.TotalMilliseconds;
                 Log.Debug($"[CachingSource] Refresh cooldown: {waitMs}ms");
-                await Task.Delay(waitMs, ct);
+                await Task.Delay(waitMs, ct).ConfigureAwait(false);
             }
 
             var previousUrl = _currentUrl;
-            await RefreshUrlAsync(ct);
+            await RefreshUrlAsync(ct).ConfigureAwait(false);
             _lastRefreshTime = DateTime.UtcNow;
             Interlocked.Exchange(ref _consecutive403Count, 0);
             Log.Info("[CachingSource] 403 counter reset after URL refresh");
@@ -914,49 +1040,35 @@ public sealed partial class CachingStreamSource
             var newNToken = UrlEx.TryGetQueryParameterValue(_currentUrl, "n");
             var oldNToken = UrlEx.TryGetQueryParameterValue(previousUrl, "n");
 
-            if (!string.IsNullOrEmpty(newNToken) &&
-                string.Equals(newNToken, oldNToken, StringComparison.Ordinal))
+            if (!string.IsNullOrEmpty(newNToken) && string.Equals(newNToken, oldNToken, StringComparison.Ordinal))
             {
                 int failures = Interlocked.Increment(ref _consecutiveRefreshFailures);
-                Log.Warn($"[CachingSource] n-token unchanged after refresh " +
-                         $"(attempt {failures}/{MaxRefreshFailuresBeforeCircuitBreak})");
+                Log.Warn($"[CachingSource] n-token unchanged after refresh (attempt {failures}/{MaxRefreshFailuresBeforeCircuitBreak})");
             }
-            else
-            {
-                Interlocked.Exchange(ref _consecutiveRefreshFailures, 0);
-            }
+            else Interlocked.Exchange(ref _consecutiveRefreshFailures, 0);
 
-            await Task.Delay(_config.PostRefreshDelayMs, ct);
+            await Task.Delay(_config.PostRefreshDelayMs, ct).ConfigureAwait(false);
         }
-        finally
-        {
-            try { _refreshLock.Release(); }
-            catch (ObjectDisposedException) { }
-        }
+        finally { try { _refreshLock.Release(); } catch (ObjectDisposedException) { } }
     }
 
     #endregion
 
     #region HTTP Request Building
 
-    /// <summary>
-    /// Строит HTTP-запрос для загрузки чанка.
-    /// </summary>
-    private HttpRequestMessage CreateChunkRequest(int index, long start, long end, int rn)
+    private HttpRequestMessage CreateRangeRequest(int logicalIndex, long start, long end, int rn)
     {
-        bool isYouTube = _currentUrl.Contains("googlevideo.com/videoplayback");
+        bool isYouTube = _currentUrl.Contains("googlevideo.com/videoplayback", StringComparison.Ordinal);
 
         if (isYouTube)
         {
-            string url = BuildYouTubeChunkUrl(_currentUrl, rn);
-            LogChunkRequestParams(index, url);
-
+            string url = BuildYouTubeRangeUrl(_currentUrl, rn);
+            LogRangeRequestParams(logicalIndex, url);
             var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = new RangeHeaderValue(start, end);
             SharedHttpClient.ApplyUserAgentFromUrl(request, url);
-
-            Log.Debug($"[CachingSource] Chunk {index} UA: " +
-                      $"{request.Headers.UserAgent.ToString()[..Math.Min(60, request.Headers.UserAgent.ToString().Length)]}...");
+            string ua = request.Headers.UserAgent.ToString();
+            Log.Debug($"[CachingSource] Range {logicalIndex} UA: {ua[..Math.Min(60, ua.Length)]}...");
             return request;
         }
 
@@ -966,23 +1078,16 @@ public sealed partial class CachingStreamSource
         return genericRequest;
     }
 
-    /// <summary>Логирует ключевые параметры URL чанка для диагностики.</summary>
-    private static void LogChunkRequestParams(int index, string url)
+    private static void LogRangeRequestParams(int logicalIndex, string url)
     {
         var nParam = UrlEx.TryGetQueryParameterValue(url, "n");
         var cParam = UrlEx.TryGetQueryParameterValue(url, "c");
         var sigParam = UrlEx.TryGetQueryParameterValue(url, "sig");
-
-        Log.Debug($"[CachingSource] Chunk {index} URL: {url[..Math.Min(url.Length, 300)]}");
-        Log.Debug($"[CachingSource] Chunk {index} params: c={cParam ?? "MISSING"}, " +
-                  $"n={nParam?[..Math.Min(nParam.Length, 15)] ?? "MISSING"}..., " +
-                  $"sig={(sigParam is not null ? $"{sigParam.Length}chars" : "MISSING")}");
+        Log.Debug($"[CachingSource] Range {logicalIndex} URL: {url[..Math.Min(url.Length, 300)]}");
+        Log.Debug($"[CachingSource] Range {logicalIndex} params: c={cParam ?? "MISSING"}, n={nParam?[..Math.Min(nParam.Length, 15)] ?? "MISSING"}..., sig={(sigParam is not null ? $"{sigParam.Length}chars" : "MISSING")}");
     }
 
-    /// <summary>
-    /// Добавляет chunk-специфичные параметры <c>rn</c> и <c>rbuf</c> к базовому URL.
-    /// </summary>
-    private static string BuildYouTubeChunkUrl(string baseUrl, int rn)
+    private static string BuildYouTubeRangeUrl(string baseUrl, int rn)
     {
         string url = UrlEx.SetQueryParameter(baseUrl, "rn", rn.ToString());
         url = UrlEx.SetQueryParameter(url, "rbuf", "0");
@@ -991,69 +1096,94 @@ public sealed partial class CachingStreamSource
 
     #endregion
 
-    #region Chunk Helpers
+    #region Helpers
 
     /// <summary>
-    /// Определяет, был ли <see cref="HttpRequestException"/> вызван штатной отменой запроса.
+    /// Проверяет, покрыт ли диапазон полностью уже локально либо активной in-flight загрузкой.
     /// </summary>
-    private static bool IsCancelledSendFailure(
-        HttpRequestException exception, CancellationToken ct, bool disposed)
+    /// <param name="position">Начало диапазона.</param>
+    /// <param name="length">Длина диапазона.</param>
+    /// <returns><c>true</c>, если диапазон уже доступен локально или гарантированно качается.</returns>
+    private bool IsRangeKnownAvailable(long position, int length)
     {
-        if (disposed || ct.IsCancellationRequested)
-            return true;
+        if (length <= 0) return true;
+        if (IsRangeLocallyAvailable(position, length)) return true;
+        return IsRangeCoveredByInflight(position, length);
+    }
 
-        Exception? current = exception;
-        while (current != null)
+    /// <summary>
+    /// Проверяет, покрыт ли диапазон полностью уже зарегистрированной активной загрузкой.
+    /// </summary>
+    /// <param name="position">Начало диапазона.</param>
+    /// <param name="length">Длина диапазона.</param>
+    /// <returns><c>true</c>, если диапазон полностью лежит внутри in-flight range.</returns>
+    private bool IsRangeCoveredByInflight(long position, int length)
+    {
+        long endExclusive = position + length;
+
+        lock (_activeDownloadsLock)
         {
-            switch (current)
+            foreach (var active in _activeDownloads.Values)
             {
-                case ObjectDisposedException:
-                    return true;
-
-                case System.Net.Sockets.SocketException socketException
-                    when socketException.SocketErrorCode is
-                        System.Net.Sockets.SocketError.OperationAborted or
-                        System.Net.Sockets.SocketError.Interrupted:
-                    return true;
+                if (position < active.Start) continue;
+                if (endExclusive > active.EndExclusive) continue;
+                return true;
             }
-
-            current = current.InnerException;
         }
 
         return false;
     }
 
     /// <summary>
-    /// Проверяет доступность чанка: либо загружен на диск, либо находится в RAM-кэше.
+    /// Обрезает планируемую длину загрузки до первого уже известного aligned coverage впереди.
     /// </summary>
-    private bool IsChunkAvailable(int index) =>
-        _cacheEntry!.IsChunkDownloaded(index) || _ramChunks.ContainsKey(index);
-
-    /// <summary>
-    /// Эвикция удалённых чанков из RAM с корректным возвратом буферов в пул.
-    /// Удаляет самые далёкие от текущей позиции чанки.
-    /// </summary>
-    private void EvictDistantRamChunks()
+    /// <param name="start">Начало диапазона.</param>
+    /// <param name="length">Исходная длина диапазона.</param>
+    /// <param name="includeInflight">
+    /// <c>true</c> — учитывать in-flight загрузки как покрытие;
+    /// <c>false</c> — учитывать только локально доступные данные.
+    /// </param>
+    /// <returns>
+    /// Длину первого непрерывного "gap" от <paramref name="start"/> до ближайшего уже доступного aligned диапазона.
+    /// Если покрытия впереди нет — возвращает исходную <paramref name="length"/>.
+    /// </returns>
+    private int TrimLengthToFirstKnownCoverage(long start, int length, bool includeInflight)
     {
-        int current = Volatile.Read(ref _currentChunk);
+        if (length <= _requestAlignmentBytes) return length;
 
-        // Используем адаптивную дистанцию вытеснения, чтобы случайно не удалить расширенный ReadAhead
-        GetAdaptivePreloadParams(out _, out _, out int evictionDistance);
+        long endExclusive = start + length;
+        long probe = start + _requestAlignmentBytes;
 
-        int maxEvict = _config.MaxRamChunks / 4;
-        int evicted = 0;
-
-        foreach (var kvp in _ramChunks)
+        while (probe < endExclusive)
         {
-            if (evicted >= maxEvict) break;
+            int probeLength = (int)Math.Min(_requestAlignmentBytes, endExclusive - probe);
+            bool covered = includeInflight
+                ? IsRangeKnownAvailable(probe, probeLength)
+                : IsRangeLocallyAvailable(probe, probeLength);
 
-            if (Math.Abs(kvp.Key - current) > evictionDistance
-                && _ramChunks.TryRemove(kvp.Key, out var chunk))
-            {
-                chunk.Dispose();
-                evicted++;
-            }
+            if (covered)
+                return (int)(probe - start);
+
+            probe += _requestAlignmentBytes;
         }
+
+        return length;
+    }
+
+    private static bool IsCancelledSendFailure(HttpRequestException exception, CancellationToken ct, bool disposed)
+    {
+        if (disposed || ct.IsCancellationRequested) return true;
+        Exception? current = exception;
+        while (current != null)
+        {
+            switch (current)
+            {
+                case ObjectDisposedException: return true;
+                case System.Net.Sockets.SocketException socketException when socketException.SocketErrorCode is System.Net.Sockets.SocketError.OperationAborted or System.Net.Sockets.SocketError.Interrupted: return true;
+            }
+            current = current.InnerException;
+        }
+        return false;
     }
 
     #endregion
