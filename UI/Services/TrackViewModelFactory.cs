@@ -1,4 +1,5 @@
-﻿using LMP.UI.Features.Shared;
+﻿using LMP.Core.Models;
+using LMP.UI.Features.Shared;
 
 namespace LMP.UI.Services;
 
@@ -37,14 +38,19 @@ public sealed class TrackViewModelFactory
     }
 
     /// <summary>
+    /// Возвращает канонический экземпляр <see cref="TrackInfo"/> из реестра.
+    /// </summary>
+    /// <param name="track">Свежий экземпляр трека.</param>
+    /// <returns>Канонический экземпляр, используемый всеми экранами и сервисами.</returns>
+    public TrackInfo GetCanonicalTrack(TrackInfo track) =>
+        _registry.RegisterOrUpdate(track);
+
+    /// <summary>
     /// Возвращает новую изолированную ViewModel для трека.
     /// </summary>
     public TrackItemViewModel GetOrCreate(TrackInfo track, Action<TrackInfo>? playAction = null)
     {
-        // Identity Map — получаем канонический экземпляр данных из доменного кэша ядра
         var canonical = _registry.RegisterOrUpdate(track);
-
-        // Создаём новую изолированную VM для конкретного экрана
         var vm = CreateVmInstance(canonical, playAction);
 
         return vm;

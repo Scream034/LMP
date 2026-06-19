@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using LMP.Core.Models;
 using LMP.UI.Features.Shared;
 using ReactiveUI;
 
@@ -18,7 +19,6 @@ public abstract class TrackListReorderableViewModel
     protected readonly DownloadService Downloads;
     protected readonly TrackViewModelFactory VmFactory;
 
-    // Изменено с private на protected для прямого доступа из QueueViewModel
     protected TrackItemViewModel? CurrentActiveVm;
 
     #endregion
@@ -36,6 +36,65 @@ public abstract class TrackListReorderableViewModel
 
         SubscribeToAudioEngine();
         SubscribeToDownloadService();
+        SubscribeToCacheManager();
+    }
+
+    #endregion
+
+    #region Source Normalization
+
+    /// <summary>
+    /// Канонизирует входящий экземпляр <see cref="TrackInfo"/> перед сохранением в _sources.
+    /// После этого source-слой и VM смотрят на один и тот же объект.
+    /// </summary>
+    /// <param name="item">Свежий экземпляр трека.</param>
+    /// <returns>Канонический экземпляр из <see cref="TrackRegistry"/>.</returns>
+    protected override TrackInfo NormalizeSourceItem(TrackInfo item) =>
+        VmFactory.GetCanonicalTrack(item);
+
+    /// <summary>
+    /// Сливает свежие данные трека в существующий экземпляр без замены ссылки.
+    /// Сохраняет привязки UI и обновляет только реально изменившиеся свойства.
+    /// </summary>
+    /// <param name="current">Текущий канонический экземпляр.</param>
+    /// <param name="fresh">Свежий нормализованный экземпляр.</param>
+    protected override void MergeSourceItem(TrackInfo current, TrackInfo fresh)
+    {
+        if (ReferenceEquals(current, fresh)) return;
+
+        current.UpdateMetadata(fresh);
+
+        if (fresh.IsDownloaded && !current.IsDownloaded)
+        {
+            if (!string.IsNullOrEmpty(fresh.LocalPath))
+            {
+                current.MarkAsDownloaded(
+                    fresh.LocalPath,
+                    fresh.PreferredContainer,
+                    fresh.PreferredBitrate);
+            }
+            else
+            {
+                current.IsDownloaded = true;
+                current.IsCached = true;
+            }
+        }
+        else if (fresh.IsCached && !current.IsCached)
+        {
+            current.MarkAsCached(fresh.PreferredContainer, fresh.PreferredBitrate);
+        }
+
+        if (!string.IsNullOrEmpty(fresh.LocalPath) && fresh.LocalPath != current.LocalPath)
+            current.LocalPath = fresh.LocalPath;
+
+        if (!string.IsNullOrEmpty(fresh.PreferredContainer) &&
+            fresh.PreferredContainer != current.PreferredContainer)
+        {
+            current.PreferredContainer = fresh.PreferredContainer;
+        }
+
+        if (fresh.PreferredBitrate > 0 && fresh.PreferredBitrate != current.PreferredBitrate)
+            current.PreferredBitrate = fresh.PreferredBitrate;
     }
 
     #endregion
@@ -100,6 +159,59 @@ public abstract class TrackListReorderableViewModel
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x => GetCachedVm(x.id)?.SetDownloadState(false, 0f))
             .DisposeWith(Disposables);
+    }
+
+    #endregion
+
+    #region Smart Parent — Cache
+
+    /// <summary>
+    /// Подписывается на событие завершения кэширования и обновляет канонический
+    /// <see cref="TrackInfo"/> без пересоздания ViewModel.
+    /// </summary>
+    private void SubscribeToCacheManager()
+    {
+        var cache = AudioSourceFactory.GlobalCache;
+        if (cache is null) return;
+
+        Observable.FromEvent<Action<string, string, int, bool>, (string trackId, string format, int bitrate, bool isExport)>(
+                h => (id, format, bitrate, isExport) => h((id, format, bitrate, isExport)),
+                h => cache.OnFormatCached += h,
+                h => cache.OnFormatCached -= h)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(x =>
+            {
+                if (!_sources.TryGetValue(x.trackId, out var track)) return;
+                if (!track.IsCached)
+                    track.MarkAsCached(x.format, x.bitrate);
+            })
+            .DisposeWith(Disposables);
+    }
+
+    /// <summary>
+    /// Гидрирует cache-status для всех текущих source-элементов.
+    /// Поскольку _sources хранит канонические экземпляры, обновления автоматически
+    /// доезжают до UI через <see cref="TrackItemViewModel"/> без reset списка.
+    /// </summary>
+    /// <param name="ct">Токен отмены.</param>
+    protected async Task HydrateCacheStatusAsync(CancellationToken ct = default)
+    {
+        var cache = AudioSourceFactory.GlobalCache;
+        if (cache is null || _sources.Count == 0) return;
+
+        try
+        {
+            var tracks = new List<TrackInfo>(_sources.Count);
+            foreach (var track in _sources.Values)
+                tracks.Add(track);
+
+            await Task.Run(() => cache.HydrateCacheStatus(tracks), ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Warn($"[TrackListReorderable] Cache hydration error: {ex.Message}");
+        }
     }
 
     #endregion

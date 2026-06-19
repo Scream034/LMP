@@ -96,6 +96,7 @@
                 <DataTemplate x:DataType="svm:TrackItemViewModel">
                     <Border Classes="track-row"
                         Classes.is-active="{Binding IsActive}"
+                        Classes.is-playing="{Binding IsPlaying}"
                         Classes.menu-open="{Binding IsMenuOpen}"
                         Height="60"
                         UseLayoutRounding="True"
@@ -103,7 +104,8 @@
                         PointerMoved="OnItemPointerMoved"
                         PointerReleased="OnItemPointerReleased">
 
-                        <!-- Колонки: Обложка, Текст(тянется), Иконки кэша, Лайк, Длительность/Опции(совмещенный слот) -->
+                        <!-- Колонки: Обложка, Текст(тянется), Иконки кэша, Лайк,
+                        Длительность/Опции(совмещенный слот) -->
                         <Grid ColumnDefinitions="Auto, *, Auto, Auto, 56">
 
                             <!-- COL 0: ОБЛОЖКА / КНОПКА PLAY -->
@@ -213,7 +215,8 @@
                                 <PathIcon Width="16" Height="16" IsHitTestVisible="False" />
                             </Button>
 
-                            <!-- COL 4: ВРЕМЯ И ОПЦИИ (Лежат в одном слоте и замещают друг друга при наведении) -->
+                            <!-- COL 4: ВРЕМЯ И ОПЦИИ (Лежат в одном слоте и замещают друг друга при
+                            наведении) -->
                             <TextBlock Grid.Column="4"
                                 Classes="duration-text"
                                 Width="46"

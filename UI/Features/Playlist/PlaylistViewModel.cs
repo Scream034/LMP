@@ -31,6 +31,8 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
     private readonly EventHandler<string> _languageChangedHandler;
     private readonly IDisposable? _librarySubscription;
 
+    private CancellationTokenSource? _playlistLoadCts;
+
     private string _currentPlaylistId = "";
     private Core.Models.Playlist? _currentPlaylist;
 
@@ -243,28 +245,28 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             .DisposeWith(Disposables);
 
         _librarySubscription = Observable.FromEvent(
-                h => LibService.OnDataChanged += h,
-                h => LibService.OnDataChanged -= h)
-            .Throttle(TimeSpan.FromMilliseconds(600))
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ =>
+         h => LibService.OnDataChanged += h,
+         h => LibService.OnDataChanged -= h)
+        .Throttle(TimeSpan.FromMilliseconds(600))
+        .ObserveOn(RxSchedulers.MainThreadScheduler)
+        .Subscribe(_ =>
+        {
+            if (_isSuspended) return;
+
+            if ((DateTime.Now - _lastLocalMutationTime).TotalMilliseconds < LocalMutationDebounceMs)
             {
-                if (_isSuspended) return;
+                Log.Debug("[Playlist] Ignoring OnDataChanged (recent local mutation)");
+                return;
+            }
 
-                if ((DateTime.Now - _lastLocalMutationTime).TotalMilliseconds < LocalMutationDebounceMs)
-                {
-                    Log.Debug("[Playlist] Ignoring OnDataChanged (recent local mutation)");
-                    return;
-                }
+            InvalidateAllTracksCache();
 
-                InvalidateAllTracksCache();
+            if (string.IsNullOrEmpty(_currentPlaylistId)) return;
 
-                if (string.IsNullOrEmpty(_currentPlaylistId)) return;
-
-                Dispatcher.UIThread.InvokeAsync(
-                    () => LoadPlaylistAsync(_currentPlaylistId),
-                    DispatcherPriority.Background);
-            });
+            Dispatcher.UIThread.InvokeAsync(
+                () => LoadPlaylistAsync(_currentPlaylistId, showLoader: false, CancellationToken.None),
+                DispatcherPriority.Background);
+        });
 
         SubscribeToPlaybackSource();
     }
@@ -359,20 +361,62 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
     #region Public API
 
-    public async Task LoadPlaylistAsync(string playlistId)
+    /// <summary>
+    /// Загружает плейлист с отображением loader/skeleton состояния.
+    /// </summary>
+    /// <param name="playlistId">Идентификатор плейлиста.</param>
+    public Task LoadPlaylistAsync(string playlistId) =>
+        LoadPlaylistAsync(playlistId, showLoader: true, CancellationToken.None);
+
+
+    #endregion
+
+    #region Private Helpers
+
+    /// <summary>
+    /// Отменяет предыдущую загрузку плейлиста и создаёт новый токен для текущего запроса.
+    /// </summary>
+    /// <param name="externalCt">Внешний токен отмены.</param>
+    /// <returns>Источник отмены активной загрузки.</returns>
+    private CancellationTokenSource ReplacePlaylistLoadCts(CancellationToken externalCt)
     {
+        _playlistLoadCts?.Cancel();
+        _playlistLoadCts?.Dispose();
+
+        _playlistLoadCts = externalCt.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(externalCt)
+            : new CancellationTokenSource();
+
+        return _playlistLoadCts;
+    }
+
+    /// <summary>
+    /// Загружает либо мягко обновляет плейлист.
+    /// При <paramref name="showLoader"/> = <c>false</c> не поднимает loading-state,
+    /// что устраняет мигание экрана при фоновых изменениях библиотеки.
+    /// </summary>
+    /// <param name="playlistId">Идентификатор плейлиста.</param>
+    /// <param name="showLoader">Показывать ли loader/skeleton на время загрузки.</param>
+    /// <param name="ct">Внешний токен отмены.</param>
+    private async Task LoadPlaylistAsync(string playlistId, bool showLoader, CancellationToken ct)
+    {
+        var loadCts = ReplacePlaylistLoadCts(ct);
+        var loadCt = loadCts.Token;
+
         _currentPlaylistId = playlistId;
         InvalidateAllTracksCache();
 
-        IsLoading = true;
+        IsLoading = showLoader;
 
         try
         {
+            loadCt.ThrowIfCancellationRequested();
+
             var playlist = await LibService.GetPlaylistAsync(playlistId);
+            loadCt.ThrowIfCancellationRequested();
+
             if (playlist is null)
-            {
                 return;
-            }
 
             _currentPlaylist = playlist;
 
@@ -387,35 +431,37 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             IsReadOnly = !playlist.IsEditable;
 
             var allIds = await LibService.GetPlaylistTrackIdsAsync(playlistId);
+            loadCt.ThrowIfCancellationRequested();
+
             _playlistTrackIds = new HashSet<string>(allIds, StringComparer.Ordinal);
             TrackCount = allIds.Count;
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
 
             TotalDuration = await LibService.GetPlaylistTotalDurationAsync(playlistId);
+            loadCt.ThrowIfCancellationRequested();
+
             FormatDuration();
             this.RaisePropertyChanged(nameof(PlaylistYoutubeUrl));
 
-            await InitializeAsync(allIds);
+            await InitializeAsync(allIds, loadCt);
+            loadCt.ThrowIfCancellationRequested();
 
             _ = LoadHeaderGradientAsync();
-            _ = HydrateCacheStatusInBackgroundAsync();
+            _ = HydrateCacheStatusAsync(loadCt);
 
             UpdateIsPlayingThisPlaylist();
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Error($"[Playlist] Error loading playlist '{playlistId}': {ex.Message}");
         }
         finally
         {
-            // Блок гарантирует сокрытие скелетона и появление разметки даже при сбое
-            IsLoading = false;
+            if (ReferenceEquals(_playlistLoadCts, loadCts))
+                IsLoading = false;
         }
     }
-
-    #endregion
-
-    #region Private Helpers
 
     /// <summary>
     /// Настраивает реактивную подписку на состояние аудио-движка для умного морфинга кнопки.
@@ -800,21 +846,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
         await Dispatcher.UIThread.InvokeAsync(
             () => HeaderBackground = brush);
 
-    private async Task HydrateCacheStatusInBackgroundAsync()
-    {
-        try
-        {
-            var tracks = GetLoadedItemsSnapshot();
-            var audioCache = AudioSourceFactory.GlobalCache;
-            if (audioCache is null) return;
-            await Task.Run(() => audioCache.HydrateCacheStatus(tracks));
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[Playlist] Cache hydration error: {ex.Message}");
-        }
-    }
-
     private async Task MergePlaylistAsync()
     {
         var otherPlaylists = (await LibService.GetAllPlaylistsAsync())
@@ -862,6 +893,9 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             Log.Debug($"[PlaylistVM] Disposing {_currentPlaylistId}");
             LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
             _librarySubscription?.Dispose();
+            _playlistLoadCts?.Cancel();
+            _playlistLoadCts?.Dispose();
+            _playlistLoadCts = null;
             InvalidateAllTracksCache();
             _currentPlaylist = null;
         }

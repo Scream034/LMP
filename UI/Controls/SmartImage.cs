@@ -109,8 +109,26 @@ public static class SmartImage
 
     #region Core Load Logic
 
+    /// <summary>
+    /// Запускает загрузку изображения для контрола. Вызывается при изменении
+    /// <see cref="SourceProperty"/> или <see cref="QualityProperty"/>.
+    ///
+    /// <para><b>Гард Quality == 0:</b> при материализации DataTemplate Avalonia применяет
+    /// свойства последовательно — <c>Source</c> раньше <c>Quality</c>. В момент
+    /// <c>SourceProperty.Changed</c> значение <c>QualityProperty</c> равно
+    /// <c>default(ImageQuality) = 0</c>. Без гарда <c>GetImageAsync(url, decodeWidth: 0)</c>
+    /// попадает в ветку <c>new Bitmap(stream)</c> (полноразмерный bitmap вместо
+    /// <c>DecodeToWidth</c>), после чего <c>QualityProperty.Changed</c> запускает второй
+    /// BeginLoad, отменяющий первый. Гард гарантирует единственный корректный запуск:
+    /// для нового контейнера — из <c>QualityProperty.Changed</c>;
+    /// для рециклированного — из <c>SourceProperty.Changed</c> (Quality уже установлен).</para>
+    /// </summary>
     private static async void BeginLoad(Image image)
     {
+        // Quality == 0 означает default(ImageQuality): шаблон ещё не применил значение.
+        // Дожидаемся QualityProperty.Changed, который вызовет BeginLoad с корректным quality.
+        if (GetQuality(image) == 0) return;
+
         // ═══ Отменяем предыдущую pending-загрузку (рециклинг элемента) ═══
         if (_pending.TryGetValue(image, out var oldCts))
         {

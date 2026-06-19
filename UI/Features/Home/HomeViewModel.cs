@@ -211,6 +211,8 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
                 if (ct.IsCancellationRequested) return;
                 InitializeWithData(tracks);
             }
+
+            _ = HydrateCacheStatusAsync(ct);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

@@ -20,9 +20,14 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     protected readonly LibraryService LibService;
 
     private List<string> _masterIds = [];
-    private readonly Dictionary<string, TSource> _sources = [];
 
-    // Переведено в protected для доступа из UpdateMasterData и производных VM
+    /// <summary>
+    /// Канонические source-экземпляры, привязанные к текущему списку.
+    /// Производные классы могут использовать словарь для zero-alloc access
+    /// без повторной материализации snapshot-коллекций.
+    /// </summary>
+    protected readonly Dictionary<string, TSource> _sources = [];
+
     protected readonly Dictionary<string, TViewModel> _vmCache = [];
     protected readonly Dictionary<TViewModel, string> _vmToId = new(ReferenceEqualityComparer.Instance);
 
@@ -70,7 +75,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         LibService = AppEntry.Services.GetRequiredService<LibraryService>();
 
         this.WhenAnyValue(static x => x.FilterQuery)
-            .Skip(1) // Оптимизация: пропускаем стартовую пустую строку, так как инициализация происходит явно
+            .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(150))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => RebuildVisibleItems())
@@ -123,46 +128,72 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     protected abstract Task<List<TSource>> LoadItemsByIdsAsync(IEnumerable<string> ids, CancellationToken ct);
     protected virtual Task SaveMoveAsync(int fromIndex, int toIndex, CancellationToken ct) => Task.CompletedTask;
 
+    /// <summary>
+    /// Нормализует свежезагруженный source-элемент перед помещением в master-слой.
+    /// Позволяет производным VM канонизировать объекты и тем самым исключить
+    /// рассинхронизацию между _sources и TrackItemViewModel.Track.
+    /// </summary>
+    /// <param name="item">Свежий source-элемент.</param>
+    /// <returns>Нормализованный экземпляр, который должен попасть в _sources.</returns>
+    protected virtual TSource NormalizeSourceItem(TSource item) => item;
+
+    /// <summary>
+    /// Сливает свежие данные в уже существующий source-экземпляр без замены ссылки.
+    /// Это сохраняет identity VM и предотвращает лишние пересоздания UI.
+    /// </summary>
+    /// <param name="current">Текущий экземпляр из _sources.</param>
+    /// <param name="fresh">Свежий нормализованный экземпляр.</param>
+    protected virtual void MergeSourceItem(TSource current, TSource fresh) { }
+
     #endregion
 
     #region Initialization
 
+    /// <summary>
+    /// Инициализирует список по master-порядку идентификаторов без разрушения
+    /// существующего VM-кэша. На успешной загрузке изменения применяются инкрементально.
+    /// При сбое нового контекста текущий список очищается, чтобы не показывать
+    /// данные от предыдущего экрана под новой шапкой.
+    /// </summary>
+    /// <param name="allIds">Целевой master-порядок идентификаторов.</param>
+    /// <param name="ct">Токен отмены.</param>
     protected async Task InitializeAsync(List<string> allIds, CancellationToken ct = default)
     {
         if (_isDisposed) return;
 
         CancelLoading();
         _loadCts = new CancellationTokenSource();
-        var linkedCt = CancellationTokenSource.CreateLinkedTokenSource(_loadCts.Token, ct).Token;
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_loadCts.Token, ct);
+        var linkedCt = linkedCts.Token;
 
-        _masterIds = [.. allIds];
-        _sources.Clear();
-
-        DisposeAndClearVmCache();
-        Items.Clear();
-
-        if (_masterIds.Count == 0) return;
+        bool targetOrderChanged = !HasSameIdOrder(_masterIds, allIds);
 
         try
         {
-            var loaded = await LoadItemsByIdsAsync(_masterIds, linkedCt);
+            if (allIds.Count == 0)
+            {
+                UpdateMasterData([], allIds);
+                return;
+            }
+
+            var loaded = await LoadItemsByIdsAsync(allIds, linkedCt);
             if (linkedCt.IsCancellationRequested) return;
 
-            foreach (var item in loaded)
-                _sources[GetItemId(item)] = item;
-
-            RebuildVisibleItems();
+            UpdateMasterData(loaded, allIds);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Error($"[ReorderableVM] Load error: {ex.Message}");
+
+            if (targetOrderChanged && !linkedCt.IsCancellationRequested)
+                UpdateMasterData([], allIds);
         }
     }
 
     /// <summary>
     /// Инициализирует модель готовыми данными.
-    /// Переписан на вызов UpdateMasterData для сохранения VM-кэша и предотвращения мерцания.
+    /// Переписан на инкрементальное обновление master-слоя без потери VM-кэша.
     /// </summary>
     protected void InitializeWithData(IEnumerable<TSource> items)
     {
@@ -170,90 +201,101 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     }
 
     /// <summary>
-    /// Инкрементально обновляет мастер-данные без полной инвалидации кэша ViewModel.
-    /// Вычисляет разницу и удаляет из кэша только отсутствующие элементы.
+    /// Инкрементально обновляет master-данные без полной инвалидации кэша ViewModel.
+    /// Сохраняет identity существующих source-экземпляров и VM, обновляя только
+    /// порядок, состав и metadata реально изменившихся элементов.
     /// </summary>
-    protected void UpdateMasterData(IEnumerable<TSource> items)
+    /// <param name="items">Свежие source-элементы.</param>
+    /// <param name="explicitOrder">
+    /// Необязательный master-порядок идентификаторов. Если задан, используется как
+    /// источник истинного порядка даже при частичной загрузке source-элементов.
+    /// </param>
+    protected void UpdateMasterData(IEnumerable<TSource> items, IReadOnlyList<string>? explicitOrder = null)
     {
         if (_isDisposed) return;
 
-        var list = items.ToList();
-
-        // Быстрая проверка на идентичность мастер-списка по ID для экономии CPU
-        bool changed = list.Count != _masterIds.Count;
-        if (!changed)
-        {
-            for (int i = 0; i < list.Count; i++)
-            {
-                if (GetItemId(list[i]) != _masterIds[i])
-                {
-                    changed = true;
-                    break;
-                }
-            }
-        }
-
-        if (!changed) return;
-
         CancelLoading();
 
-        _masterIds = [.. list.Select(GetItemId)];
-        _sources.Clear();
+        List<string> newMasterIds;
+        HashSet<string> retainedIds;
 
-        var usedIds = new HashSet<string>(_masterIds.Count, StringComparer.Ordinal);
-        foreach (var item in list)
+        if (explicitOrder is not null)
         {
-            var id = GetItemId(item);
-            _sources[id] = item;
-            usedIds.Add(id);
-        }
+            int count = explicitOrder.Count;
+            newMasterIds = new List<string>(count);
+            retainedIds = new HashSet<string>(count, StringComparer.Ordinal);
 
-        // Выборочно удаляем из кэша только старые неиспользуемые ViewModel
-        if (usedIds.Count < _vmCache.Count)
-        {
-            List<string>? toRemove = null;
-            foreach (var id in _vmCache.Keys)
+            for (int i = 0; i < count; i++)
             {
-                if (!usedIds.Contains(id))
-                {
-                    toRemove ??= new List<string>(_vmCache.Count - usedIds.Count);
-                    toRemove.Add(id);
-                }
-            }
-
-            if (toRemove is not null)
-            {
-                foreach (var id in toRemove)
-                {
-                    if (_vmCache.Remove(id, out var vm))
-                    {
-                        _vmToId.Remove(vm);
-                        vm.Dispose();
-                    }
-                }
+                var id = explicitOrder[i];
+                newMasterIds.Add(id);
+                retainedIds.Add(id);
             }
         }
+        else
+        {
+            newMasterIds = [];
+            retainedIds = new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        foreach (var rawItem in items)
+        {
+            var normalized = NormalizeSourceItem(rawItem);
+            var id = GetItemId(normalized);
+            if (string.IsNullOrEmpty(id)) continue;
+
+            if (explicitOrder is null)
+            {
+                newMasterIds.Add(id);
+                retainedIds.Add(id);
+            }
+            else if (!retainedIds.Contains(id))
+            {
+                continue;
+            }
+
+            if (_sources.TryGetValue(id, out var current))
+            {
+                if (!ReferenceEquals(current, normalized))
+                    MergeSourceItem(current, normalized);
+            }
+            else
+            {
+                _sources[id] = normalized;
+            }
+        }
+
+        RemoveUnusedSources(retainedIds);
+
+        _masterIds = newMasterIds;
 
         RebuildVisibleItems();
+        DisposeRemovedViewModels(retainedIds);
     }
 
     #endregion
 
     #region Filtering
 
-    // Сделан виртуальным для возможности кастомной постобработки в наследниках
+    /// <summary>
+    /// Перестраивает видимый список на основе master-порядка и текущего фильтра.
+    /// При пустом <see cref="FilterQuery"/> фильтрация пропускается полностью,
+    /// гарантируя отображение всех элементов независимо от реализации <see cref="MatchesFilter"/>.
+    /// </summary>
     protected virtual void RebuildVisibleItems()
     {
         var query = FilterQuery;
+        bool hasFilter = !string.IsNullOrWhiteSpace(query);
 
         _rebuildBuffer.Clear();
         if (_rebuildBuffer.Capacity < _masterIds.Count)
             _rebuildBuffer.Capacity = _masterIds.Count;
 
-        foreach (var id in _masterIds)
+        for (int i = 0; i < _masterIds.Count; i++)
         {
+            var id = _masterIds[i];
             if (!_sources.TryGetValue(id, out var source)) continue;
-            if (!MatchesFilter(source, query)) continue;
+            if (hasFilter && !MatchesFilter(source, query)) continue;
 
             if (!_vmCache.TryGetValue(id, out var vm))
             {
@@ -268,27 +310,87 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         SyncVisibleItems(_rebuildBuffer);
     }
 
+    /// <summary>
+    /// Инкрементально синхронизирует видимую коллекцию без полного Reset.
+    /// 
+    /// <para><b>Fast path:</b> если состав и порядок уже идентичны, не делает ничего.</para>
+    /// <para><b>Batch path:</b> если между текущим и новым списком нет ни одного
+    /// общего VM-экземпляра, выполняет полную замену через <see cref="AvaloniaList{T}.Clear"/>
+    /// и <see cref="AvaloniaList{T}.AddRange(System.Collections.Generic.IEnumerable{T})"/>.</para>
+    /// <para><b>Incremental path:</b> если пересечение есть, сначала удаляет из текущего
+    /// списка все VM, отсутствующие в целевом, затем выравнивает порядок через
+    /// <see cref="AvaloniaList{T}.Move"/> и вставляет недостающие элементы через
+    /// <see cref="AvaloniaList{T}.Insert"/>.</para>
+    /// 
+    /// <para>Такой порядок делает алгоритм self-healing после последовательности
+    /// reorder/filter/clear-filter и не полагается на то, что лишние элементы
+    /// уже находятся только в хвосте.</para>
+    /// </summary>
+    /// <param name="newItems">Целевой видимый порядок VM.</param>
     private void SyncVisibleItems(List<TViewModel> newItems)
     {
-        // Оптимизация мерцания: обновляем коллекцию только если ее состав или порядок изменился
-        bool itemsChanged = Items.Count != newItems.Count;
-        if (!itemsChanged)
+        if (Items.Count == newItems.Count)
         {
+            bool same = true;
             for (int i = 0; i < newItems.Count; i++)
             {
-                if (Items[i] != newItems[i])
+                if (!ReferenceEquals(Items[i], newItems[i]))
                 {
-                    itemsChanged = true;
+                    same = false;
                     break;
                 }
             }
+
+            if (same) return;
         }
 
-        if (itemsChanged)
+        if (Items.Count == 0)
+        {
+            if (newItems.Count > 0)
+                Items.AddRange(newItems);
+            return;
+        }
+
+        if (newItems.Count == 0)
         {
             Items.Clear();
-            Items.InsertRange(0, newItems);
+            return;
         }
+
+        if (!HasVisibleOverlap(newItems))
+        {
+            Items.Clear();
+            Items.AddRange(newItems);
+            return;
+        }
+
+        for (int i = Items.Count - 1; i >= 0; i--)
+        {
+            if (!ContainsReference(newItems, Items[i]))
+                Items.RemoveAt(i);
+        }
+
+        for (int targetIndex = 0; targetIndex < newItems.Count; targetIndex++)
+        {
+            var desired = newItems[targetIndex];
+
+            if (targetIndex < Items.Count && ReferenceEquals(Items[targetIndex], desired))
+                continue;
+
+            int existingIndex = FindVisibleItemIndex(desired, targetIndex);
+            if (existingIndex >= 0)
+            {
+                if (existingIndex != targetIndex)
+                    Items.Move(existingIndex, targetIndex);
+            }
+            else
+            {
+                Items.Insert(targetIndex, desired);
+            }
+        }
+
+        for (int i = Items.Count - 1; i >= newItems.Count; i--)
+            Items.RemoveAt(i);
     }
 
     #endregion
@@ -370,16 +472,144 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #region Helpers
 
+    /// <summary>
+    /// Возвращает <c>true</c>, если текущий видимый список и целевой список
+    /// имеют хотя бы один общий VM-экземпляр.
+    /// </summary>
+    /// <param name="newItems">Целевой список.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool HasVisibleOverlap(List<TViewModel> newItems)
+    {
+        for (int i = 0; i < Items.Count; i++)
+        {
+            var current = Items[i];
+            for (int j = 0; j < newItems.Count; j++)
+            {
+                if (ReferenceEquals(current, newItems[j]))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Проверяет наличие VM-экземпляра в списке по ссылочному равенству.
+    /// </summary>
+    /// <param name="items">Список для поиска.</param>
+    /// <param name="item">Искомый экземпляр.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ContainsReference(List<TViewModel> items, TViewModel item)
+    {
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (ReferenceEquals(items[i], item))
+                return true;
+        }
+
+        return false;
+    }
+
     protected TViewModel? GetCachedVm(string id) => _vmCache.GetValueOrDefault(id);
 
-    protected List<TSource> GetLoadedItemsSnapshot() =>
-        [.. _masterIds.Where(_sources.ContainsKey).Select(id => _sources[id])];
+    protected List<TSource> GetLoadedItemsSnapshot()
+    {
+        var result = new List<TSource>(_masterIds.Count);
 
-    protected List<string> GetAllIds() => [.. _masterIds];
+        for (int i = 0; i < _masterIds.Count; i++)
+        {
+            var id = _masterIds[i];
+            if (_sources.TryGetValue(id, out var source))
+                result.Add(source);
+        }
+
+        return result;
+    }
+
+    protected List<string> GetAllIds()
+    {
+        var result = new List<string>(_masterIds.Count);
+        for (int i = 0; i < _masterIds.Count; i++)
+            result.Add(_masterIds[i]);
+
+        return result;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private string GetVmId(TViewModel vm) =>
         _vmToId.TryGetValue(vm, out var id) ? id : string.Empty;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int FindVisibleItemIndex(TViewModel item, int startIndex)
+    {
+        for (int i = startIndex; i < Items.Count; i++)
+        {
+            if (ReferenceEquals(Items[i], item))
+                return i;
+        }
+
+        return -1;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool HasSameIdOrder(List<string> currentIds, IReadOnlyList<string> newIds)
+    {
+        if (currentIds.Count != newIds.Count) return false;
+
+        for (int i = 0; i < currentIds.Count; i++)
+        {
+            if (!string.Equals(currentIds[i], newIds[i], StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
+    }
+
+    private void RemoveUnusedSources(HashSet<string> retainedIds)
+    {
+        if (retainedIds.Count == _sources.Count) return;
+
+        List<string>? toRemove = null;
+
+        foreach (var id in _sources.Keys)
+        {
+            if (retainedIds.Contains(id)) continue;
+
+            toRemove ??= new List<string>();
+            toRemove.Add(id);
+        }
+
+        if (toRemove is null) return;
+
+        for (int i = 0; i < toRemove.Count; i++)
+            _sources.Remove(toRemove[i]);
+    }
+
+    private void DisposeRemovedViewModels(HashSet<string> retainedIds)
+    {
+        if (retainedIds.Count == _vmCache.Count) return;
+
+        List<string>? toRemove = null;
+
+        foreach (var id in _vmCache.Keys)
+        {
+            if (retainedIds.Contains(id)) continue;
+
+            toRemove ??= new List<string>();
+            toRemove.Add(id);
+        }
+
+        if (toRemove is null) return;
+
+        for (int i = 0; i < toRemove.Count; i++)
+        {
+            var id = toRemove[i];
+            if (!_vmCache.Remove(id, out var vm)) continue;
+
+            _vmToId.Remove(vm);
+            vm.Dispose();
+        }
+    }
 
     protected void CancelLoading()
     {
@@ -392,6 +622,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     {
         foreach (var vm in _vmCache.Values)
             vm.Dispose();
+
         _vmCache.Clear();
         _vmToId.Clear();
     }
@@ -411,6 +642,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         {
             _vmToId.Remove(vm);
             Items.Remove(vm);
+            vm.Dispose();
         }
 
         return removed;

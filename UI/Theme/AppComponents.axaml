@@ -53,18 +53,30 @@
         <Setter Property="Margin" Value="0,1" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Opacity" Value="1" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <DoubleTransition Property="Opacity" Duration="0:0:0.2" />
+            </Transitions>
+        </Setter>
     </Style>
+
     <Style Selector="Border.track-row:pointerover">
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
 
     <Style Selector="Border.track-row.is-active">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <Style Selector="Border.track-row.is-active.is-playing">
         <Style.Animations>
-            <Animation Duration="0:0:1.8" IterationCount="Infinite"
+            <Animation Duration="0:0:1.8"
+                IterationCount="Infinite"
                 PlaybackDirection="Alternate"
                 Easing="SineEaseInOut"
-                FillMode="Both">
+                FillMode="None">
                 <KeyFrame Cue="0%">
                     <Setter Property="Opacity" Value="1" />
                 </KeyFrame>
@@ -78,9 +90,11 @@
     <Style Selector="Border.track-row.menu-open">
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
+
     <Style Selector="Border.track-row.is-active.menu-open">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
+
     <Style Selector="Border.track-row.menu-open:pointerover">
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
     </Style>

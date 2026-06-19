@@ -108,21 +108,21 @@ public sealed partial class TrackRepository : ITrackRepository
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        var entities = await ctx.LikedTracks
+        var rows = await ctx.LikedTracks
             .Where(lt => IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId)
-            .OrderByDescending(lt => lt.LikedAt)
-            .Skip(offset)
-            .Take(limit)
             .Join(ctx.Tracks,
                 lt => lt.TrackId,
                 t => t.Id,
-                (lt, t) => t)
+                (lt, t) => new { lt.LikedAt, Track = t })
+            .OrderByDescending(x => x.LikedAt)
+            .Skip(offset)
+            .Take(limit)
             .ToListAsync(ct);
 
-        var models = new List<TrackInfo>(entities.Count);
-        for (int i = 0; i < entities.Count; i++)
+        var models = new List<TrackInfo>(rows.Count);
+        for (int i = 0; i < rows.Count; i++)
         {
-            var model = MapToModel(entities[i]);
+            var model = MapToModel(rows[i].Track);
             model.IsLiked = true;
             models.Add(model);
         }

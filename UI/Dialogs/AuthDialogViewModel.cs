@@ -189,7 +189,7 @@ public sealed class AuthDialogViewModel : ViewModelBase
     /// <summary>
     /// Возвращает версию расширения, обнаруженного в локальном каталоге приложения.
     /// </summary>
-    private string? GetLocalExtensionVersion()
+    private static string? GetLocalExtensionVersion()
     {
         try
         {
@@ -216,7 +216,7 @@ public sealed class AuthDialogViewModel : ViewModelBase
     /// <summary>
     /// Формирует адрес для получения манифеста из удаленного репозитория.
     /// </summary>
-    private string GetRemoteManifestUrl()
+    private static string GetRemoteManifestUrl()
     {
         var url = G.AuthExtensionDownloadUrl;
         if (url.Contains("github.com", StringComparison.OrdinalIgnoreCase))

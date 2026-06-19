@@ -77,11 +77,7 @@ public sealed class QueueViewModel : TrackListReorderableViewModel
         ShuffleQueueCommand = CreateCommand(
             ReactiveCommand.Create(() => Audio.ShuffleQueue()));
 
-        DownloadAllCommand = CreateCommand(ReactiveCommand.Create(() =>
-        {
-            foreach (var item in Items.Where(static x => !x.IsDownloading))
-                _downloads.StartDownload(item.Track);
-        }));
+        DownloadAllCommand = CreateCommand(ReactiveCommand.Create(OnDownloadAll));
 
         RemoveTrackCommand = CreateCommand(
             ReactiveCommand.Create<TrackItemViewModel>(item => Audio.RemoveFromQueue(item.Track)));
@@ -171,10 +167,50 @@ public sealed class QueueViewModel : TrackListReorderableViewModel
 
     #region Queue Management
 
+    /// <summary>
+    /// Синхронизирует визуальное отображение очереди с актуальным состоянием AudioEngine.
+    /// Выполняет защитную дедупликацию по ID, чтобы гарантировать стабильность 
+    /// инкрементальных обновлений в UI.
+    /// </summary>
     private void RefreshFromAudioEngine()
     {
-        // Используем эффективный инкрементальный UpdateMasterData из ReorderableViewModel
-        UpdateMasterData(Audio.Queue);
+        var queue = Audio.Queue;
+        if (queue.Count == 0)
+        {
+            UpdateMasterData([]);
+            return;
+        }
+
+        // Zero-alloc дедупликация: гарантируем UX-инвариант "один трек - одна строка"
+        var seen = new HashSet<string>(queue.Count, StringComparer.Ordinal);
+        var uniqueTracks = new List<TrackInfo>(queue.Count);
+
+        for (int i = 0; i < queue.Count; i++)
+        {
+            var track = queue[i];
+            if (track != null && seen.Add(track.Id))
+            {
+                uniqueTracks.Add(track);
+            }
+        }
+
+        UpdateMasterData(uniqueTracks);
+    }
+
+    /// <summary>
+    /// Запускает скачивание всех треков в очереди, которые еще не загружаются.
+    /// </summary>
+    private void OnDownloadAll()
+    {
+        var items = Items;
+        for (int i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            if (!item.IsDownloading && !item.Track.IsDownloaded)
+            {
+                _downloads.StartDownload(item.Track);
+            }
+        }
     }
 
     private void PlayFromQueue(TrackInfo track) => _ = Audio.PlayTrackAsync(track);
@@ -183,13 +219,13 @@ public sealed class QueueViewModel : TrackListReorderableViewModel
 
     #region Lifecycle
 
-    protected override void OnSuspend(SuspendLevel level)
+    protected override void OnSuspend()
     {
         _isSuspended = true;
         Log.Debug("[QueueVM] Suspended");
     }
 
-    protected override void OnResume(SuspendLevel previousLevel)
+    protected override void OnResume()
     {
         _isSuspended = false;
         RefreshFromAudioEngine();

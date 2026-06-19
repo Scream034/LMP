@@ -47,10 +47,12 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Opacity" Value="1" />
             <Setter Property="Transitions">
                 <Transitions>
                     <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1"
                         Easing="CubicEaseOut" />
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.2" />
                 </Transitions>
             </Setter>
         </Style>
@@ -70,7 +72,7 @@
         <Style Selector="Button.playlist-main-btn.is-playing">
             <Style.Animations>
                 <Animation Duration="0:0:1.8" IterationCount="Infinite"
-                    PlaybackDirection="Alternate" Easing="SineEaseInOut" FillMode="Both">
+                    PlaybackDirection="Alternate" Easing="SineEaseInOut">
                     <KeyFrame Cue="0%">
                         <Setter Property="Opacity" Value="1" />
                     </KeyFrame>
@@ -126,13 +128,12 @@
         <!-- Equalizer Bars Base (Stopped / Paused State) -->
         <Style Selector="Border.eq-bar">
             <Setter Property="Width" Value="4" />
-            <Setter Property="Height" Value="5" />
+            <Setter Property="Height" Value="5" /> <!-- Высота в ПАУЗЕ -->
             <Setter Property="CornerRadius" Value="2" />
             <Setter Property="Background" Value="{DynamicResource TextSecondaryBrush}" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <DoubleTransition Property="Height" Duration="0:0:0.4" Easing="CubicEaseOut" />
                     <BrushTransition Property="Background" Duration="0:0:0.15" />
                 </Transitions>
             </Setter>
@@ -144,7 +145,7 @@
         </Style>
 
         <!-- Active Playing Equalizer Bars -> Accent Color -->
-        <Style Selector="Button.playlist-main-btn.is-playing Border.eq-bar">
+        <Style Selector="Button.playlist-main-btn.is-pure Border.eq-bar">
             <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         </Style>
 

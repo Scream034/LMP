@@ -267,7 +267,7 @@ public class MainWindowViewModel : ViewModelBase
         _ = LoadPlaylistSafeAsync(playlistVM, playlistId);
     }
 
-    private async Task LoadPlaylistSafeAsync(PlaylistViewModel vm, string playlistId)
+    private static async Task LoadPlaylistSafeAsync(PlaylistViewModel vm, string playlistId)
     {
         try
         {
