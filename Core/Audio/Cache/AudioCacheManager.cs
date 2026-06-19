@@ -12,6 +12,30 @@ namespace LMP.Core.Audio.Cache;
 
 public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 {
+    /// <summary>
+    /// Текущая версия схемы metadata кэша.
+    /// </summary>
+    /// <remarks>
+    /// <list type="bullet">
+    ///   <item><b>1</b> — legacy chunk-based: <c>ChunkMaskData</c>, <c>TotalChunks</c>, <c>ChunkSize</c>.</item>
+    ///   <item><b>2</b> — range-based: <c>DownloadedRangesData</c>, <c>AlignmentBytes</c>.</item>
+    /// </list>
+    /// </remarks>
+    private const int CurrentSchemaVersion = 2;
+
+    /// <summary>
+    /// Обёртка индекса кэша с версионированием схемы.
+    /// Используется для сериализации/десериализации JSON-файла metadata.
+    /// </summary>
+    private sealed class CacheIndexEnvelope
+    {
+        /// <summary>Версия схемы metadata.</summary>
+        public int SchemaVersion { get; set; }
+
+        /// <summary>Записи кэша.</summary>
+        public List<CacheEntry> Entries { get; set; } = [];
+    }
+
     private readonly string _cacheDirectory;
     private readonly long _maxCacheSize;
     private readonly ConcurrentDictionary<string, CacheEntry> _entries = new(StringComparer.Ordinal);
@@ -371,6 +395,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         if (bitrate.HasValue) entry.Bitrate = bitrate.Value;
 
         UpdateFileSizeCache(entry);
+        DisposeHandle(cacheKey);
         Log.Info($"[AudioCache] Track fully cached: {cacheKey}");
         _ = SaveIndexAsync();
         RaiseFormatCached(entry);
@@ -380,10 +405,10 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// Записывает произвольный диапазон байт в файл кэша.
     /// </summary>
     public async ValueTask WriteRangeAsync(
-        string cacheKey,
-        long offset,
-        ReadOnlyMemory<byte> data,
-        CancellationToken ct = default)
+     string cacheKey,
+     long offset,
+     ReadOnlyMemory<byte> data,
+     CancellationToken ct = default)
     {
         if (!_entries.TryGetValue(cacheKey, out var entry)) return;
         if (data.IsEmpty) return;
@@ -415,6 +440,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                 entry.IsComplete = true;
                 entry.CompletedAt = DateTime.UtcNow;
                 entry.ActualFileSize = Math.Max(entry.ActualFileSize, entry.TotalSize);
+                DisposeHandle(cacheKey);
                 Log.Info($"[AudioCache] Track fully cached: {cacheKey}");
                 RaiseFormatCached(entry);
             }
@@ -517,7 +543,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             GetCachePath(cacheKey),
             FileMode.Open,
             FileAccess.Read,
-            FileShare.Read,
+            FileShare.ReadWrite | FileShare.Delete,
             bufferSize: CacheFileBufferSize,
             useAsync: false);
     }
@@ -574,12 +600,12 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     #region Resume Cache From Downloaded File
 
     public async Task ResumeCacheFromDownloadedFileAsync(
-        string trackId,
-        string downloadedFilePath,
-        AudioFormat format,
-        int bitrate,
-        int startChunkHint = 0,
-        CancellationToken ct = default)
+     string trackId,
+     string downloadedFilePath,
+     AudioFormat format,
+     int bitrate,
+     int startChunkHint = 0,
+     CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(trackId) || !File.Exists(downloadedFilePath))
             return;
@@ -614,7 +640,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                 downloadedFilePath,
                 FileMode.Open,
                 FileAccess.Read,
-                FileShare.Read,
+                FileShare.ReadWrite | FileShare.Delete,
                 bufferSize: CacheFileBufferSize,
                 useAsync: true);
 
@@ -637,6 +663,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                 entry.IsComplete = true;
                 entry.CompletedAt = DateTime.UtcNow;
                 entry.ActualFileSize = Math.Max(entry.ActualFileSize, entry.TotalSize);
+                DisposeHandle(cacheKey);
                 _ = SaveIndexAsync();
                 RaiseFormatCached(entry);
             }
@@ -1009,6 +1036,12 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// <summary>
     /// Проверяет целостность complete-кэша.
     /// </summary>
+    /// <remarks>
+    /// <para>Если файл физически валиден (<c>Length &gt;= TotalSize</c>), но runtime range-state
+    /// отсутствует (например, после миграции схемы или сбоя), выполняет self-heal
+    /// вместо деструктивного удаления.</para>
+    /// <para>Удаление выполняется только при реальном усечении файла на диске.</para>
+    /// </remarks>
     private bool EnsureCacheFileIntegrity(CacheEntry entry)
     {
         if (!entry.IsComplete) return false;
@@ -1019,28 +1052,33 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         {
             var fi = new FileInfo(filePath);
 
-            if (fi.Exists && fi.Length >= entry.TotalSize && entry.DownloadedBytes >= entry.TotalSize)
-                return true;
-
-            long actualSize = fi.Exists ? fi.Length : 0;
-
-            Log.Warn($"[AudioCache] ⚠ Invalid complete cache: {entry.CacheKey} " +
-                     $"(disk={actualSize / 1024}KB, expected={entry.TotalSize / 1024}KB, downloaded={entry.DownloadedBytes / 1024}KB).");
-
-            entry.IsComplete = false;
-            entry.CompletedAt = null;
-            entry.ResetDownloadedRanges();
-            entry.ActualFileSize = 0;
-
-            DisposeHandle(entry.CacheKey);
-
-            if (fi.Exists)
+            if (!fi.Exists)
             {
-                try { fi.Delete(); }
-                catch (Exception ex) { Log.Warn($"[AudioCache] Failed to delete invalid cache file: {ex.Message}"); }
+                InvalidateCompleteEntry(entry);
+                return false;
             }
 
-            _ = SaveIndexAsync();
+            if (fi.Length >= entry.TotalSize)
+            {
+                if (entry.DownloadedBytes < entry.TotalSize && entry.TotalSize > 0)
+                {
+                    entry.MarkFullyDownloaded();
+                    entry.ActualFileSize = fi.Length;
+                    Log.Info($"[AudioCache] Self-healed integrity: {entry.CacheKey}");
+                    _ = SaveIndexAsync();
+                }
+
+                return true;
+            }
+
+            Log.Warn($"[AudioCache] ⚠ Truncated cache file: {entry.CacheKey} " +
+                     $"(disk={fi.Length / 1024}KB, expected={entry.TotalSize / 1024}KB)");
+
+            InvalidateCompleteEntry(entry);
+
+            try { fi.Delete(); }
+            catch (Exception ex) { Log.Warn($"[AudioCache] Failed to delete truncated cache file: {ex.Message}"); }
+
             return false;
         }
         catch (Exception ex)
@@ -1048,6 +1086,19 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             Log.Warn($"[AudioCache] Integrity check I/O error for {entry.CacheKey}: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Сбрасывает complete-статус записи кэша и освобождает связанные ресурсы.
+    /// </summary>
+    private void InvalidateCompleteEntry(CacheEntry entry)
+    {
+        entry.IsComplete = false;
+        entry.CompletedAt = null;
+        entry.ResetDownloadedRanges();
+        entry.ActualFileSize = 0;
+        DisposeHandle(entry.CacheKey);
+        _ = SaveIndexAsync();
     }
 
     /// <summary>
@@ -1114,7 +1165,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             filePath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
-            FileShare.ReadWrite,
+            FileShare.ReadWrite | FileShare.Delete,
             FileOptions.Asynchronous | FileOptions.RandomAccess);
 
         if (_fileHandles.TryAdd(cacheKey, created))
@@ -1137,7 +1188,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             filePath,
             FileMode.Open,
             FileAccess.ReadWrite,
-            FileShare.ReadWrite,
+            FileShare.ReadWrite | FileShare.Delete,
             FileOptions.Asynchronous | FileOptions.RandomAccess);
 
         if (_fileHandles.TryAdd(cacheKey, created))
@@ -1196,23 +1247,72 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         try
         {
             string json = File.ReadAllText(indexPath);
-            var entries = JsonSerializer.Deserialize<List<CacheEntry>>(json);
+            if (string.IsNullOrWhiteSpace(json)) return;
 
-            if (entries != null)
+            int loadedSchemaVersion;
+            List<CacheEntry>? entries;
+
+            var trimmed = json.AsSpan().TrimStart();
+            if (trimmed.Length > 0 && trimmed[0] == '{')
             {
-                for (int i = 0; i < entries.Count; i++)
-                {
-                    var entry = entries[i];
-                    if (string.IsNullOrEmpty(entry.CacheKey)) continue;
+                var envelope = JsonSerializer.Deserialize<CacheIndexEnvelope>(json);
+                loadedSchemaVersion = envelope?.SchemaVersion ?? 0;
+                entries = envelope?.Entries;
+            }
+            else
+            {
+                loadedSchemaVersion = 1;
+                entries = JsonSerializer.Deserialize<List<CacheEntry>>(json);
+            }
 
-                    if (File.Exists(GetCachePath(entry.CacheKey)))
+            if (entries == null) return;
+
+            bool needsMigration = loadedSchemaVersion < CurrentSchemaVersion;
+            int migratedComplete = 0;
+            int droppedPartial = 0;
+
+            for (int i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                if (string.IsNullOrEmpty(entry.CacheKey)) continue;
+
+                string filePath = GetCachePath(entry.CacheKey);
+                if (!File.Exists(filePath)) continue;
+
+                if (needsMigration)
+                    MigrateEntry(entry, filePath, ref migratedComplete, ref droppedPartial);
+
+                entry.RestoreAfterLoad();
+
+                if (entry.IsComplete && entry.DownloadedBytes < entry.TotalSize && entry.TotalSize > 0)
+                {
+                    try
                     {
-                        entry.RestoreAfterLoad();
-                        UpdateFileSizeCache(entry);
-                        _entries.TryAdd(entry.CacheKey, entry);
-                        AddToTrackIndex(entry.TrackId, entry.CacheKey);
+                        var fi = new FileInfo(filePath);
+                        if (fi.Exists && fi.Length >= entry.TotalSize)
+                        {
+                            entry.MarkFullyDownloaded();
+                            entry.ActualFileSize = fi.Length;
+                            migratedComplete++;
+                            Log.Debug($"[AudioCache] Self-healed complete entry: {entry.CacheKey}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"[AudioCache] Self-heal I/O error for {entry.CacheKey}: {ex.Message}");
                     }
                 }
+
+                UpdateFileSizeCache(entry);
+                _entries.TryAdd(entry.CacheKey, entry);
+                AddToTrackIndex(entry.TrackId, entry.CacheKey);
+            }
+
+            if (needsMigration || migratedComplete > 0)
+            {
+                Log.Info($"[AudioCache] Schema migration v{loadedSchemaVersion}→v{CurrentSchemaVersion}: " +
+                         $"{migratedComplete} complete restored, {droppedPartial} partial reset");
+                _ = SaveIndexAsync();
             }
 
             Log.Debug($"[AudioCache] Loaded {_entries.Count} entries");
@@ -1220,6 +1320,58 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         catch (Exception ex)
         {
             Log.Warn($"[AudioCache] Failed to load index: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Мигрирует запись со старой chunk-based схемы на текущую range-based.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Complete без range-state:</b> восстанавливается по физическому файлу.
+    /// Если файл на диске <c>&gt;= TotalSize</c>, range-state генерируется как <c>[0..TotalSize)</c>.</para>
+    /// <para><b>Partial без range-state:</b> coverage сбрасывается. Файл сохраняется на диске
+    /// для возможной перезаписи при повторном кэшировании.</para>
+    /// </remarks>
+    private static void MigrateEntry(
+        CacheEntry entry,
+        string filePath,
+        ref int migratedComplete,
+        ref int droppedPartial)
+    {
+        if (entry.AlignmentBytes <= 0)
+            entry.AlignmentBytes = ChunkSize;
+
+        bool hasRangeState = entry.DownloadedRangesData is { Count: > 0 };
+
+        if (entry.IsComplete && !hasRangeState)
+        {
+            try
+            {
+                var fi = new FileInfo(filePath);
+                if (fi.Exists && fi.Length >= entry.TotalSize && entry.TotalSize > 0)
+                {
+                    entry.MarkFullyDownloaded();
+                    entry.ActualFileSize = fi.Length;
+                    migratedComplete++;
+                }
+                else
+                {
+                    entry.IsComplete = false;
+                    entry.CompletedAt = null;
+                    droppedPartial++;
+                }
+            }
+            catch
+            {
+                entry.IsComplete = false;
+                entry.CompletedAt = null;
+                droppedPartial++;
+            }
+        }
+        else if (!entry.IsComplete && !hasRangeState)
+        {
+            entry.ResetDownloadedRanges();
+            droppedPartial++;
         }
     }
 
@@ -1236,12 +1388,55 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             for (int i = 0; i < entries.Count; i++)
                 entries[i].PrepareForSave();
 
-            string json = JsonSerializer.Serialize(entries, s_jsonOptions);
+            var envelope = new CacheIndexEnvelope
+            {
+                SchemaVersion = CurrentSchemaVersion,
+                Entries = entries
+            };
+
+            string json = JsonSerializer.Serialize(envelope, s_jsonOptions);
             await File.WriteAllTextAsync(indexPath, json).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             Log.Warn($"[AudioCache] Failed to save index: {ex.Message}");
+        }
+        finally
+        {
+            _saveLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Синхронно сохраняет индекс кэша.
+    /// Используется только в shutdown-path, чтобы не терять metadata/gain
+    /// при sync dispose приложения.
+    /// </summary>
+    private void SaveIndexSync()
+    {
+        if (_disposed) return;
+        if (!_saveLock.Wait(CacheSaveLockTimeoutMs)) return;
+
+        try
+        {
+            var indexPath = Path.Combine(_cacheDirectory, CacheMetadataFileName);
+            var entries = _entries.Values.ToList();
+
+            for (int i = 0; i < entries.Count; i++)
+                entries[i].PrepareForSave();
+
+            var envelope = new CacheIndexEnvelope
+            {
+                SchemaVersion = CurrentSchemaVersion,
+                Entries = entries
+            };
+
+            string json = JsonSerializer.Serialize(envelope, s_jsonOptions);
+            File.WriteAllText(indexPath, json);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioCache] Failed to sync save index: {ex.Message}");
         }
         finally
         {
@@ -1276,8 +1471,10 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true;
 
+        SaveIndexSync();
+
+        _disposed = true;
         _timerCts.Cancel();
         DisposeAllHandles();
 

@@ -189,6 +189,47 @@ public sealed partial class AudioEngine
     }
 
     /// <summary>
+    /// Синхронно дренирует очередь отложенных записей gain нормализации в БД.
+    /// Используется только в sync shutdown-path как best-effort fallback.
+    /// </summary>
+    private void FlushPendingGainWritesSync()
+    {
+        if (_pendingGainWrites.IsEmpty) return;
+
+        _gainBatch.Clear();
+        while (_pendingGainWrites.TryDequeue(out var pending))
+            _gainBatch[pending.TrackId] = pending.Gain;
+
+        if (_gainBatch.Count == 0) return;
+
+        foreach (var (trackId, gain) in _gainBatch)
+        {
+            try
+            {
+                var track = _trackRegistry.TryGet(trackId) ?? _library.GetTrack(trackId);
+                if (track != null)
+                {
+                    _library.AddOrUpdateTrackAsync(track, CancellationToken.None)
+                        .ConfigureAwait(false)
+                        .GetAwaiter()
+                        .GetResult();
+                }
+                else
+                {
+                    _library.SaveTrackNormalizationGainAsync(trackId, gain, CancellationToken.None)
+                        .ConfigureAwait(false)
+                        .GetAwaiter()
+                        .GetResult();
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Warn($"[AudioEngine] Failed to sync persist gain for {trackId}: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
     /// Дренирует очередь отложенных записей gain нормализации в БД.
     /// </summary>
     private async Task FlushPendingGainWritesAsync(CancellationToken ct)

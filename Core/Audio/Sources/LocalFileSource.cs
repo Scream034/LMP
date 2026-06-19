@@ -101,13 +101,13 @@ public sealed class LocalFileSource : IAudioSource
         try
         {
             _fileStream = new FileStream(
-                _filePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                bufferSize: CacheFileBufferSize, useAsync: true);
+                _filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: CacheFileBufferSize,
+                useAsync: true);
 
-            // Defense-in-depth: если вызывающий код передал ожидаемый размер,
-            // проверяем что файл не усечён ДО парсинга заголовков.
-            // Основная проверка — в AudioCacheManager.EnsureCacheFileIntegrity,
-            // но между lookup и open файл мог измениться (race condition).
             if (_expectedSize > 0 && _fileStream.Length < _expectedSize)
             {
                 Log.Error($"[LocalFileSource] Truncated file rejected: " +
@@ -116,10 +116,10 @@ public sealed class LocalFileSource : IAudioSource
                 return false;
             }
 
-            var format = await DetectFormatAsync(ct);
+            var format = await DetectFormatAsync(ct).ConfigureAwait(false);
             _parser = CreateParser(format);
 
-            if (!await _parser.ParseHeadersAsync(ct))
+            if (!await _parser.ParseHeadersAsync(ct).ConfigureAwait(false))
             {
                 Log.Error("[LocalFileSource] Failed to parse container headers");
                 return false;

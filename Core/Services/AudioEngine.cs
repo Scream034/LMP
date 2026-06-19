@@ -1509,8 +1509,8 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     /// </summary>
     /// <remarks>
     /// Best-effort cleanup без блокирующего ожидания async операций.
-    /// НЕ ожидает flush pending gain writes — возможна потеря последних записей.
-    /// Для корректного flush использовать <see cref="DisposeAsync"/>.
+    /// Для минимизации потерь выполняет синхронный flush pending gain writes,
+    /// но основной корректный shutdown-path остаётся за <see cref="DisposeAsync"/>.
     /// </remarks>
     private void Dispose(bool disposing)
     {
@@ -1521,6 +1521,15 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             _youtube.OnNTokenDecryptionStarted -= HandleNTokenDecryptionStarted;
             lock (_sessionLock) { _sessionCts?.Cancel(); _sessionCts?.Dispose(); }
 
+            try
+            {
+                FlushPendingGainWritesSync();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[AudioEngine] Sync gain flush on dispose failed: {ex.Message}");
+            }
+
             _library.UpdateSettings(s =>
             {
                 s.Volume = _volumePercent;
@@ -1528,11 +1537,9 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                 s.ShuffleEnabled = ShuffleEnabled;
             });
 
-            // Закрываем канал явно, затем cancel — максимально быстрое завершение loop'а
             _commandQueue.Writer.TryComplete();
             _lifetimeCts.Cancel();
 
-            // Best-effort блокирующее ожидание: короткий таймаут, не блокируем UI надолго
             try { _commandProcessorTask?.Wait(millisecondsTimeout: 500); } catch { }
             try { _volumeSaveTask?.Wait(millisecondsTimeout: 200); } catch { }
 
@@ -1562,7 +1569,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         });
 
         // 3. Async flush gain writes — hard timeout без блокировки UI
-        using (var flushCts = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+        using (var flushCts = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
         {
             try { await FlushPendingGainWritesAsync(flushCts.Token).ConfigureAwait(false); }
             catch (Exception ex)

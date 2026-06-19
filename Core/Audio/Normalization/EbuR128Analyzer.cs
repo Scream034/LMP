@@ -534,10 +534,6 @@ public sealed class EbuR128Analyzer
         double scannedSeconds = totalFrames / (double)_sampleRate;
         Log.Debug($"[EbuR128] Pre-scan: gain={rawGain:F3}x " +
                   $"(scanned {scannedSeconds:F1}s, blocks={blockCount}, target={_targetLufs}LUFS)");
-        
-        // Stacktrace
-        var stackTrace = new System.Diagnostics.StackTrace(1, true);
-        Log.Debug($"[EbuR128] Pre-scan called from: {stackTrace}");
 #endif
 
         return rawGain;
