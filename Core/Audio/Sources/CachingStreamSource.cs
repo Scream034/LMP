@@ -224,6 +224,27 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <summary>Прогресс буферизации (0–100%).</summary>
     public double BufferProgress => _cacheEntry?.DownloadProgress ?? 0;
 
+    /// <summary>
+    /// Оценка непрерывного буфера вперёд от текущей позиции чтения в миллисекундах.
+    /// </summary>
+    /// <remarks>
+    /// Использует локально доступные и in-flight диапазоны.
+    /// Нужен для latency-aware решения о безопасном открытии playback gate.
+    /// </remarks>
+    public int BufferedAheadMs
+    {
+        get
+        {
+            if (!_initialized) return 0;
+
+            long position = Volatile.Read(ref _currentReadOffset);
+            if (position < 0 || position >= _contentLength) return 0;
+
+            long bufferedAhead = GetBufferedBytesAheadIncludingInflight(position);
+            return ConvertBufferedBytesToMs(bufferedAhead);
+        }
+    }
+
     /// <summary>Полностью ли загружен трек на диск.</summary>
     public bool IsFullyBuffered => _cacheEntry?.IsComplete ?? false;
 
@@ -405,17 +426,35 @@ public sealed partial class CachingStreamSource : IAudioSource
         if (position >= _contentLength) return 0;
 
         var deg = GetNetworkDegradationLevel();
+
+        // На high-latency сети нужен больший contiguous startup prefix,
+        // иначе decoder/parse path получает один маленький кусок, но не может
+        // стабильно пройти дальше до следующего cluster/block.
         int desiredMs = deg switch
         {
-            NetworkDegradationLevel.Critical => 4000,
-            NetworkDegradationLevel.Degraded => 3000,
-            _ => 2500
+            NetworkDegradationLevel.Critical => 8000,
+            NetworkDegradationLevel.Degraded => 5000,
+            _ => 3000
+        };
+
+        int minClamp = deg switch
+        {
+            NetworkDegradationLevel.Critical => 96 * 1024,
+            NetworkDegradationLevel.Degraded => 64 * 1024,
+            _ => 32 * 1024
+        };
+
+        int maxClamp = deg switch
+        {
+            NetworkDegradationLevel.Critical => 256 * 1024,
+            NetworkDegradationLevel.Degraded => 192 * 1024,
+            _ => 128 * 1024
         };
 
         double bitrateBps = Math.Max(1, _bitrate) * 1000.0 / 8.0;
         int byTime = (int)Math.Ceiling(bitrateBps * desiredMs / 1000.0);
         int required = Math.Max(_requestAlignmentBytes * 2, AlignUp(byTime, _requestAlignmentBytes));
-        required = Math.Clamp(required, 32 * 1024, 128 * 1024);
+        required = Math.Clamp(required, minClamp, maxClamp);
 
         long remaining = _contentLength - position;
         return (int)Math.Min(required, remaining);
@@ -443,7 +482,17 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// Вычисляет адаптивный таймаут ожидания critical-range при seek.
     /// </summary>
     /// <param name="expectedBytes">Ожидаемый объём критического диапазона.</param>
-    /// <returns>Таймаут в миллисекундах, clamped в [1500, 5000].</returns>
+    /// <returns>
+    /// Таймаут в миллисекундах, учитывающий RTT, пропускную способность
+    /// и стоимость переподключения на высоколатентных сетях.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Предыдущий верхний clamp 5000ms был слишком агрессивен для high-latency сетей:
+    /// первый полезный contiguous startup prefix мог приезжать через 8–12 секунд,
+    /// хотя сама пропускная способность оставалась достаточной для playback.
+    /// </para>
+    /// </remarks>
     private int ComputeAdaptiveSeekCriticalTimeoutMs(int expectedBytes)
     {
         double avgLatencyMs;
@@ -460,10 +509,16 @@ public sealed partial class CachingStreamSource : IAudioSource
         double effectiveBps = bw > 0 ? Math.Max(bw * 0.35, fallbackBps) : fallbackBps;
 
         double transferMs = expectedBytes / effectiveBps * 1000.0;
-        double latencyBudgetMs = Math.Max(250.0, avgLatencyMs * 1.5);
 
-        int timeoutMs = (int)Math.Ceiling(latencyBudgetMs + transferMs + 500.0);
-        return Math.Clamp(timeoutMs, 1500, 5000);
+        // На high-latency сети учитываем не только RTT запроса,
+        // но и стоимость установления/переподъёма полезной цепочки байт для parser.
+        double latencyBudgetMs = avgLatencyMs > 0
+            ? Math.Max(800.0, avgLatencyMs * 3.0)
+            : 1500.0;
+
+        int timeoutMs = (int)Math.Ceiling(latencyBudgetMs + transferMs + 1000.0);
+
+        return Math.Clamp(timeoutMs, 2500, 15000);
     }
 
     #endregion

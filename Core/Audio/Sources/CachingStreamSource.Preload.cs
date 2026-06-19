@@ -33,10 +33,22 @@ public sealed partial class CachingStreamSource
     /// Фоновый цикл предзагрузки диапазонов.
     /// Удерживает буфер вокруг текущей позиции, учитывает in-flight загрузки,
     /// адаптирует параллелизм и размер запросов к состоянию сети.
+    /// Добавлена логика opportunistic completion: если трек почти скачан,
+    /// preload loop докачивает оставшиеся gaps до полного кэширования.
     /// </summary>
     private async Task PreloadLoopAsync(CancellationToken ct)
     {
         bool justResumed = false;
+
+        /// <summary>
+        /// Порог "почти скачан" — если скачано >= этого процента, включается completion fill.
+        /// </summary>
+        const double CompletionFillThresholdPercent = 90.0;
+
+        /// <summary>
+        /// Максимальный абсолютный размер недокачки, при котором включается completion fill.
+        /// </summary>
+        const long CompletionFillMaxRemainingBytes = 512 * 1024;
 
 #if DEBUG
         int lastReportedProgress = -1;
@@ -161,6 +173,26 @@ public sealed partial class CachingStreamSource
                         break;
                 }
 
+                // ── Opportunistic completion fill ──
+                // Если трек почти скачан — добиваем оставшиеся gaps,
+                // независимо от текущей позиции воспроизведения.
+                if (pending < adaptiveMaxDownloads && !_cacheEntry.IsComplete)
+                {
+                    long downloadedBytes = _cacheEntry.DownloadedBytes;
+                    long totalSize = _cacheEntry.TotalSize;
+                    long remainingBytes = totalSize - downloadedBytes;
+
+                    bool shouldCompletionFill = totalSize > 0
+                        && ((_cacheEntry.DownloadProgress >= CompletionFillThresholdPercent)
+                            || (remainingBytes > 0 && remainingBytes <= CompletionFillMaxRemainingBytes));
+
+                    if (shouldCompletionFill)
+                    {
+                        await TryCompletionFillAsync(token, adaptiveMaxDownloads - pending, ct)
+                            .ConfigureAwait(false);
+                    }
+                }
+
                 // ── Trim RAM cache ──
                 if (_ramCache.TotalBytes > _config.MaxRamBytes)
                     ReleaseRamBuffers();
@@ -177,6 +209,68 @@ public sealed partial class CachingStreamSource
             }
             catch (OperationCanceledException) { break; }
             catch { /* Защита от неожиданных исключений в фоновом цикле */ }
+        }
+    }
+
+    /// <summary>
+    /// Сканирует все скачанные диапазоны и заполняет первые найденные gaps.
+    /// </summary>
+    /// <param name="downloadToken">Токен текущей эпохи загрузки.</param>
+    /// <param name="maxRequests">Максимальное количество одновременных запросов.</param>
+    /// <param name="ct">Внешний токен отмены.</param>
+    private async Task TryCompletionFillAsync(
+        CancellationToken downloadToken,
+        int maxRequests,
+        CancellationToken ct)
+    {
+        if (_cacheEntry == null || _cacheEntry.IsComplete || maxRequests <= 0)
+            return;
+
+        long totalSize = _cacheEntry.TotalSize;
+        if (totalSize <= 0) return;
+
+        var ranges = _cacheEntry.GetDownloadedRangesSnapshot();
+        int fired = 0;
+
+        // Ищем gap перед первым диапазоном
+        long scanPosition = 0;
+
+        for (int i = 0; i <= ranges.Length && fired < maxRequests; i++)
+        {
+            long gapStart;
+            long gapEnd;
+
+            if (i < ranges.Length)
+            {
+                gapStart = scanPosition;
+                gapEnd = ranges[i].Start;
+                scanPosition = ranges[i].EndExclusive;
+            }
+            else
+            {
+                // gap после последнего диапазона до конца файла
+                gapStart = scanPosition;
+                gapEnd = totalSize;
+            }
+
+            if (gapEnd <= gapStart)
+                continue;
+
+            long gapLength = gapEnd - gapStart;
+            if (gapLength <= 0)
+                continue;
+
+            // Ограничиваем размер одного запроса
+            int requestLength = (int)Math.Min(gapLength, _config.MaxRequestSizeBytes);
+
+            _ = SafeEnsureRangeAsync(gapStart, requestLength, downloadToken, isCritical: false);
+            fired++;
+        }
+
+        if (fired > 0)
+        {
+            Log.Debug($"[CachingSource] Completion fill: {fired} gap request(s) fired " +
+                      $"({_cacheEntry.DownloadProgress:F0}% → 100%)");
         }
     }
 

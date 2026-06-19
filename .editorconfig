@@ -20,6 +20,7 @@ dotnet_diagnostic.CA1031.severity = none
 dotnet_diagnostic.CA1062.severity = none
 dotnet_diagnostic.IDE0058.severity = none
 dotnet_diagnostic.IDE0290.severity = none
+dotnet_diagnostic.CA1068.severity = none
 
 # Отключаем все StyleCop правила в Debug
 dotnet_analyzer_diagnostic.category-StyleCop.CSharp.MaintainabilityRules.severity = none
