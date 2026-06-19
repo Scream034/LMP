@@ -287,7 +287,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
 
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        var trackIdList = trackIds as IList<string> ?? trackIds.ToList();
+        var trackIdList = trackIds as IList<string> ?? [.. trackIds];
         if (trackIdList.Count == 0) return 0;
 
         var existingTrackIds = await ctx.Tracks

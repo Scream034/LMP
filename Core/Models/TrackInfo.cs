@@ -284,7 +284,7 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TrySetGainFromLoudness(float loudnessDb)
     {
-        if (float.IsNaN(loudnessDb) || !float.IsFinite(loudnessDb)) return false;
+        if (!HasYoutubeLoudnessDb) return false;
         YoutubeIntegratedLoudnessDb = loudnessDb;
         return true;
     }

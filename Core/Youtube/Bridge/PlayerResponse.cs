@@ -273,6 +273,10 @@ internal partial class PlayerResponse(JsonElement content)
                     return stream.LoudnessDb;
             }
 
+#if DEBUG
+            Log.Warn("[PlayerResponse] LoudnessDb not found in playerConfig.audioConfig or any stream metadata. Returning NaN.");
+#endif
+
             return float.NaN;
         }
     }
@@ -497,11 +501,26 @@ internal partial class PlayerResponse
                 ?.GetBooleanOrNull();
 
         /// <inheritdoc/>
-        public float LoudnessDb =>
-            _content
-                .GetPropertyOrNull("loudnessDb")
-                ?.GetDoubleOrNull()
-                ?.Pipe(static d => (float)d) ?? float.NaN;
+        public float LoudnessDb
+        {
+            get;
+
+            set
+            {
+                field = _content
+                    .GetPropertyOrNull("loudnessDb")
+                    ?.GetDoubleOrNull()
+                    ?.Pipe(static d => (float)d) ?? float.NaN;
+
+#if DEBUG
+                if (!float.IsNaN(value) && !float.IsFinite(value))
+                {
+                    Log.Warn($"[StreamData] itag={Itag}: Invalid loudnessDb value: {value}");
+                    value = float.NaN;
+                }
+#endif
+            }
+        }
 
         /// <inheritdoc/>
         public string? VideoCodec

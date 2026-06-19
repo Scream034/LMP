@@ -113,6 +113,67 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         && entry.IsComplete
         && EnsureCacheFileIntegrity(entry);
 
+    /// <summary>
+    /// Возвращает лучший локальный кэш для быстрого старта partially cached трека.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    /// <param name="minContiguousBytes">
+    /// Минимальный непрерывный префикс от начала файла, достаточный для fast-start.
+    /// </param>
+    /// <returns>
+    /// Лучшую запись кэша, если найден локальный contiguous prefix достаточной длины;
+    /// иначе <c>null</c>.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// В отличие от <see cref="FindBestCache(string)"/>, этот метод подходит и для
+    /// partially cached треков. Он не требует <see cref="CacheEntry.IsComplete"/>,
+    /// а оценивает непрерывный префикс от позиции 0.
+    /// </para>
+    /// <para>
+    /// Используется для режима Partial Cache Fast Start:
+    /// playback стартует сразу из локального кэша, а continuation URL готовится в фоне.
+    /// </para>
+    /// </remarks>
+    public CacheEntry? FindBestStartupCache(string trackId, int minContiguousBytes)
+    {
+        if (string.IsNullOrEmpty(trackId)) return null;
+        if (!_trackIndex.TryGetValue(trackId, out var keys)) return null;
+
+        CacheEntry? best = null;
+        long bestContiguous = long.MinValue;
+
+        foreach (var key in keys.Keys)
+        {
+            if (!_entries.TryGetValue(key, out var entry))
+                continue;
+
+            string path = GetCachePath(entry.CacheKey);
+            if (!File.Exists(path))
+                continue;
+
+            if (entry.IsComplete && !EnsureCacheFileIntegrity(entry))
+                continue;
+
+            long contiguous = entry.IsComplete
+                ? entry.TotalSize
+                : entry.GetContiguousDownloadedBytesFrom(0);
+
+            if (contiguous < minContiguousBytes)
+                continue;
+
+            if (best == null
+                || contiguous > bestContiguous
+                || (contiguous == bestContiguous && entry.Bitrate > best.Bitrate))
+            {
+                best = entry;
+                bestContiguous = contiguous;
+            }
+        }
+
+        return best;
+    }
+
     public CacheEntry? FindBestCache(string trackId)
     {
         if (!_trackIndex.TryGetValue(trackId, out var keys)) return null;
@@ -1463,7 +1524,7 @@ public sealed class CacheEntry
             if (_downloadedRanges is not { Count: > 0 })
                 return [];
 
-            return _downloadedRanges.ToArray();
+            return [.. _downloadedRanges];
         }
     }
 

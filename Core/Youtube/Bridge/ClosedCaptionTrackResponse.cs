@@ -22,7 +22,7 @@ internal partial class ClosedCaptionTrackResponse
             ((double?)content.Attribute("d"))?.Pipe(TimeSpan.FromMilliseconds);
 
         public IReadOnlyList<PartData> Parts =>
-            content.Elements("s").Select(x => new PartData(x)).ToArray();
+            [.. content.Elements("s").Select(x => new PartData(x))];
     }
 }
 

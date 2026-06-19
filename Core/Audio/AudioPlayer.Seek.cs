@@ -7,13 +7,10 @@ namespace LMP.Core.Audio;
 
 public sealed partial class AudioPlayer
 {
-    #region Seek Constants
 
-    private const int SeekWarmupTimeoutMs = 150;
-    private const int SeekWarmupTimeoutCachedMs = 50;
+    #region Seek Constants
     private const int SeekLoopMaxIterations = 50;
     private const int ReSeekDecoderStopTimeoutMs = 200;
-    private const double FastSourceBufferThreshold = 80.0;
     private const int SourceSeekTimeoutMs = 500;
     private const int DeferredSeekResumeTimeoutMs = 30_000;
 

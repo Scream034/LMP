@@ -41,7 +41,7 @@ public sealed partial class TrackRepository : ITrackRepository
     /// <inheritdoc />
     public async Task<List<TrackInfo>> GetByIdsAsync(IEnumerable<string> ids, string ownerId, CancellationToken ct = default)
     {
-        var idList = ids as IList<string> ?? ids.ToList();
+        var idList = ids as IList<string> ?? [.. ids];
         if (idList.Count == 0) return [];
 
         await using var ctx = await _factory.CreateDbContextAsync(ct);
@@ -228,7 +228,7 @@ public sealed partial class TrackRepository : ITrackRepository
     /// <inheritdoc />
     public async Task UpsertBatchAsync(IEnumerable<TrackInfo> tracks, CancellationToken ct = default)
     {
-        var trackList = tracks as IList<TrackInfo> ?? tracks.ToList();
+        var trackList = tracks as IList<TrackInfo> ?? [.. tracks];
         if (trackList.Count == 0) return;
 
         await using var ctx = await _factory.CreateDbContextAsync(ct);

@@ -560,19 +560,7 @@ public sealed partial class CachingStreamSource : IAudioSource
     }
 
     #endregion
-
     #region Warning Events
-
-    /// <summary>
-    /// Публикует предупреждение о non-fatal сетевой проблеме.
-    /// </summary>
-    /// <param name="rangeStart">Начало проблемного диапазона.</param>
-    /// <param name="ex">Исключение-причина.</param>
-    private void RaiseSourceWarning(long rangeStart, Exception ex)
-    {
-        try { OnSourceWarning?.Invoke(_trackId, ex); }
-        catch (Exception logEx) { Log.Warn($"[CachingSource] Failed to raise warning event: {logEx.Message}"); }
-    }
 
     #endregion
 
@@ -603,8 +591,30 @@ public sealed partial class CachingStreamSource : IAudioSource
                 _config.InitialPrebufferBytes,
                 (int)Math.Min(_contentLength, int.MaxValue));
 
-            await EnsureRangeAsync(0, initialBytes, _lifetimeCts.Token, isCritical: true)
-                .ConfigureAwait(false);
+            // Partial Cache Fast Start:
+            // если у нас уже есть достаточный contiguous local prefix от начала файла,
+            // НЕ делаем обязательный сетевой bootstrap.
+            // Это позволяет стартовать parser/decoder немедленно, а continuation URL
+            // получать параллельно в фоне.
+            bool hasLocalBootstrap = HasLocalInitialBootstrapData(initialBytes);
+
+            if (!hasLocalBootstrap)
+            {
+                // Если URL ещё не готов (partial fast start path), сначала лениво получаем continuation URL.
+                if (string.IsNullOrWhiteSpace(_currentUrl))
+                {
+                    bool urlReady = await EnsureUrlAvailableAsync(_lifetimeCts.Token).ConfigureAwait(false);
+                    if (!urlReady)
+                        throw new InvalidOperationException("Failed to acquire continuation URL for source initialization");
+                }
+
+                await EnsureRangeAsync(0, initialBytes, _lifetimeCts.Token, isCritical: true)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                Log.Debug($"[CachingSource] Local bootstrap prefix is sufficient: {initialBytes} bytes");
+            }
 
             _readStream = new AsyncCachingReadStream(this);
             _parser = CreateParser(_readStream);
@@ -630,6 +640,24 @@ public sealed partial class CachingStreamSource : IAudioSource
             Log.Error($"[CachingSource] Init failed: {ex.Message}", ex);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Проверяет, достаточно ли локально доступных данных от начала файла
+    /// для безопасного bootstrap-старта parser/decoder без сетевого запроса.
+    /// </summary>
+    /// <param name="initialBytes">Минимальный стартовый префикс в байтах.</param>
+    /// <returns>
+    /// <c>true</c>, если contiguous local prefix от позиции 0 уже достаточен;
+    /// иначе <c>false</c>.
+    /// </returns>
+    private bool HasLocalInitialBootstrapData(int initialBytes)
+    {
+        if (_cacheEntry == null || initialBytes <= 0)
+            return false;
+
+        long contiguous = _cacheEntry.GetContiguousDownloadedBytesFrom(0);
+        return contiguous >= initialBytes;
     }
 
     /// <summary>Выбирает парсер контейнера на основе формата трека.</summary>
@@ -831,6 +859,44 @@ public sealed partial class CachingStreamSource : IAudioSource
         else _playbackGate.Reset();
 
         Log.Debug($"[CachingSource] Playback active state updated: {active}");
+    }
+
+    /// <summary>
+    /// Пытается прикрепить continuation URL, полученный out-of-band,
+    /// к уже работающему source.
+    /// </summary>
+    /// <param name="url">Готовый финальный stream URL.</param>
+    /// <returns>
+    /// <c>true</c>, если URL был принят;
+    /// <c>false</c>, если source уже имел URL, был disposed или входной URL невалиден.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Используется режимом Partial Cache Fast Start:
+    /// playback уже стартовал из локального partial cache, а continuation URL
+    /// был подготовлен в фоне и теперь должен быть немедленно доступен
+    /// при первом network miss.
+    /// </para>
+    /// <para>
+    /// Метод intentionally одноразовый: если <see cref="_currentUrl"/> уже заполнен,
+    /// новый URL не перезаписывает текущее значение, чтобы не ломать активную сеть/epoch.
+    /// </para>
+    /// </remarks>
+    internal bool TryAttachContinuationUrl(string url)
+    {
+        if (_disposed) return false;
+        if (string.IsNullOrWhiteSpace(url)) return false;
+
+        if (!string.IsNullOrWhiteSpace(_currentUrl))
+            return false;
+
+        _currentUrl = url;
+
+        if (_cacheEntry != null)
+            _cacheEntry.OriginalUrl = url;
+
+        Log.Debug("[CachingSource] Continuation URL attached externally");
+        return true;
     }
 
     #endregion

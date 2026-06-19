@@ -132,11 +132,45 @@ public static class AudioSourceFactory
 
         if (string.IsNullOrEmpty(url))
         {
+            // Полностью закэшированный трек → LocalFileSource
             var cached = FindAnyCachedTrack(trackId);
             if (cached != null)
             {
-                Log.Info($"[AudioSourceFactory] Using cached: {trackId} ({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
-                return new LocalFileSource(cached.Value.Path, cached.Value.Entry.TotalSize, trackId);
+                Log.Info($"[AudioSourceFactory] Using cached: {trackId} " +
+                         $"({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
+                return new LocalFileSource(
+                    cached.Value.Path,
+                    cached.Value.Entry.TotalSize,
+                    trackId);
+            }
+
+            // Partial Cache Fast Start:
+            // AudioEngine мог намеренно передать пустой URL как сигнал:
+            // "локального contiguous префикса уже хватает для старта,
+            // continuation URL будет поднят лениво через urlRefresher".
+            int bootstrapBytes = Math.Min(
+                config.InitialPrebufferBytes,
+                int.MaxValue);
+
+            var startupEntry = _globalCacheManager.FindBestStartupCache(trackId, bootstrapBytes);
+            if (startupEntry != null)
+            {
+                Log.Info($"[AudioSourceFactory] Partial-cache bootstrap: {trackId} " +
+                         $"({startupEntry.Format}/{startupEntry.Bitrate}kbps, " +
+                         $"prefix={startupEntry.GetContiguousDownloadedBytesFrom(0) / 1024}KB)");
+
+                return new CachingStreamSource(
+                    startupEntry.CacheKey,
+                    trackId,
+                    url: string.Empty,
+                    contentLength: startupEntry.TotalSize,
+                    format: startupEntry.Format,
+                    codec: startupEntry.Codec,
+                    bitrate: startupEntry.Bitrate > 0 ? startupEntry.Bitrate : bitrateHint,
+                    httpClient: httpClient,
+                    cacheManager: _globalCacheManager,
+                    config: config,
+                    urlRefresher: urlRefresher);
             }
 
             throw new ArgumentException("No URL provided and no cache available", nameof(url));

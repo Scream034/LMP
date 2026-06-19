@@ -2,16 +2,14 @@ using System.Globalization;
 using System.Net;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-using LMP.Core.Youtube.Utils;
 using LMP.Core.Helpers.Extensions;
-using LMP.Core.Helpers;
 
 namespace LMP.Core.Youtube.Bridge;
 
 internal partial class DashManifest(XElement content)
 {
     public IReadOnlyList<IStreamData> Streams =>
-        content
+        [.. content
             .Descendants("Representation")
             // Skip non-media representations (like "rawcc")
             // https://github.com/Tyrrrz/YoutubeExplode/issues/546
@@ -26,8 +24,7 @@ internal partial class DashManifest(XElement content)
             )
             // Skip streams without codecs
             .Where(x => !string.IsNullOrWhiteSpace(x.Attribute("codecs")?.Value))
-            .Select(x => new StreamData(x))
-            .ToArray();
+            .Select(x => new StreamData(x))];
 }
 
 internal partial class DashManifest

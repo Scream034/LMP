@@ -28,7 +28,6 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     private const int DisposeTaskTimeoutSec = 2;
     private const int ResumeMinBufferMs = 100;
     private const int ResumeWarmupTimeoutMs = 500;
-    private const int PlayBufferWaitTimeoutMs = 5000;
     private const int BitsPerByte = 8;
 
     #endregion

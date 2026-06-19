@@ -139,7 +139,7 @@ public sealed partial class CachingStreamSource
 
         public RamRangeBlock[] GetRangesSnapshot()
         {
-            lock (_lock) { return _blocks.Count == 0 ? [] : _blocks.ToArray(); }
+            lock (_lock) { return _blocks.Count == 0 ? [] : [.. _blocks]; }
         }
 
         public void Trim(long centerOffset, long evictionWindowBytes, long maxRamBytes)
@@ -252,15 +252,6 @@ public sealed partial class CachingStreamSource
         if (multiplier <= 0) return 0;
         double bitrateBytesPerSec = Math.Max(1, _bitrate) * 1000.0 / 8.0;
         return bitrateBytesPerSec * multiplier;
-    }
-
-    private int ComputePacingDelayMs(int downloadedBytes, double elapsedMs)
-    {
-        double targetBps = GetThrottleTargetBytesPerSec();
-        if (targetBps <= 0) return 0;
-        double targetMs = (downloadedBytes / targetBps) * 1000.0;
-        int delayMs = (int)(targetMs - elapsedMs);
-        return delayMs > 10 ? delayMs : 0;
     }
 
     #endregion
@@ -716,19 +707,6 @@ public sealed partial class CachingStreamSource
         return RangeDownloadResult.NetworkError;
     }
 
-    private void CheckCircuitBreaker(int logicalIndex)
-    {
-        int failures = Volatile.Read(ref _consecutive403Count);
-        if (failures >= _config.Max403BeforeCircuitBreak)
-            throw new ChunkDownloadFatalException($"Circuit breaker OPEN: {failures} consecutive 403s", chunkIndex: logicalIndex, consecutiveFailures: failures, reason: ChunkDownloadFailureReason.Forbidden403, trackId: _trackId, httpStatusCode: 403);
-    }
-
-    private int ComputeRetryDelay(int attempt)
-    {
-        int baseDelay = _config.NetworkRetryBaseDelayMs;
-        return _config.UseExponentialBackoff ? Math.Min(baseDelay * (1 << attempt), 10_000) : baseDelay;
-    }
-
     #endregion
 
     #region DownloadRangeCoreAsync
@@ -750,6 +728,16 @@ public sealed partial class CachingStreamSource
             if (_disposed) return RangeDownloadResult.Cancelled;
             if (ct.IsCancellationRequested) return RangeDownloadResult.Cancelled;
             if (IsRangeLocallyAvailable(plan.Start, plan.Length)) return RangeDownloadResult.Success;
+
+            if (string.IsNullOrWhiteSpace(_currentUrl))
+            {
+                bool urlReady = await EnsureUrlAvailableAsync(ct).ConfigureAwait(false);
+                if (!urlReady)
+                {
+                    Log.Warn($"[CachingSource] Range {plan.Start}: continuation URL is unavailable");
+                    return ct.IsCancellationRequested ? RangeDownloadResult.Cancelled : RangeDownloadResult.NetworkError;
+                }
+            }
 
             return await DownloadRangeHttpAsync(plan, ct).ConfigureAwait(false);
         }
@@ -997,6 +985,59 @@ public sealed partial class CachingStreamSource
     #endregion
 
     #region URL Refresh
+
+    /// <summary>
+    /// Гарантирует наличие валидного stream URL перед первой сетевой загрузкой.
+    /// </summary>
+    /// <param name="ct">Токен отмены.</param>
+    /// <returns>
+    /// <c>true</c>, если URL доступен;
+    /// <c>false</c>, если получить URL не удалось.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Используется для режима Partial Cache Fast Start:
+    /// source стартует из локального partial cache без готового URL,
+    /// а continuation URL может быть ещё не подготовлен.
+    /// </para>
+    /// <para>
+    /// На первом реальном network miss source лениво получает URL через
+    /// <see cref="_urlRefresher"/>, не блокируя startup path заранее.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> EnsureUrlAvailableAsync(CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(_currentUrl))
+            return true;
+
+        if (_urlRefresher == null)
+            return false;
+
+        try
+        {
+            await _refreshLock.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_currentUrl))
+                return true;
+
+            Log.Debug("[CachingSource] No active stream URL. Acquiring continuation URL lazily...");
+            await RefreshUrlAsync(ct).ConfigureAwait(false);
+
+            return !string.IsNullOrWhiteSpace(_currentUrl);
+        }
+        finally
+        {
+            try { _refreshLock.Release(); }
+            catch (ObjectDisposedException) { }
+        }
+    }
 
     private async Task CoordinatedRefreshAsync(CancellationToken ct)
     {

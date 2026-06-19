@@ -33,7 +33,7 @@ internal static class CollectionExtensions
     {
         public T? ElementAtOrNull(int index)
         {
-            var sourceAsList = source as IReadOnlyList<T> ?? source.ToArray();
+            var sourceAsList = source as IReadOnlyList<T> ?? [.. source];
             return index < sourceAsList.Count ? sourceAsList[index] : null;
         }
 

@@ -55,7 +55,7 @@ internal partial class VideoWatchPage(string rawContent)
             }
 
             // 2. Пробуем найти ytplayer.config (старый формат, иногда встречается)
-            var configJson = Regex.Match(rawContent, @"ytplayer\.config\s*=\s*(\{.*?\});", RegexOptions.Singleline)
+            var configJson = PlayerResponseOldRegex().Match(rawContent)
                 .Groups[1].Value;
 
             if (!string.IsNullOrWhiteSpace(configJson))
@@ -81,6 +81,8 @@ internal partial class VideoWatchPage(string rawContent)
         return new VideoWatchPage(raw);
     }
 
+    [GeneratedRegex(@"ytplayer\.config\s*=\s*(\{.*?\});", RegexOptions.Singleline)]
+    private static partial Regex PlayerResponseOldRegex();
     [GeneratedRegex(@"itemprop=""datePublished"" content=""(.*?)(?:"")")]
     private static partial Regex MyRegex();
     [GeneratedRegex(@"""likeCount""\s*:\s*""(\d+)""")]
