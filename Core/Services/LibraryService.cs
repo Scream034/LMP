@@ -470,6 +470,7 @@ public sealed class LibraryService : IAsyncDisposable
 
         _registry.UpdatePinStatus(canonical);
 
+        OnPlaylistChanged?.Invoke(new Playlist { Id = LikedPlaylistId });
         OnDataChanged?.Invoke();
         OnTrackUpdated?.Invoke(canonical);
     }
@@ -486,15 +487,21 @@ public sealed class LibraryService : IAsyncDisposable
         var canonical = _registry.RegisterOrUpdate(track);
         canonical.IsDisliked = !canonical.IsDisliked;
 
+        bool likedPlaylistChanged = false;
+
         if (canonical.IsDisliked)
         {
             canonical.IsLiked = false;
             await _playlists.RemoveTrackAsync(LikedPlaylistId, canonical.Id, CurrentOwnerId, ct);
             canonical.InPlaylists.Remove(LikedPlaylistId);
+            likedPlaylistChanged = true;
         }
 
         await _tracks.UpsertAsync(canonical, ct);
         _registry.UpdatePinStatus(canonical);
+
+        if (likedPlaylistChanged)
+            OnPlaylistChanged?.Invoke(new Playlist { Id = LikedPlaylistId });
 
         OnDataChanged?.Invoke();
         OnTrackUpdated?.Invoke(canonical);
@@ -678,6 +685,8 @@ public sealed class LibraryService : IAsyncDisposable
         await _playlists.AddTrackAsync(playlistId, track.Id, CurrentOwnerId, null, ct);
         track.InPlaylists.Add(playlistId);
         _registry.UpdatePinStatus(track);
+
+        OnPlaylistChanged?.Invoke(new Playlist { Id = playlistId });
         OnDataChanged?.Invoke();
     }
 
@@ -690,6 +699,8 @@ public sealed class LibraryService : IAsyncDisposable
             track.InPlaylists.Remove(playlistId);
             _registry.UpdatePinStatus(track);
         }
+
+        OnPlaylistChanged?.Invoke(new Playlist { Id = playlistId });
         OnDataChanged?.Invoke();
     }
 
