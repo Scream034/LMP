@@ -21,7 +21,6 @@ public class PlaylistClient(HttpClient http)
         var title = response.Title ?? throw new YoutubeExplodeException("Failed to extract playlist title.");
         var channelTitle = response.Author;
 
-        // Переведено на zero-alloc ThumbnailResolver
         var domainThumbs = response.Thumbnails
             .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
             .ToList();
@@ -42,6 +41,8 @@ public class PlaylistClient(HttpClient http)
 
     /// <summary>
     /// Асинхронно получает видеоролики плейлиста батчами.
+    /// При пустом результате browse-запроса выполняет fallback на Next response
+    /// (симметрично с <see cref="PlaylistController.GetPlaylistResponseAsync"/> для метаданных).
     /// </summary>
     public async IAsyncEnumerable<Batch<TrackInfo>> GetVideoBatchesAsync(
         PlaylistId playlistId,
@@ -69,6 +70,31 @@ public class PlaylistClient(HttpClient http)
                 isFirstRequest = false;
 
                 Log.Debug($"[PlaylistClient] Initial browse: {videos.Count} videos, has continuation: {continuationToken != null}");
+
+                // Fallback: browse вернул 0 видео — пробуем Next response.
+                // Симметрия с GetPlaylistResponseAsync, который использует тот же fallback для метаданных.
+                if (videos.Count == 0)
+                {
+                    Log.Info($"[PlaylistClient] Browse returned 0 videos for '{playlistId}', attempting Next fallback");
+                    try
+                    {
+                        var nextResponse = await _controller.GetPlaylistNextResponseAsync(
+                            playlistId, null, 0, visitorData, cancellationToken);
+
+                        if (nextResponse.IsAvailable)
+                        {
+                            videos = [.. nextResponse.Videos];
+                            visitorData ??= nextResponse.VisitorData;
+                            continuationToken = null;
+
+                            Log.Info($"[PlaylistClient] Next fallback: {videos.Count} videos");
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        Log.Warn($"[PlaylistClient] Next fallback failed for '{playlistId}': {ex.Message}");
+                    }
+                }
             }
             else if (!string.IsNullOrEmpty(continuationToken))
             {
@@ -101,7 +127,6 @@ public class PlaylistClient(HttpClient http)
                 var title = videoData.Title ?? "";
                 var author = videoData.Author ?? LocalizationService.Instance["Track_UnknownAuthor"];
 
-                // Вызов ThumbnailResolver.GetBestUrl вместо множественных вызовов Select/TryGetWithHighestResolution
                 var bestThumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(videoData.Thumbnails, videoId);
 
                 bool isMusic = DetectIfMusic(title, author, videoData.Duration);

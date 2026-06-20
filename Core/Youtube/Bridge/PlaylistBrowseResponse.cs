@@ -10,6 +10,9 @@ namespace LMP.Core.Youtube.Bridge;
 /// </summary>
 internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistData
 {
+    private JsonElement? _cachedPlaylistContents;
+    private bool _playlistContentsCached;
+
     private JsonElement? Sidebar =>
         content
             .GetPropertyOrNull("sidebar")
@@ -28,43 +31,97 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.ElementAtOrNull(1)
             ?.GetPropertyOrNull("playlistSidebarSecondaryInfoRenderer");
 
-    // Основной путь к содержимому плейлиста
-    private JsonElement? PlaylistContents =>
-        content
+    /// <summary>
+    /// Кэшированный результат поиска <c>playlistVideoListRenderer</c>.
+    /// Вычисляется один раз при первом обращении через <see cref="ResolvePlaylistContents"/>.
+    /// </summary>
+    private JsonElement? EffectivePlaylistContents
+    {
+        get
+        {
+            if (!_playlistContentsCached)
+            {
+                _cachedPlaylistContents = ResolvePlaylistContents();
+                _playlistContentsCached = true;
+            }
+            return _cachedPlaylistContents;
+        }
+    }
+
+    /// <summary>
+    /// Выполняет структурный поиск <c>playlistVideoListRenderer</c> по всем вкладкам,
+    /// секциям и элементам browse-ответа. Не предполагает фиксированную позицию
+    /// рендерера в массивах <c>contents</c>. При неудаче использует ограниченный
+    /// descendant-fallback по всему корню ответа.
+    /// </summary>
+    private JsonElement? ResolvePlaylistContents()
+    {
+        var tabs = content
             .GetPropertyOrNull("contents")
             ?.GetPropertyOrNull("twoColumnBrowseResultsRenderer")
-            ?.GetPropertyOrNull("tabs")
-            ?.EnumerateArrayOrNull()
-            ?.FirstOrNull()
-            ?.GetPropertyOrNull("tabRenderer")
-            ?.GetPropertyOrNull("content")
-            ?.GetPropertyOrNull("sectionListRenderer")
-            ?.GetPropertyOrNull("contents")
-            ?.EnumerateArrayOrNull()
-            ?.FirstOrNull()
-            ?.GetPropertyOrNull("itemSectionRenderer")
-            ?.GetPropertyOrNull("contents")
-            ?.EnumerateArrayOrNull()
-            ?.FirstOrNull()
-            ?.GetPropertyOrNull("playlistVideoListRenderer");
+            ?.GetPropertyOrNull("tabs");
 
-    // Альтернативный путь (иногда встречается в старых или специфических плейлистах)
-    private JsonElement? PlaylistContentsAlt =>
-        content
-            .GetPropertyOrNull("contents")
-            ?.GetPropertyOrNull("twoColumnBrowseResultsRenderer")
-            ?.GetPropertyOrNull("tabs")
-            ?.EnumerateArrayOrNull()
-            ?.FirstOrNull()
-            ?.GetPropertyOrNull("tabRenderer")
-            ?.GetPropertyOrNull("content")
-            ?.GetPropertyOrNull("sectionListRenderer")
-            ?.GetPropertyOrNull("contents")
-            ?.EnumerateArrayOrNull()
-            ?.FirstOrNull()
-            ?.GetPropertyOrNull("playlistVideoListRenderer");
+        if (tabs is { } tabsEl && tabsEl.ValueKind == JsonValueKind.Array)
+        {
+            int tabCount = tabsEl.GetArrayLength();
+            for (int t = 0; t < tabCount; t++)
+            {
+                var tabContent = tabsEl[t]
+                    .GetPropertyOrNull("tabRenderer")
+                    ?.GetPropertyOrNull("content");
+                if (tabContent is null) continue;
 
-    private JsonElement? EffectivePlaylistContents => PlaylistContents ?? PlaylistContentsAlt;
+                var found = FindRendererInTabContent(tabContent.Value);
+                if (found is not null) return found;
+            }
+        }
+
+        return content.FindFirstDescendantProperty("playlistVideoListRenderer");
+    }
+
+    /// <summary>
+    /// Ищет <c>playlistVideoListRenderer</c> внутри содержимого одной вкладки.
+    /// Проходит по всем секциям <c>sectionListRenderer</c> и всем элементам
+    /// каждой <c>itemSectionRenderer</c> — YouTube может помещать список видео
+    /// не в первый элемент (alert/notice/chips-блоки смещают позицию).
+    /// </summary>
+    private static JsonElement? FindRendererInTabContent(JsonElement tabContent)
+    {
+        var sections = tabContent
+            .GetPropertyOrNull("sectionListRenderer")
+            ?.GetPropertyOrNull("contents");
+
+        if (sections is { } arr && arr.ValueKind == JsonValueKind.Array)
+        {
+            int sectionCount = arr.GetArrayLength();
+            for (int s = 0; s < sectionCount; s++)
+            {
+                var section = arr[s];
+
+                var itemContents = section
+                    .GetPropertyOrNull("itemSectionRenderer")
+                    ?.GetPropertyOrNull("contents");
+
+                if (itemContents is { } items && items.ValueKind == JsonValueKind.Array)
+                {
+                    int itemCount = items.GetArrayLength();
+                    for (int i = 0; i < itemCount; i++)
+                    {
+                        var renderer = items[i].GetPropertyOrNull("playlistVideoListRenderer");
+                        if (renderer is not null) return renderer;
+                    }
+                }
+
+                var direct = section.GetPropertyOrNull("playlistVideoListRenderer");
+                if (direct is not null) return direct;
+            }
+        }
+
+        var directInTab = tabContent.GetPropertyOrNull("playlistVideoListRenderer");
+        if (directInTab is not null) return directInTab;
+
+        return tabContent.FindFirstDescendantProperty("playlistVideoListRenderer");
+    }
 
     /// <inheritdoc />
     public bool IsAvailable => Sidebar is not null || EffectivePlaylistContents is not null;
@@ -89,7 +146,6 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.GetPropertyOrNull("textInputFormFieldRenderer")
             ?.GetPropertyOrNull("value")
             ?.GetStringOrNull()
-        // Fallback: заголовок из хедера
         ?? content
             .GetPropertyOrNull("header")
             ?.GetPropertyOrNull("playlistHeaderRenderer")
@@ -113,7 +169,6 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.Select(static j => j.GetPropertyOrNull("text")?.GetStringOrNull())
             .WhereNotNull()
             .Pipe(string.Concat)
-        // Fallback: автор из хедера
         ?? content
             .GetPropertyOrNull("header")
             ?.GetPropertyOrNull("playlistHeaderRenderer")
@@ -219,11 +274,9 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
     {
         get
         {
-            // 1. Проверяем поле "continuations" внутри рендерера списка видео (стандартный случай)
             var videoListRenderer = EffectivePlaylistContents;
             if (videoListRenderer != null)
             {
-                // Проверка явного поля continuations
                 var continuations = videoListRenderer.Value.GetPropertyOrNull("continuations");
                 if (continuations != null)
                 {
@@ -234,7 +287,6 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
                     if (token != null) return token;
                 }
 
-                // Проверка последнего элемента в списке contents (для Liked Videos и сложных списков)
                 var contents = videoListRenderer.Value.GetPropertyOrNull("contents");
                 if (contents != null)
                 {
@@ -243,7 +295,6 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
                 }
             }
 
-            // 2. Проверяем действия получения ответа (onResponseReceivedActions) - редко для browse, но возможно
             var actions = content.GetPropertyOrNull("onResponseReceivedActions");
             if (actions != null)
             {

@@ -319,6 +319,11 @@
           "SQLitePCLRaw.core": "2.1.11"
         }
       },
+      "Microsoft.Diagnostics.NETCore.Client": {
+        "type": "Transitive",
+        "resolved": "0.2.661903",
+        "contentHash": "3ISv5jXar4dHBt/7Rz3YdnR3VpnC94BhSdSvuq8ZuKgCOcVuTdmgRnq0hUzJyL/z8Ge4VekFjhui2aufUXPdvg=="
+      },
       "Microsoft.EntityFrameworkCore": {
         "type": "Transitive",
         "resolved": "10.0.2",
@@ -643,8 +648,9 @@
           "Avalonia": "[12.0.3, )",
           "CommunityToolkit.Mvvm": "[8.4.0, )",
           "Concentus": "[2.2.2, )",
-          "LMP.Decoders.AAC": "[0.0.296, )",
+          "LMP.Decoders.AAC": "[0.0.298, )",
           "Microsoft.Data.Sqlite": "[10.0.2, )",
+          "Microsoft.Diagnostics.NETCore.Client": "[0.2.*, )",
           "Microsoft.EntityFrameworkCore": "[10.0.2, )",
           "Microsoft.EntityFrameworkCore.Sqlite": "[10.0.2, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.2, )",

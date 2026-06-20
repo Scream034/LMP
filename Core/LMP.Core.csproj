@@ -33,7 +33,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <!-- Переопределение транзитивной зависимости для устранения уязвимости GHSA-2m69-gcr7-jv3q (SQLitePCLRaw.lib.e_sqlite3) -->
+    <!-- Переопределение транзитивной зависимости для устранения уязвимости GHSA-2m69-gcr7-jv3q
+    (SQLitePCLRaw.lib.e_sqlite3) -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
   </ItemGroup>
 
@@ -54,6 +55,10 @@
 
   <ItemGroup Label="Scripting">
     <PackageReference Include="Acornima" Version="1.6.2" />
+  </ItemGroup>
+
+  <ItemGroup Label="Diagnostics">
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.*" />
   </ItemGroup>
 
   <ItemGroup>
