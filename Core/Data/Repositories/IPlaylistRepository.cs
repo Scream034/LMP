@@ -102,6 +102,19 @@ public interface IPlaylistRepository
     Task MoveTrackAsync(string playlistId, int oldIndex, int newIndex, CancellationToken ct = default);
 
     /// <summary>
+    /// Перепривязывает осиротевшие плейлисты (с пустым или гостевым <c>OwnerId</c>)
+    /// к указанному аутентифицированному владельцу.
+    /// <para>
+    /// Вызывается из <see cref="LibraryService"/> при каждой смене аккаунта на аутентифицированного пользователя.
+    /// Операция идемпотентна: при отсутствии сирот выполняет no-op.
+    /// </para>
+    /// </summary>
+    /// <param name="newOwnerId">Идентификатор нового владельца (GaiaId аутентифицированного аккаунта).</param>
+    /// <param name="ct">Токен отмены асинхронной операции.</param>
+    /// <returns>Количество перепривязанных плейлистов.</returns>
+    Task<int> AdoptOrphanPlaylistsAsync(string newOwnerId, CancellationToken ct = default);
+
+    /// <summary>
     /// Проверяет, содержится ли конкретный трек в указанном плейлисте.
     /// </summary>
     /// <param name="playlistId">Идентификатор плейлиста.</param>

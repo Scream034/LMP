@@ -54,21 +54,21 @@ public partial class App : Application
 #endif
 
 
-            // ═══ ЭТАП 1: Тема (мгновенно) ═══
+            // Тема
             var themeManager = AppEntry.Services.GetRequiredService<ThemeManagerService>();
             themeManager.LoadAndApplyThemeOnStartup();
 
-            // ═══ ЭТАП 2: Локализация (мгновенно) ═══
+            // Локализация
             var bootstrap = AppEntry.Services.GetRequiredService<BootstrapSettings>();
             LocalizationService.Instance.Initialize(bootstrap.LanguageCode);
             Log.Info($"Localization: {bootstrap.LanguageCode}");
 
-            // ═══ ЭТАП 3: Splash Screen ═══
+            // Splash Screen
             _splash = new SplashWindow();
             desktop.MainWindow = _splash;
             _splash.Show();
 
-            // ═══ КРИТИЧНО: Даём UI-потоку отрисовать splash ═══
+            // Даём UI-потоку отрисовать splash
             Dispatcher.UIThread.Post(() =>
             {
                 _ = InitializeAppAsync(desktop);
@@ -88,7 +88,7 @@ public partial class App : Application
     {
         var trayIcon = new TrayIcon
         {
-            // В Avalonia 11 иконки загружаются через AssetLoader
+            // В Avalonia 11+ иконки загружаются через AssetLoader
             Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://LMP/Assets/app.ico"))),
             ToolTipText = LocalizationService.Instance["Common_AppName"],
             IsVisible = false
@@ -106,7 +106,8 @@ public partial class App : Application
 
         try
         {
-            await Task.Delay(100);
+            // Отдаем приоритет UI, чтобы Splash мгновенно отрисовался
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
 
             _splash?.SetProgress(5);
             _splash?.UpdateStatus(L["Splash_Initializing"]);
@@ -129,8 +130,6 @@ public partial class App : Application
             await Task.Run(async () => await library.InitializeAsync());
             _splash?.SetProgress(45);
 
-            // AudioEngine был создан до InitializeAsync с дефолтными Settings.
-            // Теперь Settings загружены из DB — перечитываем.
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 var audio = AppEntry.Services.GetRequiredService<AudioEngine>();
@@ -138,10 +137,10 @@ public partial class App : Application
                 audio.RepeatMode = library.Settings.RepeatMode;
 
                 var playerControl = AppEntry.Services.GetRequiredService<PlayerControlService>();
-                playerControl.ForceSync(); // уже существующий метод — синхронизирует все subjects из AudioEngine
+                playerControl.ForceSync();
             });
 
-            // ═══ СИНХРОНИЗАЦИЯ ЯЗЫКА ═══
+            // СИНХРОНИЗАЦИЯ ЯЗЫКА
             var savedLang = library.Settings.LanguageCode;
             var currentLang = L.CurrentLanguageCode;
 
@@ -160,13 +159,13 @@ public partial class App : Application
             }
             _splash?.SetProgress(50);
 
-            // ═══ КРИТИЧНО: NotificationService после LibraryService ═══
+            // КРИТИЧНО: NotificationService после LibraryService
             var notifications = AppEntry.Services.GetRequiredService<NotificationService>();
             await notifications.InitializeAsync();
             Log.Info("[Startup] NotificationService history loaded");
             _splash?.SetProgress(55);
 
-            // ═══ PlaybackErrorOrchestrator после NotificationService ═══
+            // PlaybackErrorOrchestrator после NotificationService
             var orchestrator = AppEntry.Services.GetRequiredService<PlaybackErrorOrchestrator>();
             Log.Info("[Startup] PlaybackErrorOrchestrator ready");
             _splash?.SetProgress(60);
@@ -176,8 +175,6 @@ public partial class App : Application
             var imageCache = await Task.Run(() =>
                 AppEntry.Services.GetRequiredService<ImageCacheService>());
 
-            // Создаём loader только один раз, не дублируем.
-            // Старый loader из splash (если был установлен) диспозим.
             var oldLoader = ImageLoader.AsyncImageLoader;
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
             if (oldLoader is IDisposable disposableLoader)
@@ -189,7 +186,6 @@ public partial class App : Application
             _splash?.UpdateStatus(L["Splash_ConnectingYouTube"]);
             var youtube = AppEntry.Services.GetRequiredService<Lazy<YoutubeProvider>>();
 
-            // Запускаем инициализацию без await, чтобы не блокировать Splash Screen (особенно при DPI-блокировках)
             _ = Task.Run(async () =>
             {
                 try
@@ -206,10 +202,13 @@ public partial class App : Application
 
             // Create Main Window
             _splash?.UpdateStatus(L["Splash_BuildingInterface"]);
+
             MainWindow? mainWindow = null;
+            MainWindowViewModel? mainWindowVM = null;
+
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                var mainWindowVM = AppEntry.Services.GetRequiredService<MainWindowViewModel>();
+                mainWindowVM = AppEntry.Services.GetRequiredService<MainWindowViewModel>();
                 mainWindow = new MainWindow { DataContext = mainWindowVM };
             });
             _splash?.SetProgress(93);
@@ -218,22 +217,12 @@ public partial class App : Application
             _splash?.UpdateStatus(L["Splash_Ready"]);
             _splash?.SetProgress(100);
 
-            // ═══ МИНИМАЛЬНОЕ ВРЕМЯ ПОКАЗА ═══
-            var elapsed = stopwatch.ElapsedMilliseconds;
-            var minTime = G.Build.MinSplashTimeMs;
-            var remaining = minTime - (int)elapsed;
-
-            if (remaining > 0)
-            {
-                Log.Info($"[Splash] Waiting additional {remaining}ms");
-                await Task.Delay(remaining);
-            }
-
-            // Switch Windows
+            // Switch Windows - Без искусственной паузы MinSplashTimeMs!
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 desktop.MainWindow = mainWindow;
                 mainWindow?.Show();
+                mainWindowVM?.NotifyWindowShown();
                 _splash?.Close();
                 _splash = null;
             });
@@ -241,11 +230,9 @@ public partial class App : Application
             Log.Info($"Main window ready. Total splash time: {stopwatch.ElapsedMilliseconds}ms");
 
             // Post-Startup GC Compaction
-            // Сборка мусора с уплотнением кучи после завершения тяжелой фазы инициализации приложения.
-            // Возвращает неиспользуемую память (Gen 0/1/2) операционной системе.
             _ = Task.Run(async () =>
             {
-                await Task.Delay(2500); // Даем время Skia и UI-потоку полностью завершить отрисовку
+                await Task.Delay(2500);
                 GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
                 GC.WaitForPendingFinalizers();
                 Log.Info("[Memory] Post-startup GC compaction complete. Cold memory reclaimed.");
@@ -256,6 +243,9 @@ public partial class App : Application
             {
                 try
                 {
+                    // Безопасный Dispose без создания сервера
+                    LocalAuthServer.DisposeIfCreated();
+
                     MemoryCleanupHelper.Dispose();
                     await audioCacheManager.DisposeAsync();
                     await library.DisposeAsync();
@@ -267,8 +257,6 @@ public partial class App : Application
             };
 
 #if DEBUG
-            // Avalonia 12: AttachDeveloperTools — extension на Application, не Window.
-            // Открывается F12 по умолчанию (настраивается через DeveloperToolsOptions).
             this.AttachDeveloperTools();
 
             await Dispatcher.UIThread.InvokeAsync(() =>

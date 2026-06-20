@@ -34,17 +34,17 @@ public sealed partial class CachingStreamSource
 
         Log.Debug($"[CachingSource] Seek: {positionMs}ms → byte {targetBytePos}");
 
-        // ── 1. Перемещение позиции потока и отмена pending reads ──
+        //  1. Перемещение позиции потока и отмена pending reads 
         // НЕ делаем ResetDownloadEpoch() здесь: это убивает TCP/TLS-соединения,
         // что на высокой задержке стоит 5–18 секунд переподключения.
         _readStream!.SeekAndCancelPendingReads(targetBytePos);
         Volatile.Write(ref _currentReadOffset, targetBytePos);
 
-        // ── 2. Сброс парсера для чтения с новой позиции ──
+        //  2. Сброс парсера для чтения с новой позиции 
         _parser.Reset();
         Volatile.Write(ref _positionMs, segmentStartMs);
 
-        // ── 3. Быстрый путь: данные уже есть локально ──
+        //  3. Быстрый путь: данные уже есть локально 
         if (HasMinimalLocalSeekStartData(targetBytePos))
         {
             Log.Debug($"[CachingSource] Seek: sufficient local prefix at {targetBytePos}, starting immediately");
@@ -55,7 +55,7 @@ public sealed partial class CachingStreamSource
             return true;
         }
 
-        // ── 4. Медленный путь: данных нет, нужна сетевая загрузка ──
+        //  4. Медленный путь: данных нет, нужна сетевая загрузка 
         // Только здесь сбрасываем epoch: это переключает preload loop
         // на новую позицию и отменяет загрузки, которые уже бесполезны.
         ResetDownloadEpoch();
@@ -87,7 +87,7 @@ public sealed partial class CachingStreamSource
             Log.Warn($"[CachingSource] Seek: critical range failed: {ex.Message}");
         }
 
-        // ── 5. Запуск фоновой предзагрузки ──
+        //  5. Запуск фоновой предзагрузки 
         _ = PreloadRangeForSeekFireAndForgetAsync(targetBytePos);
 
         return true;

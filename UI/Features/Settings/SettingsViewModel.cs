@@ -45,6 +45,9 @@ public enum ImageCachePreset { Custom, Low, Medium, High }
 /// </summary>
 public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTransitionViewModel
 {
+    /// <inheritdoc />
+    protected override bool HandlesAccountChanges => true;
+
     private const int NavigationDebounceMs = 128;
 
     private readonly LibraryService _library;

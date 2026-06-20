@@ -18,7 +18,7 @@
         <Border Classes="card">
             <StackPanel Spacing="20">
 
-                <!-- ── Volume ── -->
+                <!--  Volume  -->
                 <TextBlock Text="{Binding L[Audio_VolumeSection]}"
                     FontWeight="SemiBold" FontSize="14"
                     Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -73,7 +73,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── Processing ── -->
+                <!--  Processing  -->
                 <TextBlock Text="{Binding L[Audio_ProcessingSection]}"
                     FontWeight="SemiBold" FontSize="14"
                     Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -158,7 +158,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── Quality ── -->
+                <!--  Quality  -->
                 <TextBlock Text="{Binding L[Audio_QualitySection]}"
                     FontWeight="SemiBold" FontSize="14"
                     Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -184,7 +184,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── Error handling ── -->
+                <!--  Error handling  -->
                 <TextBlock Text="{Binding L[Audio_ErrorSection]}"
                     FontWeight="SemiBold" FontSize="14"
                     Foreground="{DynamicResource TextSecondaryBrush}" />

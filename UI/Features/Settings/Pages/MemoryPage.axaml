@@ -18,7 +18,7 @@
         <Border Classes="card">
             <StackPanel Spacing="20">
 
-                <!-- ── GPU texture cache ── -->
+                <!--  GPU texture cache  -->
                 <Grid ColumnDefinitions="*, Auto">
                     <StackPanel>
                         <TextBlock Classes="label" Text="{Binding L[Settings_GpuTextureCache]}" />
@@ -45,7 +45,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── Auto cleanup ── -->
+                <!--  Auto cleanup  -->
                 <Grid ColumnDefinitions="*, Auto">
                     <StackPanel>
                         <TextBlock Classes="label" Text="{Binding L[Settings_AutoMemoryCleanup]}" />
@@ -72,7 +72,7 @@
                                           StringFormat='{}{0} min'}" />
                 </Grid>
 
-                <!-- ── Pressure threshold ── -->
+                <!--  Pressure threshold  -->
                 <Grid ColumnDefinitions="*, 200, 80">
                     <StackPanel>
                         <TextBlock Classes="label"
@@ -91,7 +91,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── Manual cleanup ── -->
+                <!--  Manual cleanup  -->
                 <Grid ColumnDefinitions="*, Auto">
                     <StackPanel>
                         <TextBlock Classes="label" Text="{Binding L[Settings_ManualCleanup]}" />

@@ -5,38 +5,40 @@ namespace LMP.UI.Features.Shell;
 
 /// <summary>
 /// Контейнер для отображения диалогов поверх контента.
+/// Поддерживает стек диалогов: если новый диалог открывается поверх активного,
+/// активный приостанавливается и восстанавливается после закрытия нового.
 /// </summary>
 public sealed class DialogHostViewModel : ViewModelBase
 {
-    /// <summary>
-    /// Текущий отображаемый диалог (ViewModel или UserControl).
-    /// </summary>
+    /// <summary>Текущий отображаемый диалог.</summary>
     [Reactive] public object? CurrentDialog { get; private set; }
 
-    /// <summary>
-    /// Есть ли активный диалог.
-    /// </summary>
+    /// <summary>Есть ли активный диалог.</summary>
     [Reactive] public bool HasActiveDialog { get; private set; }
 
+    //  Стек: (контент диалога, его TCS) 
+    private readonly Stack<(object Content, TaskCompletionSource<object?> Tcs)> _stack = new();
     private TaskCompletionSource<object?>? _dialogTcs;
     private readonly Lock _lock = new();
 
     /// <summary>
-    /// Показывает диалог и асинхронно ожидает результата.
+    /// Показывает диалог поверх текущего (если есть) и асинхронно ожидает результата.
+    /// При наличии активного диалога он уходит в стек и восстанавливается после закрытия нового.
     /// </summary>
     public async Task<T?> ShowAsync<T>(object dialogContent)
     {
-        TaskCompletionSource<object?> tcs;
+        var tcs = new TaskCompletionSource<object?>();
+
         lock (_lock)
         {
-            if (HasActiveDialog)
+            // Если уже есть активный диалог — кладём его в стек (не закрываем)
+            if (HasActiveDialog && _dialogTcs != null && CurrentDialog != null)
             {
-                Log.Warn($"[DialogHost] Closing previous dialog before showing new one. Current: {CurrentDialog?.GetType().Name}, New: {dialogContent.GetType().Name}");
-                _dialogTcs?.TrySetResult(default);
+                Log.Debug($"[DialogHost] Stacking dialog. Suspending: {CurrentDialog.GetType().Name}, Showing: {dialogContent.GetType().Name}");
+                _stack.Push((CurrentDialog, _dialogTcs));
             }
 
-            _dialogTcs = new TaskCompletionSource<object?>();
-            tcs = _dialogTcs; // Фиксируем TCS текущей сессии для предотвращения race conditions [2]
+            _dialogTcs = tcs;
         }
 
         await Dispatcher.UIThread.InvokeAsync(() =>
@@ -45,7 +47,7 @@ public sealed class DialogHostViewModel : ViewModelBase
             HasActiveDialog = true;
         });
 
-        Log.Debug($"[DialogHost] Showing dialog: {dialogContent.GetType().Name}");
+        Log.Debug($"[DialogHost] Showing: {dialogContent.GetType().Name}");
 
         var result = await tcs.Task.ConfigureAwait(false);
 
@@ -53,23 +55,32 @@ public sealed class DialogHostViewModel : ViewModelBase
         {
             lock (_lock)
             {
-                // Сбрасываем визуальное состояние только если за это время не открылся новый диалог
-                if (_dialogTcs == tcs)
+                if (_dialogTcs != tcs)
+                    return; // Другой диалог уже взял управление
+
+                if (_stack.Count > 0)
+                {
+                    // Восстанавливаем предыдущий диалог из стека
+                    var (prevContent, prevTcs) = _stack.Pop();
+                    _dialogTcs = prevTcs;
+                    CurrentDialog = prevContent;
+                    HasActiveDialog = true;
+                    Log.Debug($"[DialogHost] Restored from stack: {prevContent.GetType().Name}");
+                }
+                else
                 {
                     HasActiveDialog = false;
                     CurrentDialog = null;
+                    _dialogTcs = null;
                 }
             }
         });
 
-        Log.Debug($"[DialogHost] Dialog closed: {dialogContent.GetType().Name} with result: {result}");
-
+        Log.Debug($"[DialogHost] Closed: {dialogContent.GetType().Name}, result: {result}");
         return result is T typed ? typed : default;
     }
 
-    /// <summary>
-    /// Закрывает текущий диалог с указанным результатом.
-    /// </summary>
+    /// <summary>Закрывает текущий верхний диалог с указанным результатом.</summary>
     public void CloseDialog(object? result = null)
     {
         lock (_lock)
@@ -85,7 +96,13 @@ public sealed class DialogHostViewModel : ViewModelBase
             lock (_lock)
             {
                 _dialogTcs?.TrySetCanceled();
+                while (_stack.Count > 0)
+                {
+                    var (_, stackedTcs) = _stack.Pop();
+                    stackedTcs.TrySetCanceled();
+                }
                 CurrentDialog = null;
+                HasActiveDialog = false;
             }
         }
         base.Dispose(disposing);

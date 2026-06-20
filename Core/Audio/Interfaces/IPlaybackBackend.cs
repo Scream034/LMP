@@ -92,7 +92,7 @@ public interface IPlaybackBackend : IDisposable
     /// </summary>
     void Flush();
 
-    // ── Device Loss ──────────────────────────────────────────────────────────
+    //  Device Loss 
 
     /// <summary>
     /// true если аудиоустройство потеряно (BT disconnect, USB unplug и т.д.).
@@ -146,7 +146,7 @@ public interface IPlaybackBackend : IDisposable
     /// <param name="gain">Volume gain множитель [0, MaxVolumeGain].</param>
     void SetVolumeGain(float gain);
 
-    // ── Diagnostics ──────────────────────────────────────────────────────────
+    //  Diagnostics 
 
     /// <summary>Громкость (0.0 – 1.0).</summary>
     float Volume { get; set; }

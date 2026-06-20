@@ -220,6 +220,75 @@ public sealed class TrackRegistry
     }
 
     /// <summary>
+    /// Загружает треки из БД, регистрирует в кэше и возвращает загруженные экземпляры напрямую,
+    /// сохраняя порядок входного списка идентификаторов.
+    /// <para>
+    /// В отличие от <see cref="PreloadAsync"/> + <see cref="TryGet"/>, результат
+    /// не зависит от параллельного <see cref="Clear"/> — все треки возвращаются
+    /// как локальная коллекция, а не извлекаются из кэша после <c>await</c>-границы.
+    /// </para>
+    /// </summary>
+    /// <param name="ids">Упорядоченный список идентификаторов треков.</param>
+    /// <param name="ct">Токен отмены асинхронной операции.</param>
+    /// <returns>Список треков в порядке <paramref name="ids"/>. Отсутствующие в БД пропускаются.</returns>
+    public async Task<List<TrackInfo>> PreloadAndReturnAsync(
+        IReadOnlyList<string> ids, CancellationToken ct = default)
+    {
+        if (_repository == null || ids.Count == 0) return [];
+
+        var found = new Dictionary<string, TrackInfo>(ids.Count, StringComparer.Ordinal);
+        var toLoad = new List<string>();
+
+        for (int i = 0; i < ids.Count; i++)
+        {
+            var id = ids[i];
+            var cached = TryGet(id);
+            if (cached != null)
+                found[id] = cached;
+            else
+                toLoad.Add(id);
+        }
+
+        if (toLoad.Count > 0)
+        {
+            var loaded = await _repository.GetByIdsAsync(toLoad, CurrentOwnerId, ct).ConfigureAwait(false);
+
+            Dictionary<string, HashSet<string>>? playlistsMap = null;
+            if (_playlists != null && loaded.Count > 0)
+            {
+                var loadedIds = new List<string>(loaded.Count);
+                for (int i = 0; i < loaded.Count; i++)
+                    loadedIds.Add(loaded[i].Id);
+
+                playlistsMap = await _playlists.GetPlaylistsForTracksAsync(
+                    loadedIds, CurrentOwnerId, ct).ConfigureAwait(false);
+            }
+
+            for (int i = 0; i < loaded.Count; i++)
+            {
+                var track = loaded[i];
+
+                if (playlistsMap?.TryGetValue(track.Id, out var pls) == true)
+                    track.InPlaylists = pls;
+
+                var canonical = RegisterOrUpdate(track);
+                UpdatePinStatusInternal(canonical);
+                found[canonical.Id] = canonical;
+            }
+        }
+
+        // Восстанавливаем порядок входного списка
+        var result = new List<TrackInfo>(ids.Count);
+        for (int i = 0; i < ids.Count; i++)
+        {
+            if (found.TryGetValue(ids[i], out var track))
+                result.Add(track);
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Внутренний метод обновления закрепления трека в сильной памяти.
     /// Закрепляет трек в сильных ссылках, если он лайкнут, скачан или привязан к плейлистам пользователя.
     /// </summary>

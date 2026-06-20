@@ -18,7 +18,7 @@
         <Border Classes="card">
             <StackPanel Spacing="20">
 
-                <!-- ── Download path ── -->
+                <!--  Download path  -->
                 <Grid ColumnDefinitions="*, Auto">
                     <StackPanel Margin="0,0,20,0">
                         <TextBlock Classes="label" Text="{Binding L[Storage_Path]}" />
@@ -33,7 +33,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── Downloaded tracks ── -->
+                <!--  Downloaded tracks  -->
                 <Grid ColumnDefinitions="*, 140">
                     <StackPanel>
                         <TextBlock Classes="label" Text="{Binding L[Settings_DownloadedTracks]}" />
@@ -48,7 +48,7 @@
                         VerticalAlignment="Center" HorizontalAlignment="Right" />
                 </Grid>
 
-                <!-- ── Image cache ── -->
+                <!--  Image cache  -->
                 <Grid ColumnDefinitions="*, 140">
                     <StackPanel>
                         <TextBlock Classes="label" Text="{Binding L[Settings_ImageCache]}" />
@@ -63,7 +63,7 @@
                         VerticalAlignment="Center" HorizontalAlignment="Right" />
                 </Grid>
 
-                <!-- ── Audio cache ── -->
+                <!--  Audio cache  -->
                 <Grid ColumnDefinitions="*, 140">
                     <StackPanel>
                         <TextBlock Classes="label" Text="{Binding L[Settings_AudioCache]}" />
@@ -80,7 +80,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── RAM bitmap cache ── -->
+                <!--  RAM bitmap cache  -->
                 <StackPanel Spacing="12">
                     <Grid ColumnDefinitions="*, Auto">
                         <StackPanel>
@@ -103,7 +103,7 @@
                     </Grid>
                 </StackPanel>
 
-                <!-- ── Auto-save ── -->
+                <!--  Auto-save  -->
                 <Grid ColumnDefinitions="*, Auto">
                     <StackPanel>
                         <TextBlock Classes="label" Text="{Binding L[Settings_AutoSaveDownloads]}" />
@@ -114,7 +114,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── Limits ── -->
+                <!--  Limits  -->
                 <StackPanel Spacing="16">
                     <TextBlock Classes="label" Text="{Binding L[Settings_Limits]}" />
 

@@ -4,7 +4,7 @@ param(
     [switch]$FailOnAny
 )
 
-# ── 1. Найти .csproj ──────────────────────────────────────────────────────────
+#  1. Найти .csproj 
 if (-not $Project) {
     $projectRoot = Split-Path $PSScriptRoot -Parent
     $found = Get-ChildItem -Path $projectRoot -Filter *.csproj | Select-Object -First 1
@@ -16,7 +16,7 @@ if (-not $Project) {
 }
 Write-Host "`n  Project : $Project" -ForegroundColor DarkGray
 
-# ── 2. Проверить наличие Roslynator CLI ───────────────────────────────────────
+#  2. Проверить наличие Roslynator CLI 
 if (-not (Get-Command "roslynator" -ErrorAction SilentlyContinue)) {
     Write-Host "`n  Roslynator CLI not found. Installing...`n" -ForegroundColor Yellow
     dotnet tool install -g roslynator.dotnet.cli
@@ -26,7 +26,7 @@ if (-not (Get-Command "roslynator" -ErrorAction SilentlyContinue)) {
     }
 }
 
-# ── 3. Получить путь к NuGet кэшу ────────────────────────────────────────────
+#  3. Получить путь к NuGet кэшу 
 $nugetLocalsOutput = dotnet nuget locals global-packages --list 2>$null
 $nugetCache = $null
 foreach ($line in $nugetLocalsOutput) {
@@ -40,7 +40,7 @@ if (-not $nugetCache -or -not (Test-Path $nugetCache)) {
 }
 Write-Host "  NuGet cache : $nugetCache" -ForegroundColor DarkGray
 
-# ── 4. Найти директорию анализаторов ─────────────────────────────────────────
+#  4. Найти директорию анализаторов 
 # Структура: roslynator.analyzers\<ver>\analyzers\dotnet\roslyn4.7\cs\
 # Ищем Roslynator.CSharp.Analyzers.dll, берём папку с максимальной версией Roslyn
 function Find-AnalyzerDir {
@@ -96,13 +96,13 @@ if (-not $analyzerDir) {
 
 Write-Host "  Analyzers   : $analyzerDir" -ForegroundColor DarkGray
 
-# ── 5. Диагностики ────────────────────────────────────────────────────────────
+#  5. Диагностики 
 $diagnostics = @("RCS1213", "RCS1170")
 
 Write-Host "`n=== Dead Code Analysis ===`n" -ForegroundColor Cyan
 Write-Host "  Diagnostics : $($diagnostics -join ', ')`n" -ForegroundColor DarkGray
 
-# ── 6. Запуск ─────────────────────────────────────────────────────────────────
+#  6. Запуск 
 $roslynatorArgs = @(
     "analyze",
     $Project,
@@ -114,7 +114,7 @@ $roslynatorArgs = @(
 $rawLines       = & roslynator @roslynatorArgs 2>$null
 $roslynatorExit = $LASTEXITCODE
 
-# ── 7. Парсинг stdout ─────────────────────────────────────────────────────────
+#  7. Парсинг stdout 
 $issueCount = 0
 $issueLines = New-Object System.Collections.ArrayList
 
@@ -125,9 +125,9 @@ foreach ($line in $rawLines) {
     }
 }
 
-# ── 8. Вывод ──────────────────────────────────────────────────────────────────
+#  8. Вывод 
 if ($issueCount -gt 0) {
-    Write-Host "── Issues found ──────────────────────────────────────" -ForegroundColor Red
+    Write-Host " Issues found " -ForegroundColor Red
 
     foreach ($line in $issueLines) {
         if ($line -match '^(.*?)\((\d+),\d+\):\s*(?:warning|error)\s+(\w+):\s*(.*)$') {

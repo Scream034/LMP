@@ -17,6 +17,9 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 {
     #region Fields
 
+    /// <inheritdoc />
+    protected override bool HandlesAccountChanges => true;
+
     protected readonly LibraryService LibService;
 
     private List<string> _masterIds = [];

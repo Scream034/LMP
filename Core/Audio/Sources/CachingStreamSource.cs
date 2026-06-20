@@ -93,20 +93,20 @@ public sealed partial class CachingStreamSource : IAudioSource
 
     #region Fields
 
-    // ── Configuration ──
+    //  Configuration 
     private readonly StreamingConfig _config;
 
-    // ── Identity ──
+    //  Identity 
     private readonly string _cacheKey;
     private readonly string _trackId;
     private readonly long _contentLength;
     private readonly AudioFormat _format;
     private readonly int _bitrate;
 
-    // ── Transport alignment ──
+    //  Transport alignment 
     private int _requestAlignmentBytes;
 
-    // ── Dependencies ──
+    //  Dependencies 
     private readonly HttpClient _httpClient;
     private readonly AudioCacheManager _cacheManager;
 
@@ -122,7 +122,7 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// </summary>
     private readonly Func<CancellationToken, Task<string?>>? _urlRefresher;
 
-    // ── Parsing ──
+    //  Parsing 
 
     /// <summary>
     /// Метаданные кэша текущего трека. Гарантированно не null после успешного
@@ -132,7 +132,7 @@ public sealed partial class CachingStreamSource : IAudioSource
     private IContainerParser? _parser;
     private AsyncCachingReadStream? _readStream;
 
-    // ── RAM cache & active downloads ──
+    //  RAM cache & active downloads 
 
     /// <summary>
     /// RAM-кэш диапазонов байт, оптимизированный для малого количества активных блоков
@@ -150,7 +150,7 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <summary>Семафор параллельных загрузок.</summary>
     private readonly SemaphoreSlim _downloadSlots;
 
-    // ── Epoch-based cancellation ──
+    //  Epoch-based cancellation 
     private long _downloadEpoch;
     private CancellationTokenSource? _downloadCts;
     private readonly Lock _epochLock = new();
@@ -167,7 +167,7 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// </summary>
     private readonly ManualResetEventSlim _suspendGate = new(initialState: true);
 
-    // ── Lifecycle ──
+    //  Lifecycle 
     private CancellationTokenSource? _lifetimeCts;
     private Task? _preloadTask;
 
@@ -185,12 +185,12 @@ public sealed partial class CachingStreamSource : IAudioSource
     private TaskCompletionSource<string?>? _continuationUrlTcs;
     private readonly Lock _continuationLock = new();
 
-    // ── Position tracking ──
+    //  Position tracking 
     private long _currentReadOffset;
     private long _positionMs;
     private string _currentUrl;
 
-    // ── Refresh / retry state ──
+    //  Refresh / retry state 
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private DateTime _lastRefreshTime = DateTime.MinValue;
     private int _consecutive403Count;
@@ -198,14 +198,14 @@ public sealed partial class CachingStreamSource : IAudioSource
     private int _consecutiveRefreshFailures;
     private Exception? _lastDownloadException;
 
-    // ── Latency Tracking & Adaptive Transport ──
+    //  Latency Tracking & Adaptive Transport 
     private readonly object _latencyLock = new();
     private double _latency0;
     private double _latency1;
     private double _latency2;
     private double _estimatedBandwidthBytesPerSec;
 
-    // ── State flags ──
+    //  State flags 
     private volatile bool _initialized;
     private volatile bool _disposed;
 

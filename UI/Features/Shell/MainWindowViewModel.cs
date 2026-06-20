@@ -12,7 +12,6 @@ using LMP.UI.Features.Library;
 using LMP.UI.Features.Settings;
 using LMP.UI.Features.Playlist;
 using LMP.UI.Features.Notifications;
-using System.Runtime;
 using LMP.UI.Features.Queue;
 using Avalonia.Threading;
 
@@ -54,6 +53,13 @@ public class MainWindowViewModel : ViewModelBase
     [Reactive] public DialogHostViewModel DialogHost { get; private set; }
 
     private const int DeferredLoadDelayMs = 180;
+    private static readonly TimeSpan StartupAuthValidationTtl = TimeSpan.FromHours(4);
+
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private ViewModelBase? _pendingInitialPage;
+    private string _pendingInitialPageName = string.Empty;
+    private bool _isShellShown;
+    private int _startupAuthValidationStarted;
 
     public ReactiveCommand<string, Unit> NavigateCommand { get; }
 
@@ -97,24 +103,21 @@ public class MainWindowViewModel : ViewModelBase
             x => x.DialogHost.HasActiveDialog,
             (locked, hasDialog) => !locked && !hasDialog);
 
-        NavigateCommand = CreateCommand(NavigateCommand = CreateCommand(ReactiveCommand.Create<string>(pageName =>
+        NavigateCommand = CreateCommand(ReactiveCommand.Create<string>(pageName =>
         {
             if (!IsNavigationLocked && !DialogHost.HasActiveDialog)
             {
                 Navigate(pageName);
             }
-        }, canNavigate)));
+        }, canNavigate));
 
         Navigate("Home");
-
-        _ = ValidateAuthOnStartupAsync();
 
         Log.Info("MainWindowViewModel initialized.");
     }
 
     /// <summary>
     /// Обрабатывает изменения авторизации на глобальном уровне после полной гидрации кэшей.
-    /// Принудительно очищает кэш представлений фабрики перед рендером.
     /// </summary>
     private void HandleGlobalAccountHydrated()
     {
@@ -156,6 +159,31 @@ public class MainWindowViewModel : ViewModelBase
         LockNavigation(reason);
         try { return await operation(); }
         finally { UnlockNavigation(); }
+    }
+
+    /// <summary>
+    /// Уведомляет shell о фактическом показе главного окна.
+    /// Первая тяжёлая инициализация страницы запускается только после отображения окна.
+    /// </summary>
+    public void NotifyWindowShown()
+    {
+        if (_isShellShown)
+            return;
+
+        _isShellShown = true;
+
+        var page = _pendingInitialPage ?? CurrentPage;
+        var pageName = _pendingInitialPageName.Length != 0
+            ? _pendingInitialPageName
+            : CurrentPageName;
+
+        _pendingInitialPage = null;
+        _pendingInitialPageName = string.Empty;
+
+        if (page != null && !string.IsNullOrEmpty(pageName))
+        {
+            _ = DeferredInitAsync(page, pageName, isInitialNavigation: true);
+        }
     }
 
     private void Navigate(string pageName)
@@ -211,7 +239,16 @@ public class MainWindowViewModel : ViewModelBase
         sw.Stop();
         Log.Info($"Page '{pageName}' ready in {sw.ElapsedMilliseconds}ms, scheduling deferred init...");
 
-        _ = DeferredInitAsync(newPage, pageName);
+        bool isInitialNavigation = !_isShellShown && oldPage == null && string.IsNullOrEmpty(oldPageName);
+        if (isInitialNavigation)
+        {
+            _pendingInitialPage = newPage;
+            _pendingInitialPageName = pageName;
+        }
+        else
+        {
+            _ = DeferredInitAsync(newPage, pageName, isInitialNavigation: false);
+        }
 
         if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
         {
@@ -236,7 +273,6 @@ public class MainWindowViewModel : ViewModelBase
             smoothOldPage.PrepareForTransition();
         }
 
-        // Кэшируем страницу плейлиста, чтобы избежать утечек, дублирования инстансов и багов с Dispose
         if (!_pageCache.TryGetValue("Playlist", out var playlistPage) || playlistPage is not PlaylistViewModel playlistVM)
         {
             playlistVM = _services.GetRequiredService<PlaylistViewModel>();
@@ -248,7 +284,6 @@ public class MainWindowViewModel : ViewModelBase
             smoothPlaylistPage.PrepareForTransition();
         }
 
-        // Изменение контента напрямую без присвоения null исключает сбой анимации
         CurrentPage = playlistVM;
         CurrentPageName = "Playlist";
 
@@ -260,10 +295,7 @@ public class MainWindowViewModel : ViewModelBase
             }
         }
 
-        // Важно: Запускаем отложенную инициализацию, которая вызовет OnNavigatedToAsync и сбросит _isTransitioning в false
-        _ = DeferredInitAsync(playlistVM, "Playlist");
-
-        // Запуск асинхронного метода на UI-потоке. Метод сам уступит управление при await.
+        _ = DeferredInitAsync(playlistVM, "Playlist", isInitialNavigation: false);
         _ = LoadPlaylistSafeAsync(playlistVM, playlistId);
     }
 
@@ -279,11 +311,25 @@ public class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private async Task DeferredInitAsync(ViewModelBase page, string pageName)
+    /// <summary>
+    /// Выполняет отложенную инициализацию страницы.
+    /// Для первой страницы приложения стартует после фактического показа окна без искусственной паузы.
+    /// </summary>
+    private async Task DeferredInitAsync(ViewModelBase page, string pageName, bool isInitialNavigation)
     {
         try
         {
-            await Task.Delay(DeferredLoadDelayMs);
+            if (isInitialNavigation)
+            {
+                await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            }
+            else
+            {
+                await Task.Delay(DeferredLoadDelayMs, _lifetimeCts.Token);
+            }
+
+            if (_lifetimeCts.IsCancellationRequested)
+                return;
 
             if (CurrentPage != page)
             {
@@ -296,6 +342,14 @@ public class MainWindowViewModel : ViewModelBase
             sw.Stop();
 
             Log.Info($"[Navigation] Deferred init for '{pageName}' completed in {sw.ElapsedMilliseconds}ms");
+
+            if (isInitialNavigation && Interlocked.Exchange(ref _startupAuthValidationStarted, 1) == 0)
+            {
+                _ = ValidateAuthOnStartupAsync(_lifetimeCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -305,7 +359,7 @@ public class MainWindowViewModel : ViewModelBase
 
     private async Task DisposePageDelayedAsync(IDisposable page, string pageName)
     {
-        await Task.Delay(256);
+        await Task.Delay(256, _lifetimeCts.Token);
 
         try
         {
@@ -336,35 +390,49 @@ public class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private async Task ValidateAuthOnStartupAsync()
+    /// <summary>
+    /// Выполняет фоновую валидацию сессии после готовности первой страницы приложения.
+    /// Сетевой запрос пропускается, если кэш профиля ещё свежий.
+    /// </summary>
+    private async Task ValidateAuthOnStartupAsync(CancellationToken ct)
     {
         try
         {
-            await Task.Delay(2000);
+            ct.ThrowIfCancellationRequested();
 
             var auth = _services.GetRequiredService<CookieAuthService>();
+
+            if (!auth.IsAuthenticated)
+                return;
 
             if (auth.HasProfileLoadError)
             {
                 Log.Warn("[Auth] Profile load error detected on startup");
 
-                if (auth.IsAuthenticated)
-                {
-                    var notifications = _services.GetRequiredService<NotificationService>();
-                    await notifications.ShowToastAsync(
-                        "Auth_ProfileLoadError_Title",
-                        "Auth_ProfileLoadError_Message",
-                        NotificationSeverity.Warning,
-                        durationMs: 6000);
-                }
+                var notifications = _services.GetRequiredService<NotificationService>();
+                await notifications.ShowToastAsync(
+                    "Auth_ProfileLoadError_Title",
+                    "Auth_ProfileLoadError_Message",
+                    NotificationSeverity.Warning,
+                    durationMs: 6000);
+
                 return;
             }
 
-            if (!auth.IsAuthenticated) return;
+            var lastUpdated = auth.State.LastUpdated;
+            if (lastUpdated != DateTime.MinValue &&
+                DateTime.UtcNow - lastUpdated < StartupAuthValidationTtl)
+            {
+                Log.Info("[Auth] Startup validation skipped. Cached profile is still fresh.");
+                return;
+            }
 
-            var (isValid, error, _) = await auth.ValidateSessionAsync();
+            var (isValid, error, isNetworkError) = await auth.ValidateSessionAsync(ct);
 
-            if (!isValid)
+            if (ct.IsCancellationRequested)
+                return;
+
+            if (!isValid && !isNetworkError)
             {
                 Log.Warn($"[Auth] Session expired on startup: {error}");
 
@@ -376,9 +444,24 @@ public class MainWindowViewModel : ViewModelBase
                     durationMs: 8000);
             }
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception ex)
         {
             Log.Error($"[Auth] Startup validation error: {ex.Message}");
         }
+    }
+
+    /// <inheritdoc />
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _lifetimeCts.Cancel();
+            _lifetimeCts.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 }

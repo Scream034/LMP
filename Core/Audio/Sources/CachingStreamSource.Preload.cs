@@ -61,7 +61,7 @@ public sealed partial class CachingStreamSource
                 bool isSuspended = !_suspendGate.IsSet;
                 bool isPaused = !_playbackGate.IsSet;
 
-                // ── Пауза: ждём открытия gate ──
+                //  Пауза: ждём открытия gate 
                 if (isPaused)
                 {
                     try { _playbackGate.Wait(PlaybackGateTimeoutMs, ct); }
@@ -69,7 +69,7 @@ public sealed partial class CachingStreamSource
                     continue;
                 }
 
-                // ── Suspend mode: только critical read-ahead ──
+                //  Suspend mode: только critical read-ahead 
                 if (isSuspended)
                 {
                     long current = Volatile.Read(ref _currentReadOffset);
@@ -106,7 +106,7 @@ public sealed partial class CachingStreamSource
                     continue;
                 }
 
-                // ── Дебаунс после resume ──
+                //  Дебаунс после resume 
                 if (justResumed)
                 {
                     justResumed = false;
@@ -115,12 +115,12 @@ public sealed partial class CachingStreamSource
                     continue;
                 }
 
-                // ── Штатный интервал ожидания между итерациями ──
+                //  Штатный интервал ожидания между итерациями 
                 await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
 
                 if (_cacheEntry.IsComplete) break;
 
-                // ── Snapshot текущего состояния ──
+                //  Snapshot текущего состояния 
                 long epochAtLoopStart = Interlocked.Read(ref _downloadEpoch);
                 var token = CurrentDownloadToken;
                 long currentOffset = Volatile.Read(ref _currentReadOffset);
@@ -136,7 +136,7 @@ public sealed partial class CachingStreamSource
 
                 var degradation = GetNetworkDegradationLevel();
 
-                // ── Prefetch loop: планируем запросы вперёд от текущей позиции ──
+                //  Prefetch loop: планируем запросы вперёд от текущей позиции 
                 while (pending < adaptiveMaxDownloads)
                 {
                     if (Interlocked.Read(ref _downloadEpoch) != epochAtLoopStart)
@@ -173,7 +173,7 @@ public sealed partial class CachingStreamSource
                         break;
                 }
 
-                // ── Opportunistic completion fill ──
+                //  Opportunistic completion fill 
                 // Если трек почти скачан — добиваем оставшиеся gaps,
                 // независимо от текущей позиции воспроизведения.
                 if (pending < adaptiveMaxDownloads && !_cacheEntry.IsComplete)
@@ -193,7 +193,7 @@ public sealed partial class CachingStreamSource
                     }
                 }
 
-                // ── Trim RAM cache ──
+                //  Trim RAM cache 
                 if (_ramCache.TotalBytes > _config.MaxRamBytes)
                     ReleaseRamBuffers();
 
@@ -315,7 +315,7 @@ public sealed partial class CachingStreamSource
         if (diskRanges.Length == 0 && ramBlocks.Length == 0)
             return [];
 
-        // ── Собираем все диапазоны в один массив и сортируем ──
+        //  Собираем все диапазоны в один массив и сортируем 
         var all = new List<(long Start, long End)>(diskRanges.Length + ramBlocks.Length);
 
         for (int i = 0; i < diskRanges.Length; i++)
@@ -326,7 +326,7 @@ public sealed partial class CachingStreamSource
 
         all.Sort((a, b) => a.Start.CompareTo(b.Start));
 
-        // ── Merge overlapping ranges и нормализуем ──
+        //  Merge overlapping ranges и нормализуем 
         var merged = new List<(double, double)>(all.Count);
         long mergedStart = -1;
         long mergedEnd = -1;

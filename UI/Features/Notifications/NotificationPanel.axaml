@@ -138,7 +138,7 @@
             <!-- ═══ ТЕЛО ═══ -->
             <Grid Grid.Row="1">
 
-                <!-- ── Пустое состояние ── -->
+                <!--  Пустое состояние  -->
                 <StackPanel IsVisible="{Binding !HasNotifications}"
                     VerticalAlignment="Center"
                     HorizontalAlignment="Center"

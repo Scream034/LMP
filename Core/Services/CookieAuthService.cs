@@ -61,17 +61,42 @@ public partial class CookieAuthService
         }
     }
 
+    /// <summary>
+    /// Обновляет профиль пользователя и публикует событие изменения авторизации
+    /// только при фактическом изменении данных.
+    /// </summary>
+    /// <param name="name">Имя пользователя.</param>
+    /// <param name="email">Email пользователя.</param>
+    /// <param name="avatarUrl">URL аватара пользователя.</param>
+    /// <param name="activeGaiaId">Gaia ID активного аккаунта.</param>
     public void UpdateUserProfile(string name, string email, string avatarUrl, string activeGaiaId)
     {
+        bool currentAuth = IsAuthenticated;
+
+        bool previousAuth = State.IsAuthenticated;
+        string previousUserName = previousAuth ? State.UserName : string.Empty;
+        string previousEmail = State.UserEmail;
+        string previousAvatarUrl = State.AvatarUrl;
+        string previousGaiaId = State.ActiveGaiaId;
+
         State.UserName = name;
         State.UserEmail = email;
         State.AvatarUrl = avatarUrl;
         State.LastUpdated = DateTime.UtcNow;
-        State.IsAuthenticated = IsAuthenticated;
+        State.IsAuthenticated = currentAuth;
         State.ActiveGaiaId = activeGaiaId;
 
         SaveAuthData();
-        OnAuthStateChanged?.Invoke();
+
+        bool changed =
+            previousAuth != currentAuth ||
+            !string.Equals(previousUserName, name, StringComparison.Ordinal) ||
+            !string.Equals(previousEmail, email, StringComparison.Ordinal) ||
+            !string.Equals(previousAvatarUrl, avatarUrl, StringComparison.Ordinal) ||
+            !string.Equals(previousGaiaId, activeGaiaId, StringComparison.Ordinal);
+
+        if (changed)
+            OnAuthStateChanged?.Invoke();
     }
 
     public void UpdateCachedAccounts(List<YoutubeAccountItem> accounts)
@@ -382,17 +407,26 @@ public partial class CookieAuthService
         }
     }
 
+    /// <summary>
+    /// Устанавливает индекс активной мульти-сессии Google.
+    /// Событие изменения публикуется только при фактическом изменении значения.
+    /// </summary>
+    /// <param name="authUser">Индекс активного authuser.</param>
     public void SetAuthUser(string authUser)
     {
+        bool changed;
         lock (_lock)
         {
+            changed = !string.Equals(State.AuthUser, authUser, StringComparison.Ordinal);
+            if (!changed)
+                return;
+
             State.AuthUser = authUser;
         }
+
         SaveAuthData();
         OnAuthStateChanged?.Invoke();
     }
-
-    // Метод RotateCookiesAsync полностью вырезан во избежание 401 блокировок со стороны Google Botguard
 
     private void LoadCookies()
     {
@@ -415,6 +449,16 @@ public partial class CookieAuthService
             return _cookieMap.TryGetValue(key, out var val) ? val : null;
     }
 
+    /// <summary>
+    /// Сохраняет куки, полученные от браузерного расширения, и обновляет состояние авторизации.
+    /// <para>
+    /// При свежем логине (unauth → auth) <b>не стреляет</b> <see cref="OnAuthStateChanged"/>,
+    /// так как <see cref="AuthState.ActiveGaiaId"/> ещё не установлен и <c>CurrentOwnerId</c>
+    /// библиотеки вернёт <c>"guest"</c>. Вместо этого запускает фоновую валидацию сессии,
+    /// по завершении которой <see cref="UpdateUserProfile"/> установит корректный профиль
+    /// и выстрелит <see cref="OnAuthStateChanged"/> с правильным контекстом владельца.
+    /// </para>
+    /// </summary>
     public void SaveCookies(string cookies)
     {
         if (string.IsNullOrWhiteSpace(cookies)) return;
@@ -437,17 +481,53 @@ public partial class CookieAuthService
 
         ParseAndSetCookies(clean);
         SaveCookiesToFile();
-
         UpdateStateAuthStatus();
-        OnAuthStateChanged?.Invoke();
 
-        if (!wasAuthenticated && IsAuthenticated)
+        bool isFreshLogin = !wasAuthenticated && IsAuthenticated;
+
+        if (isFreshLogin)
         {
-            Log.Info("[Auth] Fresh authentication detected. Invoking login success event.");
+            // Свежий логин: ActiveGaiaId ещё не установлен → CurrentOwnerId = "guest".
+            // НЕ стреляем OnAuthStateChanged — иначе LibraryService гидрирует для "guest".
+            // Запускаем фоновую валидацию → UpdateUserProfile → OnAuthStateChanged с корректным GaiaId.
+            Log.Info("[Auth] Fresh authentication detected. Deferring auth state notification until profile is validated.");
             OnLoginSuccess?.Invoke();
+            _ = ValidateAndNotifyAsync();
+        }
+        else
+        {
+            // Обновление кук существующей сессии — профиль уже установлен
+            OnAuthStateChanged?.Invoke();
         }
 
-        Log.Info($"[Auth] Cookies saved manually. Total keys: {_cookieMap.Count}");
+        Log.Info($"[Auth] Cookies saved. Fresh login: {isFreshLogin}. Total keys: {_cookieMap.Count}");
+    }
+
+    /// <summary>
+    /// Выполняет отложенную валидацию сессии после свежего логина.
+    /// Гарантирует, что <see cref="OnAuthStateChanged"/> будет выстрелен
+    /// после полной установки профиля (или при ошибке — как fallback).
+    /// </summary>
+    private async Task ValidateAndNotifyAsync()
+    {
+        try
+        {
+            var (isValid, _, isNetworkError) = await ValidateSessionAsync().ConfigureAwait(false);
+
+            // При успешной валидации UpdateUserProfile уже вызвал OnAuthStateChanged.
+            // При 401 — Logout() уже вызвал OnAuthStateChanged.
+            // При сетевой ошибке — профиль не установлен, стреляем fallback.
+            if (isNetworkError)
+            {
+                Log.Warn("[Auth] Post-login validation failed due to network. Firing fallback auth state change.");
+                OnAuthStateChanged?.Invoke();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Auth] Deferred session validation failed: {ex.Message}. Firing fallback auth state change.");
+            OnAuthStateChanged?.Invoke();
+        }
     }
 
     public bool UpdateCookies(IEnumerable<string> setCookieHeaders)

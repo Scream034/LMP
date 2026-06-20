@@ -8,7 +8,7 @@ namespace LMP.Core.ViewModels;
 /// Базовый класс для всех моделей представления (ViewModels) приложения.
 /// Обеспечивает поддержку реактивного изменения свойств и управление жизненным циклом ресурсов.
 /// </summary>
-public abstract class ViewModelBase : ReactiveObject, IDisposable, ISuspendable
+public abstract class ViewModelBase : ReactiveObject, IDisposable, ISuspendable, IAccountAware
 {
     #region Properties
 
@@ -30,28 +30,35 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable, ISuspendable
     /// <summary>
     /// Предоставляет доступ к службе локализации для одноуровневого биндинга (требование IFilterable).
     /// </summary>
-#pragma warning disable CA1822 // Пометьте члены как статические
+#pragma warning disable CA1822
     public LocalizationService L => LocalizationService.Instance;
-#pragma warning restore CA1822 // Пометьте члены как статические
+#pragma warning restore CA1822
 
     /// <summary>
     /// Предоставляет статический доступ к службе локализации.
     /// </summary>
     public static LocalizationService SL => LocalizationService.Instance;
 
+    /// <summary>
+    /// Определяет, должен ли экземпляр получать широковещательные уведомления о смене аккаунта.
+    /// По умолчанию выключено, чтобы не регистрировать все VM подряд без необходимости.
+    /// </summary>
+    protected virtual bool HandlesAccountChanges => false;
+
     #endregion
 
     #region Constructor
 
     /// <summary>
-    /// Инициализирует базовый класс. Выполняет автоматическую точечную регистрацию
-    /// в реестре жизненного цикла, если наследник реализует интерфейс <see cref="IAccountAware"/>.
+    /// Инициализирует базовый класс.
+    /// При <see cref="HandlesAccountChanges"/> = <c>true</c> выполняет регистрацию
+    /// в реестре жизненного цикла для получения уведомлений о смене аккаунта.
     /// </summary>
     protected ViewModelBase()
     {
-        if (this is IAccountAware accountAware)
+        if (HandlesAccountChanges)
         {
-            LifecycleRegistry.Instance?.RegisterAccountAware(accountAware);
+            LifecycleRegistry.Instance?.RegisterAccountAware(this);
         }
     }
 
@@ -71,15 +78,25 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable, ISuspendable
     /// <inheritdoc />
     void ISuspendable.OnSuspend(SuspendLevel level)
     {
-        IsSuspended = true; // Фиксируем состояние приостановки на уровне VM
+        IsSuspended = true;
         OnSuspend(level);
     }
 
     /// <inheritdoc />
     void ISuspendable.OnResume(SuspendLevel previousLevel)
     {
-        IsSuspended = false; // Возвращаем в активное состояние
+        IsSuspended = false;
         OnResume(previousLevel);
+    }
+
+    #endregion
+
+    #region IAccountAware Explicit Implementation
+
+    /// <inheritdoc />
+    void IAccountAware.OnAccountChanged()
+    {
+        OnAccountChanged();
     }
 
     #endregion
@@ -152,7 +169,6 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable, ISuspendable
 
         CurrentSuspendLevel = level;
 
-        // 1. Оповещаем зарегистрированные фоновые службы (например, AudioEngine)
         if (LifecycleRegistry.Instance != null)
         {
             if (level != SuspendLevel.None)
@@ -161,7 +177,6 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable, ISuspendable
                 LifecycleRegistry.Instance.BroadcastBackgroundResume(previousLevel);
         }
 
-        // 2. Иерархическое распространение: оповещаем только активную UI-страницу 
         var activePage = LifecycleRegistry.ActiveUiPageResolver?.Invoke();
         if (activePage != null)
         {

@@ -49,10 +49,18 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
     private bool _isDisposed;
     private int _prevPlaylistCount;
     private int _prevTrackCount;
+
     /// <summary>
-    /// Локальный признак наличия данных в памяти
+    /// Локальный признак наличия данных в памяти.
     /// </summary>
     private bool _isDataLoaded;
+
+    /// <summary>
+    /// Идентификатор владельца, для которого последний раз была загружена страница.
+    /// Защищает от повторного использования stale-кэша после смены аккаунта,
+    /// даже если broadсast был пропущен или страница уже находилась в кеше навигации.
+    /// </summary>
+    private string _loadedOwnerId = string.Empty;
 
     #endregion
 
@@ -90,6 +98,9 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
     #endregion
 
     #region Конструктор
+
+    /// <inheritdoc />
+    protected override bool HandlesAccountChanges => true;
 
     public LibraryViewModel(
         LibraryService library,
@@ -154,9 +165,9 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
     {
         if (_isDisposed) return;
 
-        if (_isDataLoaded)
+        var currentOwnerId = _auth.State.DisplayId;
+        if (_isDataLoaded && string.Equals(_loadedOwnerId, currentOwnerId, StringComparison.Ordinal))
         {
-            // Карточки уже в ОЗУ, делаем видимыми без обращения к SQLite
             IsContentReady = true;
             return;
         }
@@ -166,6 +177,7 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
         await LoadPlaylistsAsync();
         _isDataLoaded = true;
+        _loadedOwnerId = _auth.State.DisplayId;
         IsContentReady = true;
     }
 
@@ -392,14 +404,36 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
         bool wasActive = IsContentReady;
 
         _isDataLoaded = false;
+        _loadedOwnerId = string.Empty;
         IsContentReady = false;
         Playlists.Clear();
 
         if (wasActive)
         {
             Log.Info("[Library] Account changed while page was visible. Re-rendering lists immediately.");
-            _ = LoadPlaylistsAsync();
-            IsContentReady = true;
+            _ = ReloadAfterAccountChangeAsync();
+        }
+    }
+
+    /// <summary>
+    /// Полная перезагрузка списка плейлистов после смены аккаунта.
+    /// </summary>
+    private async Task ReloadAfterAccountChangeAsync()
+    {
+        try
+        {
+            await LoadPlaylistsAsync();
+
+            if (!_isDisposed)
+            {
+                _isDataLoaded = true;
+                _loadedOwnerId = _auth.State.DisplayId;
+                IsContentReady = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Library] Failed to reload after account change: {ex.Message}");
         }
     }
 
@@ -785,7 +819,6 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
         var existingDict = Playlists.ToDictionary(vm => vm.Id);
         var newIdSet = new HashSet<string>(sorted.Select(x => x.Playlist.Id));
 
-        // Удаляем плейлисты, которых больше нет
         var toRemove = Playlists.Where(vm => !newIdSet.Contains(vm.Id)).ToList();
         foreach (var vm in toRemove)
         {
@@ -816,7 +849,6 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
             }
         }
 
-        // Добавляем новые карточки в коллекцию
         foreach (var (vm, targetIndex) in newItems)
         {
             if (ct.IsCancellationRequested || _isDisposed) return;
@@ -827,17 +859,14 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
                 Playlists.Insert(targetIndex, vm);
         }
 
-        // ═══ UI-YIELDING: правильная реализация ═══
         if (newItems.Count > 0)
         {
-            // 1. Первые InitialBatchSize карточек — мгновенно (покрывают видимую область)
             int initialBatch = Math.Min(newItems.Count, InitialBatchSize);
             for (int i = 0; i < initialBatch; i++)
             {
                 newItems[i].vm.Show();
             }
 
-            // 2. Остальные карточки — батчами с реальным Yield
             if (newItems.Count > initialBatch)
             {
                 int remaining = newItems.Count - initialBatch;
@@ -847,7 +876,6 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
                 {
                     if (ct.IsCancellationRequested || _isDisposed) return;
 
-                    // ═══ НАСТОЯЩИЙ YIELD: отдаём управление рендеру ═══
                     await Dispatcher.UIThread.InvokeAsync(
                         () => { },
                         DispatcherPriority.Background);
@@ -866,6 +894,7 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
         if (!_isDisposed && !ct.IsCancellationRequested)
         {
+            _loadedOwnerId = _auth.State.DisplayId;
             UpdateStatsInBackground();
         }
     }

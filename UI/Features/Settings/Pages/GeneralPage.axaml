@@ -18,7 +18,7 @@
         <Border Classes="card">
             <StackPanel Spacing="16">
 
-                <!-- ── Discord RPC ── -->
+                <!--  Discord RPC  -->
                 <Grid ColumnDefinitions="*, Auto">
                     <StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -36,7 +36,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── Search cache ── -->
+                <!--  Search cache  -->
                 <Grid ColumnDefinitions="*, Auto">
                     <StackPanel>
                         <TextBlock Classes="label" Text="{Binding L[Settings_SearchCache]}" />
@@ -60,7 +60,7 @@
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                <!-- ── Reset ── -->
+                <!--  Reset  -->
                 <Button Content="{Binding L[Storage_ResetApp]}"
                     Command="{Binding ResetLibraryCommand}"
                     HorizontalAlignment="Left"

@@ -3,21 +3,37 @@
     xmlns:dialogs="using:LMP.UI.Dialogs"
     x:Class="LMP.UI.Dialogs.Content.AuthDialogContent"
     x:DataType="dialogs:AuthDialogViewModel"
-    Width="620">
+    Width="700"
+    MaxHeight="{Binding $parent[Panel].Bounds.Height, FallbackValue=820}">
 
     <UserControl.Styles>
-        <Style Selector="TextBlock.auth-status">
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-        </Style>
-        <Style Selector="TextBlock.auth-status.error">
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-        </Style>
         <Style Selector="TextBlock.guide-step">
-            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontSize" Value="14" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
-
+        <Style Selector="TextBlock.step-num">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Width" Value="16" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+            <Setter Property="Margin" Value="0,1,16,0" />
+        </Style>
+        <Style Selector="TextBlock.step-hint">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="Border.step-sep">
+            <Setter Property="Height" Value="1" />
+            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+            <Setter Property="Margin" Value="0,8" />
+        </Style>
+        <Style Selector="TextBlock.auth-status">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        </Style>
         <Style Selector="ToggleButton.only-border">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
@@ -29,21 +45,15 @@
         <Style
             Selector="ToggleButton.only-border:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
             <Setter Property="Opacity" Value="0.8" />
         </Style>
         <Style
             Selector="ToggleButton.only-border:checked /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         </Style>
         <Style Selector="ToggleButton.only-border:checked">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         </Style>
-
         <Style Selector="Button.step-link-btn">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
@@ -57,12 +67,10 @@
         <Style
             Selector="Button.step-link-btn:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
         </Style>
         <Style Selector="Button.step-link-btn:pointerover TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
         </Style>
-
         <Style Selector="TabItem">
             <Setter Property="Padding" Value="12,4,12,12" />
             <Setter Property="FontSize" Value="12" />
@@ -97,7 +105,6 @@
             <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
             <Setter Property="Opacity" Value="1.0" />
         </Style>
-
         <Style Selector="Border#StatusBorder">
             <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
             <Setter Property="Transitions">
@@ -116,201 +123,207 @@
 
     <Border Background="{DynamicResource BgPrimaryBrush}"
         BorderBrush="{DynamicResource BgHighlightBrush}"
-        BorderThickness="1"
-        CornerRadius="12"
-        Padding="24,16">
+        BorderThickness="1" CornerRadius="12" Padding="28,20">
 
-        <StackPanel Spacing="12" HorizontalAlignment="Stretch">
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+            HorizontalScrollBarVisibility="Disabled"
+            Padding="0,0,4,0">
 
-            <TextBlock Text="{Binding L[Dialog_Login_Title]}"
-                Classes="h2"
-                HorizontalAlignment="Center"
-                Margin="0,0,0,4" />
+            <StackPanel Spacing="14" HorizontalAlignment="Stretch">
 
-            <Grid ColumnDefinitions="*, Auto" Margin="0,2">
-                <TextBlock Grid.Column="0"
-                    Text="{Binding L[Auth_Incognito_Title]}"
-                    FontWeight="Bold"
-                    FontSize="14"
-                    Foreground="{DynamicResource TextPrimaryBrush}"
-                    VerticalAlignment="Center"
-                    IsVisible="{Binding !IsGuideExpanded}" />
-                <TextBlock Grid.Column="0"
-                    Text="{Binding L[Extension_Install_Title]}"
-                    FontWeight="Bold"
-                    FontSize="14"
-                    Foreground="{DynamicResource TextPrimaryBrush}"
-                    VerticalAlignment="Center"
-                    IsVisible="{Binding IsGuideExpanded}" />
+                <!-- Title -->
+                <TextBlock Text="{Binding L[Dialog_Login_Title]}"
+                    Classes="h2" HorizontalAlignment="Center" Margin="0,0,0,2" />
 
-                <ToggleButton Grid.Column="1"
-                    IsChecked="{Binding IsGuideExpanded, Mode=TwoWay}"
-                    Classes="only-border"
-                    Height="28"
-                    Padding="10,2"
-                    IsVisible="{Binding IsExtensionReady}"
-                    ToolTip.Tip="{Binding L[Auth_Tooltip_ToggleView]}"
-                    Cursor="Hand">
-                    <Panel>
-                        <TextBlock Text="{Binding L[Auth_Show_Setup]}"
-                            IsVisible="{Binding !IsGuideExpanded}" FontSize="12"
-                            Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding L[Auth_Show_Protocol]}"
-                            IsVisible="{Binding IsGuideExpanded}" FontSize="12"
-                            Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
-                    </Panel>
-                </ToggleButton>
-            </Grid>
-
-            <Border BorderBrush="{DynamicResource SystemWarnOrangeBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="12,8"
-                Background="Transparent"
-                IsVisible="{Binding IsWarningVisible}">
-                <Grid ColumnDefinitions="Auto, *">
-                    <PathIcon Grid.Column="0"
-                        Data="M12,2L1,21H23L12,2M12,6L19.53,19H4.47L12,6M11,10V14H13V10H11M11,16V18H13V16H11Z"
-                        Width="16" Height="16"
-                        Foreground="{DynamicResource SystemWarnOrangeBrush}"
-                        Margin="0,0,10,0"
-                        VerticalAlignment="Top" />
-                    <Panel Grid.Column="1">
-                        <TextBlock Text="{Binding L[Auth_Incognito_Warning]}"
-                            FontSize="11"
-                            Foreground="{DynamicResource SystemWarnOrangeBrush}"
-                            TextWrapping="Wrap"
-                            IsVisible="{Binding !IsGuideExpanded}" />
-
-                        <TextBlock Text="{Binding L[Extension_Guide_Firefox_Warning]}"
-                            FontSize="11"
-                            Foreground="{DynamicResource SystemWarnOrangeBrush}"
-                            TextWrapping="Wrap"
-                            IsVisible="{Binding IsFirefoxWarningVisible}" />
-                    </Panel>
+                <!-- Header row -->
+                <Grid ColumnDefinitions="*, Auto">
+                    <TextBlock Grid.Column="0"
+                        Text="{Binding L[Auth_Incognito_Title]}"
+                        FontWeight="Bold" FontSize="15"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        VerticalAlignment="Center"
+                        IsVisible="{Binding !IsGuideExpanded}" />
+                    <TextBlock Grid.Column="0"
+                        Text="{Binding L[Extension_Install_Title]}"
+                        FontWeight="Bold" FontSize="15"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        VerticalAlignment="Center"
+                        IsVisible="{Binding IsGuideExpanded}" />
+                    <ToggleButton Grid.Column="1"
+                        IsChecked="{Binding IsGuideExpanded, Mode=TwoWay}"
+                        Classes="only-border" Height="28" Padding="10,2"
+                        IsVisible="{Binding IsExtensionReady}"
+                        ToolTip.Tip="{Binding L[Auth_Tooltip_ToggleView]}"
+                        Cursor="Hand">
+                        <Panel>
+                            <TextBlock Text="{Binding L[Auth_Show_Setup]}"
+                                IsVisible="{Binding !IsGuideExpanded}"
+                                FontSize="12" Foreground="{DynamicResource AccentBrush}"
+                                FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding L[Auth_Show_Protocol]}"
+                                IsVisible="{Binding IsGuideExpanded}"
+                                FontSize="12" Foreground="{DynamicResource AccentBrush}"
+                                FontWeight="SemiBold" />
+                        </Panel>
+                    </ToggleButton>
                 </Grid>
-            </Border>
 
-            <Panel>
+                <!-- Warning banner -->
+                <Border BorderBrush="{DynamicResource SystemWarnOrangeBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="12,8"
+                    Background="Transparent" IsVisible="{Binding IsWarningVisible}">
+                    <Grid ColumnDefinitions="Auto, *">
+                        <PathIcon Grid.Column="0"
+                            Data="M12,2L1,21H23L12,2M12,6L19.53,19H4.47L12,6M11,10V14H13V10H11M11,16V18H13V16H11Z"
+                            Width="16" Height="16"
+                            Foreground="{DynamicResource SystemWarnOrangeBrush}"
+                            Margin="0,0,10,0" VerticalAlignment="Top" />
+                        <Panel Grid.Column="1">
+                            <TextBlock Text="{Binding L[Auth_Incognito_Warning]}"
+                                FontSize="12" Foreground="{DynamicResource SystemWarnOrangeBrush}"
+                                TextWrapping="Wrap" IsVisible="{Binding !IsGuideExpanded}" />
+                            <TextBlock Text="{Binding L[Extension_Guide_Firefox_Warning]}"
+                                FontSize="12" Foreground="{DynamicResource SystemWarnOrangeBrush}"
+                                TextWrapping="Wrap" IsVisible="{Binding IsFirefoxWarningVisible}" />
+                        </Panel>
+                    </Grid>
+                </Border>
+
+                <!-- Extension not installed -->
                 <StackPanel Spacing="10" IsVisible="{Binding !IsExtensionReady}">
                     <Border BorderBrush="{DynamicResource BgHighlightBrush}"
-                        BorderThickness="1"
-                        CornerRadius="8"
-                        Padding="16,20"
+                        BorderThickness="1" CornerRadius="8" Padding="16,20"
                         HorizontalAlignment="Stretch">
-                        <StackPanel Spacing="12">
+                        <StackPanel Spacing="14">
                             <TextBlock Text="{Binding L[Extension_Install_SubTitle]}"
-                                HorizontalAlignment="Center"
-                                FontSize="12"
+                                HorizontalAlignment="Center" FontSize="13"
                                 Foreground="{DynamicResource TextSecondaryBrush}" />
                             <Button Content="{Binding L[Dialog_Login_GetExt]}"
                                 Command="{Binding DownloadExtensionCommand}"
-                                Classes="primary-btn"
-                                Padding="0"
-                                Height="38"
-                                CornerRadius="6"
-                                HorizontalAlignment="Stretch" />
+                                Classes="primary-btn" Padding="0" Height="40"
+                                CornerRadius="6" HorizontalAlignment="Stretch" />
                         </StackPanel>
                     </Border>
                 </StackPanel>
 
-                <StackPanel Spacing="10" IsVisible="{Binding IsExtensionReady}">
-                    <StackPanel Spacing="10" IsVisible="{Binding !IsGuideExpanded}">
-                        <Border BorderBrush="{DynamicResource BgHighlightBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            Padding="16,12">
-                            <StackPanel Spacing="10">
-                                <Grid ColumnDefinitions="Auto, *">
-                                    <TextBlock Grid.Column="0" Text="1" FontSize="16"
-                                        FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"
-                                        Margin="0,0,16,0" Width="14" HorizontalAlignment="Center"
-                                        VerticalAlignment="Top" />
-                                    <TextBlock Grid.Column="1"
-                                        Text="{Binding L[Auth_Incognito_Step1]}" FontSize="13"
-                                        Foreground="{DynamicResource TextPrimaryBrush}"
-                                        TextWrapping="Wrap" VerticalAlignment="Center" />
-                                </Grid>
-                                <Grid ColumnDefinitions="Auto, *">
-                                    <TextBlock Grid.Column="0" Text="2" FontSize="16"
-                                        FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"
-                                        Margin="0,0,16,0" Width="14" HorizontalAlignment="Center"
-                                        VerticalAlignment="Top" />
-                                    <StackPanel Grid.Column="1" Spacing="4">
-                                        <TextBlock Text="{Binding L[Auth_Incognito_Step2]}"
-                                            FontSize="13"
-                                            Foreground="{DynamicResource TextPrimaryBrush}"
-                                            TextWrapping="Wrap" />
-                                        <Button Command="{Binding CopyLinkCommand}"
-                                            CommandParameter="https://www.youtube.com"
-                                            Classes="ghost-btn" Height="22" Padding="4,1"
-                                            HorizontalAlignment="Left"
-                                            ToolTip.Tip="{Binding L[Auth_Tooltip_CopyLink]}"
-                                            Cursor="Hand">
-                                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                                <PathIcon Data="{StaticResource Icon.Paperclip}"
-                                                    Width="10" Height="10"
-                                                    Foreground="{DynamicResource AccentBrush}" />
-                                                <TextBlock Text="https://www.youtube.com"
-                                                    FontSize="11"
-                                                    Foreground="{DynamicResource AccentBrush}"
-                                                    FontWeight="SemiBold" />
-                                            </StackPanel>
-                                        </Button>
-                                    </StackPanel>
-                                </Grid>
-                                <Grid ColumnDefinitions="Auto, *">
-                                    <TextBlock Grid.Column="0" Text="3" FontSize="16"
-                                        FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"
-                                        Margin="0,0,16,0" Width="14" HorizontalAlignment="Center"
-                                        VerticalAlignment="Top" />
-                                    <StackPanel Grid.Column="1" Spacing="4">
-                                        <TextBlock Text="{Binding L[Auth_Incognito_Step3]}"
-                                            FontSize="13"
-                                            Foreground="{DynamicResource TextPrimaryBrush}"
-                                            TextWrapping="Wrap" />
-                                        <Button Command="{Binding CopyLinkCommand}"
-                                            CommandParameter="https://www.youtube.com/robots.txt"
-                                            Classes="ghost-btn" Height="22" Padding="4,1"
-                                            HorizontalAlignment="Left"
-                                            ToolTip.Tip="{Binding L[Auth_Tooltip_CopyLink]}"
-                                            Cursor="Hand">
-                                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                                <PathIcon Data="{StaticResource Icon.Paperclip}"
-                                                    Width="10" Height="10"
-                                                    Foreground="{DynamicResource AccentBrush}" />
-                                                <TextBlock Text="https://www.youtube.com/robots.txt"
-                                                    FontSize="11"
-                                                    Foreground="{DynamicResource AccentBrush}"
-                                                    FontWeight="SemiBold" />
-                                            </StackPanel>
-                                        </Button>
-                                    </StackPanel>
-                                </Grid>
-                                <Grid ColumnDefinitions="Auto, *">
-                                    <TextBlock Grid.Column="0" Text="4" FontSize="16"
-                                        FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"
-                                        Margin="0,0,16,0" Width="14" HorizontalAlignment="Center"
-                                        VerticalAlignment="Top" />
-                                    <TextBlock Grid.Column="1"
-                                        Text="{Binding L[Auth_Incognito_Step4]}" FontSize="13"
-                                        Foreground="{DynamicResource TextPrimaryBrush}"
-                                        TextWrapping="Wrap" VerticalAlignment="Center" />
-                                </Grid>
-                                <Grid ColumnDefinitions="Auto, *">
-                                    <TextBlock Grid.Column="0" Text="5" FontSize="16"
-                                        FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"
-                                        Margin="0,0,16,0" Width="14" HorizontalAlignment="Center"
-                                        VerticalAlignment="Top" />
-                                    <TextBlock Grid.Column="1"
-                                        Text="{Binding L[Auth_Incognito_Step5]}" FontSize="13"
-                                        Foreground="{DynamicResource TextPrimaryBrush}"
-                                        TextWrapping="Wrap" VerticalAlignment="Center" />
-                                </Grid>
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
+                <!-- Extension installed -->
+                <Panel IsVisible="{Binding IsExtensionReady}">
 
+                    <!-- ══ LOGIN INSTRUCTIONS ══ -->
+                    <!-- Шаги в обычном StackPanel — скролл обеспечивает внешний ScrollViewer -->
+                    <Border BorderBrush="{DynamicResource BgHighlightBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="16,14"
+                        IsVisible="{Binding !IsGuideExpanded}">
+                        <StackPanel Spacing="0">
+
+                            <!-- Step 1 -->
+                            <Grid ColumnDefinitions="Auto, *">
+                                <TextBlock Grid.Column="0" Classes="step-num" Text="1" />
+                                <TextBlock Grid.Column="1" Classes="guide-step"
+                                    Text="{Binding L[Auth_Incognito_Step1]}"
+                                    VerticalAlignment="Center" />
+                            </Grid>
+                            <Border Classes="step-sep" />
+
+                            <!-- Step 2 -->
+                            <Grid ColumnDefinitions="Auto, *">
+                                <TextBlock Grid.Column="0" Classes="step-num" Text="2" />
+                                <StackPanel Grid.Column="1" Spacing="4">
+                                    <TextBlock Classes="guide-step"
+                                        Text="{Binding L[Auth_Incognito_Step2]}" />
+                                    <Button Command="{Binding CopyLinkCommand}"
+                                        CommandParameter="https://www.youtube.com"
+                                        Classes="ghost-btn" Height="22" Padding="4,1"
+                                        HorizontalAlignment="Left"
+                                        ToolTip.Tip="{Binding L[Auth_Tooltip_CopyLink]}"
+                                        Cursor="Hand">
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                            <PathIcon Data="{StaticResource Icon.Paperclip}"
+                                                Width="10" Height="10"
+                                                Foreground="{DynamicResource AccentBrush}" />
+                                            <TextBlock Text="https://www.youtube.com"
+                                                FontSize="11"
+                                                Foreground="{DynamicResource AccentBrush}"
+                                                FontWeight="SemiBold" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                            <Border Classes="step-sep" />
+
+                            <!-- Step 3 -->
+                            <Grid ColumnDefinitions="Auto, *">
+                                <TextBlock Grid.Column="0" Classes="step-num" Text="3" />
+                                <TextBlock Grid.Column="1" Classes="guide-step"
+                                    Text="{Binding L[Auth_Incognito_Step3]}"
+                                    VerticalAlignment="Center" />
+                            </Grid>
+                            <Border Classes="step-sep" />
+
+                            <!-- Step 4 -->
+                            <Grid ColumnDefinitions="Auto, *">
+                                <TextBlock Grid.Column="0" Classes="step-num" Text="4" />
+                                <StackPanel Grid.Column="1" Spacing="4">
+                                    <TextBlock Classes="guide-step"
+                                        Text="{Binding L[Auth_Incognito_Step4]}" />
+                                    <Button Command="{Binding CopyLinkCommand}"
+                                        CommandParameter="https://www.youtube.com/robots.txt"
+                                        Classes="ghost-btn" Height="22" Padding="4,1"
+                                        HorizontalAlignment="Left"
+                                        ToolTip.Tip="{Binding L[Auth_Tooltip_CopyLink]}"
+                                        Cursor="Hand">
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                            <PathIcon Data="{StaticResource Icon.Paperclip}"
+                                                Width="10" Height="10"
+                                                Foreground="{DynamicResource AccentBrush}" />
+                                            <TextBlock Text="https://www.youtube.com/robots.txt"
+                                                FontSize="11"
+                                                Foreground="{DynamicResource AccentBrush}"
+                                                FontWeight="SemiBold" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                            <Border Classes="step-sep" />
+
+                            <!-- Step 5 -->
+                            <Grid ColumnDefinitions="Auto, *">
+                                <TextBlock Grid.Column="0" Classes="step-num" Text="5" />
+                                <TextBlock Grid.Column="1" Classes="guide-step"
+                                    Text="{Binding L[Auth_Incognito_Step5]}"
+                                    VerticalAlignment="Center" />
+                            </Grid>
+                            <Border Classes="step-sep" />
+
+                            <!-- Step 6 -->
+                            <Grid ColumnDefinitions="Auto, *">
+                                <TextBlock Grid.Column="0" Classes="step-num" Text="6" />
+                                <TextBlock Grid.Column="1" Classes="guide-step"
+                                    Text="{Binding L[Auth_Incognito_Step6]}"
+                                    VerticalAlignment="Center" />
+                            </Grid>
+                            <Border Classes="step-sep" />
+
+                            <!-- Step 7 -->
+                            <Grid ColumnDefinitions="Auto, *">
+                                <TextBlock Grid.Column="0" Classes="step-num" Text="7" />
+                                <TextBlock Grid.Column="1" Classes="guide-step"
+                                    Text="{Binding L[Auth_Incognito_Step7]}"
+                                    VerticalAlignment="Center" />
+                            </Grid>
+
+                            <!-- Hint — всегда виден, без скролла -->
+                            <Border Margin="0,10,0,0"
+                                Background="{DynamicResource BgSecondaryBrush}"
+                                CornerRadius="6" Padding="10,8">
+                                <TextBlock Classes="step-hint"
+                                    Text="{Binding L[Auth_Incognito_Step5_Hint]}" />
+                            </Border>
+
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ══ EXTENSION SETUP GUIDE (tabs) ══ -->
                     <StackPanel Spacing="0" IsVisible="{Binding IsGuideExpanded}">
                         <TabControl Name="BrowserTabs"
                             SelectedIndex="{Binding SelectedBrowserTabIndex, Mode=TwoWay}"
@@ -323,21 +336,19 @@
                                 </ItemsPanelTemplate>
                             </TabControl.ItemsPanel>
 
+                            <!-- ════ Chrome ════ -->
                             <TabItem Header="{Binding L[Extension_Guide_Chrome_Header]}">
+                                <!-- Без ScrollViewer — внешний справится -->
                                 <Border BorderBrush="{DynamicResource BgHighlightBrush}"
-                                    BorderThickness="1" CornerRadius="8" Padding="16,12"
+                                    BorderThickness="1" CornerRadius="8" Padding="16,14"
                                     Margin="0,12,0,0">
-                                    <StackPanel Spacing="10">
+                                    <StackPanel Spacing="0">
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="1" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="1" />
                                             <StackPanel Grid.Column="1" Spacing="4">
-                                                <TextBlock
-                                                    Text="{Binding L[Extension_Guide_Chrome_Step1]}"
-                                                    Classes="guide-step" />
+                                                <TextBlock Classes="guide-step"
+                                                    Text="{Binding L[Extension_Guide_Chrome_Step1]}" />
                                                 <Button Command="{Binding CopyLinkCommand}"
                                                     CommandParameter="chrome://extensions/"
                                                     Classes="ghost-btn" Height="22" Padding="4,1"
@@ -356,36 +367,29 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="2" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
-                                            <TextBlock Grid.Column="1"
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="2" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
                                                 Text="{Binding L[Extension_Guide_Chrome_Step2]}"
-                                                Classes="guide-step" VerticalAlignment="Center" />
+                                                VerticalAlignment="Center" />
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="3" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
-                                            <TextBlock Grid.Column="1"
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="3" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
                                                 Text="{Binding L[Extension_Guide_Chrome_Step3]}"
-                                                Classes="guide-step" VerticalAlignment="Center" />
+                                                VerticalAlignment="Center" />
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="4" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="4" />
                                             <StackPanel Grid.Column="1" Spacing="4">
-                                                <TextBlock
-                                                    Text="{Binding L[Extension_Guide_Chrome_Step4]}"
-                                                    Classes="guide-step" />
+                                                <TextBlock Classes="guide-step"
+                                                    Text="{Binding L[Extension_Guide_Chrome_Step4]}" />
                                                 <Button Command="{Binding CopyPathCommand}"
                                                     Classes="ghost-btn" Height="22" Padding="4,1"
                                                     HorizontalAlignment="Left"
@@ -405,61 +409,87 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="5" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
+                                                Text="{Binding L[Extension_Guide_Chrome_Step5]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding !IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                Text="5" />
+                                            <TextBlock Grid.Column="1" Classes="step-hint"
+                                                Text="{Binding L[Auth_Step_Pending]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Border Classes="step-sep" />
+
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="6" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
+                                                Text="{Binding L[Extension_Guide_Chrome_Step6]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding !IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                Text="6" />
+                                            <TextBlock Grid.Column="1" Classes="step-hint"
+                                                Text="{Binding L[Auth_Step_Pending]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Panel>
                                             <Grid ColumnDefinitions="Auto, *"
                                                 IsVisible="{Binding !IsPathCopied}">
-                                                <TextBlock Grid.Column="0" Text="5" FontSize="16"
-                                                    FontWeight="Bold"
+                                                <TextBlock Grid.Column="0" Classes="step-num"
                                                     Foreground="{DynamicResource TextMutedBrush}"
-                                                    Margin="0,0,16,0" Width="14"
-                                                    HorizontalAlignment="Center"
-                                                    VerticalAlignment="Top" />
-                                                <TextBlock Grid.Column="1"
-                                                    Text="{Binding L[Auth_Step5_Pending]}"
-                                                    Classes="guide-step"
-                                                    Foreground="{DynamicResource TextMutedBrush}"
+                                                    Text="7" />
+                                                <TextBlock Grid.Column="1" Classes="step-hint"
+                                                    Text="{Binding L[Auth_Step_Pending]}"
                                                     VerticalAlignment="Center" />
                                             </Grid>
-
                                             <Button Command="{Binding ToggleGuideCommand}"
                                                 Classes="step-link-btn"
                                                 IsVisible="{Binding IsPathCopied}"
                                                 ToolTip.Tip="{Binding L[Auth_Tooltip_ToProtocol]}">
                                                 <Grid ColumnDefinitions="Auto, *">
-                                                    <TextBlock Grid.Column="0" Text="5"
-                                                        FontSize="16" FontWeight="Bold"
+                                                    <TextBlock Grid.Column="0" Classes="step-num"
+                                                        Text="7" />
+                                                    <TextBlock Grid.Column="1" Classes="guide-step"
+                                                        FontWeight="SemiBold"
                                                         Foreground="{DynamicResource AccentBrush}"
-                                                        Margin="0,0,16,0" Width="14"
-                                                        HorizontalAlignment="Center"
-                                                        VerticalAlignment="Top" />
-                                                    <TextBlock Grid.Column="1"
-                                                        Text="{Binding L[Extension_Guide_Chrome_Step5]}"
-                                                        Classes="guide-step" FontWeight="SemiBold"
-                                                        Foreground="{DynamicResource AccentBrush}"
+                                                        Text="{Binding L[Extension_Guide_Chrome_Step7]}"
                                                         TextWrapping="Wrap"
                                                         VerticalAlignment="Center" />
                                                 </Grid>
                                             </Button>
                                         </Panel>
+
                                     </StackPanel>
                                 </Border>
                             </TabItem>
 
+                            <!-- ════ Edge ════ -->
                             <TabItem Header="{Binding L[Extension_Guide_Edge_Header]}">
                                 <Border BorderBrush="{DynamicResource BgHighlightBrush}"
-                                    BorderThickness="1" CornerRadius="8" Padding="16,12"
+                                    BorderThickness="1" CornerRadius="8" Padding="16,14"
                                     Margin="0,12,0,0">
-                                    <StackPanel Spacing="10">
+                                    <StackPanel Spacing="0">
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="1" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="1" />
                                             <StackPanel Grid.Column="1" Spacing="4">
-                                                <TextBlock
-                                                    Text="{Binding L[Extension_Guide_Edge_Step1]}"
-                                                    Classes="guide-step" />
+                                                <TextBlock Classes="guide-step"
+                                                    Text="{Binding L[Extension_Guide_Edge_Step1]}" />
                                                 <Button Command="{Binding CopyLinkCommand}"
                                                     CommandParameter="edge://extensions/"
                                                     Classes="ghost-btn" Height="22" Padding="4,1"
@@ -478,36 +508,29 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="2" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
-                                            <TextBlock Grid.Column="1"
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="2" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
                                                 Text="{Binding L[Extension_Guide_Edge_Step2]}"
-                                                Classes="guide-step" VerticalAlignment="Center" />
+                                                VerticalAlignment="Center" />
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="3" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
-                                            <TextBlock Grid.Column="1"
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="3" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
                                                 Text="{Binding L[Extension_Guide_Edge_Step3]}"
-                                                Classes="guide-step" VerticalAlignment="Center" />
+                                                VerticalAlignment="Center" />
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="4" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="4" />
                                             <StackPanel Grid.Column="1" Spacing="4">
-                                                <TextBlock
-                                                    Text="{Binding L[Extension_Guide_Edge_Step4]}"
-                                                    Classes="guide-step" />
+                                                <TextBlock Classes="guide-step"
+                                                    Text="{Binding L[Extension_Guide_Edge_Step4]}" />
                                                 <Button Command="{Binding CopyPathCommand}"
                                                     Classes="ghost-btn" Height="22" Padding="4,1"
                                                     HorizontalAlignment="Left"
@@ -527,61 +550,87 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="5" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
+                                                Text="{Binding L[Extension_Guide_Edge_Step5]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding !IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                Text="5" />
+                                            <TextBlock Grid.Column="1" Classes="step-hint"
+                                                Text="{Binding L[Auth_Step_Pending]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Border Classes="step-sep" />
+
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="6" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
+                                                Text="{Binding L[Extension_Guide_Edge_Step6]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding !IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                Text="6" />
+                                            <TextBlock Grid.Column="1" Classes="step-hint"
+                                                Text="{Binding L[Auth_Step_Pending]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Panel>
                                             <Grid ColumnDefinitions="Auto, *"
                                                 IsVisible="{Binding !IsPathCopied}">
-                                                <TextBlock Grid.Column="0" Text="5" FontSize="16"
-                                                    FontWeight="Bold"
+                                                <TextBlock Grid.Column="0" Classes="step-num"
                                                     Foreground="{DynamicResource TextMutedBrush}"
-                                                    Margin="0,0,16,0" Width="14"
-                                                    HorizontalAlignment="Center"
-                                                    VerticalAlignment="Top" />
-                                                <TextBlock Grid.Column="1"
-                                                    Text="{Binding L[Auth_Step5_Pending]}"
-                                                    Classes="guide-step"
-                                                    Foreground="{DynamicResource TextMutedBrush}"
+                                                    Text="7" />
+                                                <TextBlock Grid.Column="1" Classes="step-hint"
+                                                    Text="{Binding L[Auth_Step_Pending]}"
                                                     VerticalAlignment="Center" />
                                             </Grid>
-
                                             <Button Command="{Binding ToggleGuideCommand}"
                                                 Classes="step-link-btn"
                                                 IsVisible="{Binding IsPathCopied}"
                                                 ToolTip.Tip="{Binding L[Auth_Tooltip_ToProtocol]}">
                                                 <Grid ColumnDefinitions="Auto, *">
-                                                    <TextBlock Grid.Column="0" Text="5"
-                                                        FontSize="16" FontWeight="Bold"
+                                                    <TextBlock Grid.Column="0" Classes="step-num"
+                                                        Text="7" />
+                                                    <TextBlock Grid.Column="1" Classes="guide-step"
+                                                        FontWeight="SemiBold"
                                                         Foreground="{DynamicResource AccentBrush}"
-                                                        Margin="0,0,16,0" Width="14"
-                                                        HorizontalAlignment="Center"
-                                                        VerticalAlignment="Top" />
-                                                    <TextBlock Grid.Column="1"
-                                                        Text="{Binding L[Extension_Guide_Edge_Step5]}"
-                                                        Classes="guide-step" FontWeight="SemiBold"
-                                                        Foreground="{DynamicResource AccentBrush}"
+                                                        Text="{Binding L[Extension_Guide_Edge_Step7]}"
                                                         TextWrapping="Wrap"
                                                         VerticalAlignment="Center" />
                                                 </Grid>
                                             </Button>
                                         </Panel>
+
                                     </StackPanel>
                                 </Border>
                             </TabItem>
 
+                            <!-- ════ Firefox ════ -->
                             <TabItem Header="{Binding L[Extension_Guide_Firefox_Header]}">
                                 <Border BorderBrush="{DynamicResource BgHighlightBrush}"
-                                    BorderThickness="1" CornerRadius="8" Padding="16,12"
+                                    BorderThickness="1" CornerRadius="8" Padding="16,14"
                                     Margin="0,12,0,0">
-                                    <StackPanel Spacing="10">
+                                    <StackPanel Spacing="0">
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="1" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="1" />
                                             <StackPanel Grid.Column="1" Spacing="4">
-                                                <TextBlock
-                                                    Text="{Binding L[Extension_Guide_Firefox_Step1]}"
-                                                    Classes="guide-step" />
+                                                <TextBlock Classes="guide-step"
+                                                    Text="{Binding L[Extension_Guide_Firefox_Step1]}" />
                                                 <Button Command="{Binding CopyLinkCommand}"
                                                     CommandParameter="about:debugging"
                                                     Classes="ghost-btn" Height="22" Padding="4,1"
@@ -600,36 +649,21 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="2" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
-                                            <TextBlock Grid.Column="1"
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="2" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
                                                 Text="{Binding L[Extension_Guide_Firefox_Step2]}"
-                                                Classes="guide-step" VerticalAlignment="Center" />
+                                                VerticalAlignment="Center" />
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="3" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
-                                            <TextBlock Grid.Column="1"
-                                                Text="{Binding L[Extension_Guide_Firefox_Step3]}"
-                                                Classes="guide-step" VerticalAlignment="Center" />
-                                        </Grid>
-                                        <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="4" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="3" />
                                             <StackPanel Grid.Column="1" Spacing="4">
-                                                <TextBlock
-                                                    Text="{Binding L[Extension_Guide_Firefox_Step4]}"
-                                                    Classes="guide-step" />
+                                                <TextBlock Classes="guide-step"
+                                                    Text="{Binding L[Extension_Guide_Firefox_Step3]}" />
                                                 <Button Command="{Binding CopyPathCommand}"
                                                     Classes="ghost-btn" Height="22" Padding="4,1"
                                                     HorizontalAlignment="Left"
@@ -649,61 +683,105 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="4" />
+                                            <StackPanel Grid.Column="1" Spacing="4">
+                                                <TextBlock Classes="guide-step"
+                                                    Text="{Binding L[Extension_Guide_Firefox_Step4]}" />
+                                                <Button Command="{Binding CopyLinkCommand}"
+                                                    CommandParameter="about:addons"
+                                                    Classes="ghost-btn" Height="22" Padding="4,1"
+                                                    HorizontalAlignment="Left"
+                                                    ToolTip.Tip="{Binding L[Auth_Tooltip_CopyLink]}"
+                                                    Cursor="Hand">
+                                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                                        <PathIcon Data="{StaticResource Icon.Link}"
+                                                            Width="10" Height="10"
+                                                            Foreground="{DynamicResource AccentBrush}" />
+                                                        <TextBlock
+                                                            Text="{Binding L[Extension_Guide_Firefox_Addons_Link]}"
+                                                            FontSize="11"
+                                                            Foreground="{DynamicResource AccentBrush}"
+                                                            FontWeight="SemiBold" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding !IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                Text="4" />
+                                            <TextBlock Grid.Column="1" Classes="step-hint"
+                                                Text="{Binding L[Auth_Step_Pending]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Border Classes="step-sep" />
+
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="5" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
+                                                Text="{Binding L[Extension_Guide_Firefox_Step5]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding !IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                Text="5" />
+                                            <TextBlock Grid.Column="1" Classes="step-hint"
+                                                Text="{Binding L[Auth_Step_Pending]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Panel>
                                             <Grid ColumnDefinitions="Auto, *"
                                                 IsVisible="{Binding !IsPathCopied}">
-                                                <TextBlock Grid.Column="0" Text="5" FontSize="16"
-                                                    FontWeight="Bold"
+                                                <TextBlock Grid.Column="0" Classes="step-num"
                                                     Foreground="{DynamicResource TextMutedBrush}"
-                                                    Margin="0,0,16,0" Width="14"
-                                                    HorizontalAlignment="Center"
-                                                    VerticalAlignment="Top" />
-                                                <TextBlock Grid.Column="1"
-                                                    Text="{Binding L[Auth_Step5_Pending]}"
-                                                    Classes="guide-step"
-                                                    Foreground="{DynamicResource TextMutedBrush}"
+                                                    Text="6" />
+                                                <TextBlock Grid.Column="1" Classes="step-hint"
+                                                    Text="{Binding L[Auth_Step_Pending]}"
                                                     VerticalAlignment="Center" />
                                             </Grid>
-
                                             <Button Command="{Binding ToggleGuideCommand}"
                                                 Classes="step-link-btn"
                                                 IsVisible="{Binding IsPathCopied}"
                                                 ToolTip.Tip="{Binding L[Auth_Tooltip_ToProtocol]}">
                                                 <Grid ColumnDefinitions="Auto, *">
-                                                    <TextBlock Grid.Column="0" Text="5"
-                                                        FontSize="16" FontWeight="Bold"
+                                                    <TextBlock Grid.Column="0" Classes="step-num"
+                                                        Text="6" />
+                                                    <TextBlock Grid.Column="1" Classes="guide-step"
+                                                        FontWeight="SemiBold"
                                                         Foreground="{DynamicResource AccentBrush}"
-                                                        Margin="0,0,16,0" Width="14"
-                                                        HorizontalAlignment="Center"
-                                                        VerticalAlignment="Top" />
-                                                    <TextBlock Grid.Column="1"
-                                                        Text="{Binding L[Extension_Guide_Firefox_Step5]}"
-                                                        Classes="guide-step" FontWeight="SemiBold"
-                                                        Foreground="{DynamicResource AccentBrush}"
+                                                        Text="{Binding L[Extension_Guide_Firefox_Step6]}"
                                                         TextWrapping="Wrap"
                                                         VerticalAlignment="Center" />
                                                 </Grid>
                                             </Button>
                                         </Panel>
+
                                     </StackPanel>
                                 </Border>
                             </TabItem>
 
+                            <!-- ════ Opera / Brave / Yandex ════ -->
                             <TabItem Header="{Binding L[Extension_Guide_Opera_Header]}">
                                 <Border BorderBrush="{DynamicResource BgHighlightBrush}"
-                                    BorderThickness="1" CornerRadius="8" Padding="16,12"
+                                    BorderThickness="1" CornerRadius="8" Padding="16,14"
                                     Margin="0,12,0,0">
-                                    <StackPanel Spacing="10">
+                                    <StackPanel Spacing="0">
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="1" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="1" />
                                             <StackPanel Grid.Column="1" Spacing="4">
-                                                <TextBlock
-                                                    Text="{Binding L[Extension_Guide_Opera_Step1]}"
-                                                    Classes="guide-step" />
+                                                <TextBlock Classes="guide-step"
+                                                    Text="{Binding L[Extension_Guide_Opera_Step1]}" />
                                                 <Button Command="{Binding CopyLinkCommand}"
                                                     CommandParameter="opera://extensions/"
                                                     Classes="ghost-btn" Height="22" Padding="4,1"
@@ -722,36 +800,29 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="2" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
-                                            <TextBlock Grid.Column="1"
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="2" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
                                                 Text="{Binding L[Extension_Guide_Opera_Step2]}"
-                                                Classes="guide-step" VerticalAlignment="Center" />
+                                                VerticalAlignment="Center" />
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="3" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
-                                            <TextBlock Grid.Column="1"
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="3" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
                                                 Text="{Binding L[Extension_Guide_Opera_Step3]}"
-                                                Classes="guide-step" VerticalAlignment="Center" />
+                                                VerticalAlignment="Center" />
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Grid ColumnDefinitions="Auto, *">
-                                            <TextBlock Grid.Column="0" Text="4" FontSize="16"
-                                                FontWeight="Bold"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Margin="0,0,16,0" Width="14"
-                                                HorizontalAlignment="Center" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="4" />
                                             <StackPanel Grid.Column="1" Spacing="4">
-                                                <TextBlock
-                                                    Text="{Binding L[Extension_Guide_Opera_Step4]}"
-                                                    Classes="guide-step" />
+                                                <TextBlock Classes="guide-step"
+                                                    Text="{Binding L[Extension_Guide_Opera_Step4]}" />
                                                 <Button Command="{Binding CopyPathCommand}"
                                                     Classes="ghost-btn" Height="22" Padding="4,1"
                                                     HorizontalAlignment="Left"
@@ -771,124 +842,144 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
+                                        <Border Classes="step-sep" />
+
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="5" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
+                                                Text="{Binding L[Extension_Guide_Opera_Step5]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding !IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                Text="5" />
+                                            <TextBlock Grid.Column="1" Classes="step-hint"
+                                                Text="{Binding L[Auth_Step_Pending]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Border Classes="step-sep" />
+
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num" Text="6" />
+                                            <TextBlock Grid.Column="1" Classes="guide-step"
+                                                Text="{Binding L[Extension_Guide_Opera_Step6]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="Auto, *"
+                                            IsVisible="{Binding !IsPathCopied}">
+                                            <TextBlock Grid.Column="0" Classes="step-num"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                Text="6" />
+                                            <TextBlock Grid.Column="1" Classes="step-hint"
+                                                Text="{Binding L[Auth_Step_Pending]}"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Border Classes="step-sep" />
+
                                         <Panel>
                                             <Grid ColumnDefinitions="Auto, *"
                                                 IsVisible="{Binding !IsPathCopied}">
-                                                <TextBlock Grid.Column="0" Text="5" FontSize="16"
-                                                    FontWeight="Bold"
+                                                <TextBlock Grid.Column="0" Classes="step-num"
                                                     Foreground="{DynamicResource TextMutedBrush}"
-                                                    Margin="0,0,16,0" Width="14"
-                                                    HorizontalAlignment="Center"
-                                                    VerticalAlignment="Top" />
-                                                <TextBlock Grid.Column="1"
-                                                    Text="{Binding L[Auth_Step5_Pending]}"
-                                                    Classes="guide-step"
-                                                    Foreground="{DynamicResource TextMutedBrush}"
+                                                    Text="7" />
+                                                <TextBlock Grid.Column="1" Classes="step-hint"
+                                                    Text="{Binding L[Auth_Step_Pending]}"
                                                     VerticalAlignment="Center" />
                                             </Grid>
-
                                             <Button Command="{Binding ToggleGuideCommand}"
                                                 Classes="step-link-btn"
                                                 IsVisible="{Binding IsPathCopied}"
                                                 ToolTip.Tip="{Binding L[Auth_Tooltip_ToProtocol]}">
                                                 <Grid ColumnDefinitions="Auto, *">
-                                                    <TextBlock Grid.Column="0" Text="5"
-                                                        FontSize="16" FontWeight="Bold"
+                                                    <TextBlock Grid.Column="0" Classes="step-num"
+                                                        Text="7" />
+                                                    <TextBlock Grid.Column="1" Classes="guide-step"
+                                                        FontWeight="SemiBold"
                                                         Foreground="{DynamicResource AccentBrush}"
-                                                        Margin="0,0,16,0" Width="14"
-                                                        HorizontalAlignment="Center"
-                                                        VerticalAlignment="Top" />
-                                                    <TextBlock Grid.Column="1"
-                                                        Text="{Binding L[Extension_Guide_Opera_Step5]}"
-                                                        Classes="guide-step" FontWeight="SemiBold"
-                                                        Foreground="{DynamicResource AccentBrush}"
+                                                        Text="{Binding L[Extension_Guide_Opera_Step7]}"
                                                         TextWrapping="Wrap"
                                                         VerticalAlignment="Center" />
                                                 </Grid>
                                             </Button>
                                         </Panel>
+
                                     </StackPanel>
                                 </Border>
                             </TabItem>
+
                         </TabControl>
                     </StackPanel>
-                </StackPanel>
-            </Panel>
+                </Panel>
 
-            <StackPanel Spacing="6">
-                <TextBlock Text="{Binding L[Dialog_LoginMessage_Manual]}"
-                    FontSize="12"
-                    Foreground="{DynamicResource TextSecondaryBrush}"
-                    TextWrapping="Wrap" />
-                <TextBox Text="{Binding CookiesText, Mode=TwoWay}"
-                    AcceptsReturn="True" Height="68"
-                    PlaceholderText="SAPISID=...; __Secure-1PSID=..."
-                    CornerRadius="6"
-                    HorizontalAlignment="Stretch" />
-            </StackPanel>
-
-            <Border Name="StatusBorder"
-                Background="Transparent"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="16,8"
-                HorizontalAlignment="Stretch"
-                Classes.error="{Binding IsError}"
-                Classes.loading="{Binding IsSpinnerActive}">
-
-                <Grid ColumnDefinitions="*, Auto">
-                    <TextBlock Grid.Column="0"
-                        Text="{Binding StatusText}"
-                        Classes="auth-status"
-                        Classes.error="{Binding IsError}"
-                        VerticalAlignment="Center"
-                        FontSize="12"
+                <!-- Cookie input -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{Binding L[Dialog_LoginMessage_Manual]}"
+                        FontSize="13"
+                        Foreground="{DynamicResource TextSecondaryBrush}"
                         TextWrapping="Wrap" />
+                    <TextBox Text="{Binding CookiesText, Mode=TwoWay}"
+                        AcceptsReturn="True" Height="68"
+                        PlaceholderText="SAPISID=...; __Secure-1PSID=..."
+                        CornerRadius="6" HorizontalAlignment="Stretch" />
+                </StackPanel>
 
-                    <PathIcon Grid.Column="1"
-                        Data="{StaticResource Icon.Sync}"
-                        Classes="spinning"
-                        Width="12" Height="12"
-                        Foreground="{DynamicResource AccentBrush}"
-                        VerticalAlignment="Center"
-                        IsVisible="{Binding IsSpinnerActive}"
-                        Margin="8,0,0,0" />
+                <!-- Status border -->
+                <Border Name="StatusBorder"
+                    Background="Transparent" BorderThickness="1"
+                    CornerRadius="8" Padding="16,8"
+                    HorizontalAlignment="Stretch"
+                    Classes.error="{Binding IsError}"
+                    Classes.loading="{Binding IsSpinnerActive}">
+                    <Grid ColumnDefinitions="*, Auto">
+                        <TextBlock Grid.Column="0"
+                            Text="{Binding StatusText}"
+                            Classes="auth-status"
+                            Classes.error="{Binding IsError}"
+                            VerticalAlignment="Center" FontSize="13"
+                            TextWrapping="Wrap" />
+                        <PathIcon Grid.Column="1"
+                            Data="{StaticResource Icon.Sync}" Classes="spinning"
+                            Width="12" Height="12"
+                            Foreground="{DynamicResource AccentBrush}"
+                            VerticalAlignment="Center"
+                            IsVisible="{Binding IsSpinnerActive}"
+                            Margin="8,0,0,0" />
+                    </Grid>
+                </Border>
+
+                <!-- Buttons row -->
+                <Grid ColumnDefinitions="Auto, *, *" VerticalAlignment="Center">
+                    <TextBlock Grid.Column="0"
+                        Text="{Binding ExtensionVersionText}"
+                        FontSize="11"
+                        Foreground="{DynamicResource TextMutedBrush}"
+                        VerticalAlignment="Center" Margin="0,0,16,0" />
+                    <Button Grid.Column="1" Classes="ghost-btn"
+                        Content="{Binding L[Common_Cancel]}"
+                        Command="{Binding CloseCommand}"
+                        Margin="0,0,6,0" Height="40" Padding="0"
+                        CornerRadius="6" HorizontalAlignment="Stretch" Cursor="Hand" />
+                    <Button Grid.Column="2" Classes="primary-btn"
+                        Command="{Binding AuthenticateCommand}"
+                        IsEnabled="{Binding !IsAuthenticating}"
+                        Margin="6,0,0,0" Height="40" Padding="0"
+                        CornerRadius="6" HorizontalAlignment="Stretch" Cursor="Hand">
+                        <Panel>
+                            <TextBlock Text="{Binding L[Auth_Login]}"
+                                IsVisible="{Binding !IsAuthenticating}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding L[Splash_ConnectingYouTube]}"
+                                IsVisible="{Binding IsAuthenticating}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Panel>
+                    </Button>
                 </Grid>
-            </Border>
 
-            <Grid ColumnDefinitions="Auto, *, *" Margin="0,4,0,0" VerticalAlignment="Center">
-
-                <TextBlock Grid.Column="0"
-                    Text="{Binding ExtensionVersionText}"
-                    FontSize="11"
-                    Foreground="{DynamicResource TextMutedBrush}"
-                    VerticalAlignment="Center"
-                    Margin="0,0,16,0" />
-
-                <Button Grid.Column="1" Classes="ghost-btn" Content="{Binding L[Common_Cancel]}"
-                    Command="{Binding CloseCommand}" Margin="0,0,6,0" Height="40" Padding="0"
-                    CornerRadius="6" HorizontalAlignment="Stretch" Cursor="Hand" />
-
-                <Button Grid.Column="2" Classes="primary-btn"
-                    Command="{Binding AuthenticateCommand}"
-                    IsEnabled="{Binding !IsAuthenticating}"
-                    Margin="6,0,0,0" Height="40" Padding="0" CornerRadius="6"
-                    HorizontalAlignment="Stretch" Cursor="Hand">
-
-                    <Panel>
-                        <TextBlock Text="{Binding L[Auth_Login]}"
-                            IsVisible="{Binding !IsAuthenticating}"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center" />
-
-                        <TextBlock Text="{Binding L[Splash_ConnectingYouTube]}"
-                            IsVisible="{Binding IsAuthenticating}"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center" />
-                    </Panel>
-                </Button>
-            </Grid>
-
-        </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
     </Border>
 </UserControl>

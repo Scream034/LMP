@@ -35,9 +35,11 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
 {
     #region Constants
 
+    /// <inheritdoc />
+    protected override bool HandlesAccountChanges => true;
+
     private const int DebounceMs = 300;
     private const int MaxResults = 300;
-
     #endregion
 
     #region Fields

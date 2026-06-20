@@ -404,7 +404,7 @@ public sealed class EbuR128Analyzer
         if (!float.IsNaN(_lockedGain))
             return _lockedGain;
 
-        // ──── Фаза анализа: K-weighted LUFS + provisional gain ────
+        //  Фаза анализа: K-weighted LUFS + provisional gain 
 
         int channels = _channels;
         int frames = samples.Length / channels;

@@ -259,7 +259,7 @@ public static class StreamPipelineTests
         Log.Info($"[STEP 2] Available streams ({audioStreams.Count}):");
         foreach (var s in audioStreams)
         {
-            var marker = (targetItag == s.Itag) ? " ◄── TARGET" : "";
+            var marker = (targetItag == s.Itag) ? " ◄ TARGET" : "";
             Log.Info($"  itag={s.Itag}: {s.Container}/{s.AudioCodec}, " +
                      $"{s.Bitrate.KiloBitsPerSecond:F0}kbps, " +
                      $"{s.Size.MegaBytes:F1}MB{marker}");
@@ -495,7 +495,7 @@ public static class StreamPipelineTests
         var lengthMod4 = decoded.Length % 4;
         var endsWithPadding = decoded.EndsWith("==") || decoded.EndsWith("=");
 
-        Log.Info($"      └─ {name} details:");
+        Log.Info($"      └ {name} details:");
         Log.Info($"         Raw length: {value.Length}");
         Log.Info($"         Decoded length: {decoded.Length}");
         Log.Info($"         Length % 4: {lengthMod4}");
@@ -517,7 +517,7 @@ public static class StreamPipelineTests
                         looksEncrypted ? "⚠ ENCRYPTED!" :
                         "? Unknown";
 
-        Log.Info($"      └─ n-token: len={value.Length}, status={status}");
+        Log.Info($"      └ n-token: len={value.Length}, status={status}");
         Log.Info($"         Value: {value}");
     }
 

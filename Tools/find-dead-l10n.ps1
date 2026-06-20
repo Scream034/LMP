@@ -30,7 +30,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ── Хелперы вывода ───────────────────────────────────────────────────────────
+#  Хелперы вывода 
 
 function Write-Dead([string]$location, [string]$key) {
     Write-Host ("  {0,-9} {1,-55} {2}" -f "DEAD", $location, $key) -ForegroundColor DarkYellow
@@ -40,7 +40,7 @@ function Write-Missing([string]$location, [string]$key) {
     Write-Host ("  {0,-9} {1,-55} {2}" -f "MISSING", $location, $key) -ForegroundColor Red
 }
 
-# ── Пути ─────────────────────────────────────────────────────────────────────
+#  Пути 
 
 $root    = Split-Path $PSScriptRoot -Parent
 $l10nDir = Join-Path $root $L10nDir
@@ -50,7 +50,7 @@ Write-Host "  Project root : $root"    -ForegroundColor Gray
 Write-Host "  L10n dir     : $l10nDir" -ForegroundColor Gray
 Write-Host "  Master lang  : $Master"  -ForegroundColor Gray
 
-# ── Загрузка JSON ────────────────────────────────────────────────────────────
+#  Загрузка JSON 
 
 function Load-Json([string]$path) {
     $json = Get-Content $path -Raw -Encoding UTF8
@@ -84,7 +84,7 @@ $masterDict = $langData[$Master]
 $allKnownKeys = [System.Collections.Generic.HashSet[string]]::new()
 foreach ($k in $masterDict.Keys) { [void]$allKnownKeys.Add($k) }
 
-# ── Сбор исходников ──────────────────────────────────────────────────────────
+#  Сбор исходников 
 
 $allFiles = [System.Collections.Generic.List[string]]::new()
 foreach ($dir in ($SourceDirs -split ",")) {
@@ -100,7 +100,7 @@ Get-ChildItem $root -Filter "*.axaml" -File | ForEach-Object { $allFiles.Add($_.
 $sourceFiles = $allFiles | Sort-Object -Unique
 Write-Host "  Source files : $(@($sourceFiles).Count)  (.cs + .axaml)" -ForegroundColor Gray
 
-# ── Паттерны регулярных выражений ────────────────────────────────────────────
+#  Паттерны регулярных выражений 
 
 $patterns = @(
     # SL["Key"] / L["Key"] / LocalizationService.Instance["Key"] (включая многострочные пробелы)
@@ -166,7 +166,7 @@ function Test-PluralSuffix([string]$key) {
     return $false
 }
 
-# ── Сканирование исходников (Многострочное с поддержкой -Raw) ─────────────────
+#  Сканирование исходников (Многострочное с поддержкой -Raw) 
 
 foreach ($filePath in $sourceFiles) {
     $relPath = $filePath.Substring($root.Length).TrimStart('\')
@@ -194,7 +194,7 @@ foreach ($filePath in $sourceFiles) {
 
 Write-Host "  Unique keys referenced in code : $($usedKeys.Count)" -ForegroundColor Gray
 
-# ── Анализ ────────────────────────────────────────────────────────────────────
+#  Анализ 
 
 $deadKeys    = [System.Collections.Generic.List[string]]::new()
 $missingKeys = [System.Collections.Generic.List[string]]::new()
@@ -234,7 +234,7 @@ foreach ($code in $langData.Keys) {
     }
 }
 
-# ── Репорт: мёртвые ──────────────────────────────────────────────────────────
+#  Репорт: мёртвые 
 
 if ($deadKeys.Count -gt 0) {
     Write-Host ""
@@ -256,7 +256,7 @@ if ($deadKeys.Count -gt 0) {
     }
 }
 
-# ── Репорт: недостающие ───────────────────────────────────────────────────────
+#  Репорт: недостающие 
 
 if ($missingKeys.Count -gt 0) {
     Write-Host ""
@@ -271,7 +271,7 @@ if ($missingKeys.Count -gt 0) {
     }
 }
 
-# ── Репорт: plural FP ────────────────────────────────────────────────────────
+#  Репорт: plural FP 
 
 if ($pluralFP -gt 0) {
     Write-Host ""
@@ -279,7 +279,7 @@ if ($pluralFP -gt 0) {
     Write-Host "   Auto-generated GetPlural suffixes (handled by fallback)." -ForegroundColor Gray
 }
 
-# ── Fix mode ─────────────────────────────────────────────────────────────────
+#  Fix mode 
 
 if ($Fix -and $deadKeys.Count -gt 0) {
     Write-Host ""
@@ -344,7 +344,7 @@ if ($Fix -and $deadKeys.Count -gt 0) {
     }
 }
 
-# ── Итог ─────────────────────────────────────────────────────────────────────
+#  Итог 
 
 Write-Host ""
 if ($syncIssues -eq 0) {
