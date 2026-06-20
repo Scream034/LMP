@@ -441,6 +441,11 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
     #region Синхронизация с YouTube
 
+    /// <summary>
+    /// Выполняет синхронизацию плейлистов с аккаунтом YouTube Music.
+    /// Лайки синхронизируются отдельно и не запускаются скрыто в фоне.
+    /// Все изменения bindable-состояния выполняются строго на UI-потоке.
+    /// </summary>
     private async Task SyncAccountPlaylistsAsync()
     {
         if (_isDisposed) return;
@@ -459,56 +464,49 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
         try
         {
             List<PlaylistSearchResult> playlistsToImport = [];
-            Dictionary<string, int>? trackCounts = null;
 
-            if (_auth.IsAuthenticated)
+            if (!_auth.IsAuthenticated)
             {
-                try
-                {
-                    var ytPlaylists = await _youtube.GetUserPlaylistsByAuthAsync();
-                    ct.ThrowIfCancellationRequested();
-                    SyncProgress = 0.1;
-
-                    var filtered = ytPlaylists
-                        .Where(p =>
-                            !string.IsNullOrEmpty(p.YoutubeId) &&
-                            p.YoutubeId != "LM" &&
-                            p.YoutubeId != "VLLM" &&
-                            !p.YoutubeId.StartsWith("RD"))
-                        .ToList();
-
-                    playlistsToImport = [.. filtered.Select(p =>
-                    {
-                        var pid = new Core.Youtube.Playlists.PlaylistId(p.YoutubeId!);
-                        var thumbs = new List<Thumbnail>();
-                        if (!string.IsNullOrEmpty(p.ThumbnailUrl))
-                            thumbs.Add(new Thumbnail(p.ThumbnailUrl, new Resolution(0, 0)));
-
-                        return new PlaylistSearchResult(pid, p.Name, null, thumbs);
-                    })];
-
-                    trackCounts = [];
-                    foreach (var p in filtered)
-                    {
-                        if (!string.IsNullOrEmpty(p.YoutubeId) && p.TrackCount > 0)
-                            trackCounts[p.YoutubeId] = p.TrackCount;
-                    }
-                }
-                catch (OperationCanceledException) { return; }
-                catch (Exception ex)
-                {
-                    if (!_isDisposed)
-                        await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"],
-                            SL["Sync_Error_API"] + ": " + ex.Message);
-                    return;
-                }
-            }
-            else
-            {
-                if (!_isDisposed)
-                    await _dialog.ShowInfoAsync(SL["Library_SyncYoutube"], SL["Auth_NotSignedIn"]);
+                await _dialog.ShowInfoAsync(SL["Library_SyncYoutube"], SL["Auth_NotSignedIn"]);
                 return;
             }
+
+            try
+            {
+                var ytPlaylists = await _youtube.GetUserPlaylistsByAuthAsync();
+                ct.ThrowIfCancellationRequested();
+                SyncProgress = 0.1;
+
+                var filtered = ytPlaylists
+                    .Where(p =>
+                        !string.IsNullOrEmpty(p.YoutubeId) &&
+                        p.YoutubeId != "LM" &&
+                        p.YoutubeId != "VLLM" &&
+                        !p.YoutubeId.StartsWith("RD"))
+                    .ToList();
+
+                playlistsToImport = [.. filtered.Select(p =>
+            {
+                var pid = new Core.Youtube.Playlists.PlaylistId(p.YoutubeId!);
+                var thumbs = new List<Thumbnail>();
+                if (!string.IsNullOrEmpty(p.ThumbnailUrl))
+                    thumbs.Add(new Thumbnail(p.ThumbnailUrl, new Resolution(0, 0)));
+                return new PlaylistSearchResult(pid, p.Name, null, thumbs);
+            })];
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                if (!_isDisposed)
+                {
+                    await _dialog.ShowInfoAsync(
+                        SL["Dialog_Error_Title"],
+                        SL["Sync_Error_API"] + ": " + ex.Message);
+                }
+                return;
+            }
+
+            SyncProgress = 0.15;
 
             if (playlistsToImport.Count == 0)
             {
@@ -521,15 +519,16 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
                 if (confirmSyncLikes)
                 {
                     SyncStatus = SL["Sync_LikedSongs"];
-                    await _manager.SyncLikedTracksAsync();
-                    await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"],
+                    await _manager.SyncLikedTracksAsync(ct);
+                    await _dialog.ShowInfoAsync(
+                        SL["Dialog_Done_Title"],
                         SL["Sync_Success_Msg_LikedOnly"] ?? "Понравившиеся песни синхронизированы.");
                 }
+
                 return;
             }
 
             ct.ThrowIfCancellationRequested();
-            SyncProgress = 0.15;
             SyncStatus = SL["Sync_SelectPlaylists"];
 
             var allPlaylists = await _library.GetAllPlaylistsAsync(ct);
@@ -544,21 +543,11 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.2;
-
-            Task? likedSongsSyncTask = null;
-            if (_auth.IsAuthenticated)
-            {
-                likedSongsSyncTask = Task.Run(async () =>
-                {
-                    try { await _manager.SyncLikedTracksAsync(); }
-                    catch (Exception ex) { Log.Error($"[Sync] Ошибка синхронизации лайков: {ex.Message}"); }
-                }, ct);
-            }
-
-            SyncProgress = 0.25;
             SyncStatus = SL["Sync_ImportingPlaylists"];
 
-            int importedCount = 0, mergedCount = 0, processed = 0;
+            int importedCount = 0;
+            int mergedCount = 0;
+            int processed = 0;
             int totalToProcess = decisions.Count;
 
             foreach (var decision in decisions)
@@ -570,21 +559,32 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
                 var fullPlaylist = await _youtube.ImportPlaylistAsync(
                     decision.Playlist.Id.Value, _auth.IsAuthenticated, ct);
-                if (fullPlaylist == null) { processed++; continue; }
+
+                if (fullPlaylist == null)
+                {
+                    processed++;
+                    SyncProgress = 0.2 + (0.8 * processed / totalToProcess);
+                    continue;
+                }
 
                 existingLocal.TryGetValue(decision.Playlist.Title, out var existing);
 
                 if (decision.Action == MergeAction.Merge && existing != null)
                 {
-                    var existingTrackSet = new HashSet<string>(existing.TrackIds);
+                    var existingTrackSet = new HashSet<string>(
+                        await _library.GetPlaylistTrackIdsAsync(existing.Id, ct),
+                        StringComparer.Ordinal);
+
                     bool changed = false;
-                    foreach (var trackId in fullPlaylist.TrackIds)
+
+                    for (int i = 0; i < fullPlaylist.TrackIds.Count; i++)
                     {
-                        if (existingTrackSet.Add(trackId))
-                        {
-                            existing.TrackIds.Add(trackId);
-                            changed = true;
-                        }
+                        var trackId = fullPlaylist.TrackIds[i];
+                        if (!existingTrackSet.Add(trackId))
+                            continue;
+
+                        existing.TrackIds.Add(trackId);
+                        changed = true;
 
                         var t = await _library.GetTrackAsync(trackId, ct);
                         if (t != null && !t.InPlaylists.Contains(existing.Id))
@@ -618,14 +618,7 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
                 }
 
                 processed++;
-                SyncProgress = 0.25 + (0.75 * processed / totalToProcess);
-            }
-
-            if (likedSongsSyncTask != null)
-            {
-                if (!likedSongsSyncTask.IsCompleted)
-                    SyncStatus = SL["Sync_FinalizingLikedSongs"];
-                await likedSongsSyncTask;
+                SyncProgress = 0.2 + (0.8 * processed / totalToProcess);
             }
 
             SyncProgress = 1.0;
@@ -660,14 +653,37 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
         }
         finally
         {
-            await Task.Delay(300);
-            _mainWindow.UnlockNavigation();
+            try
+            {
+                await Task.Delay(300);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _mainWindow.UnlockNavigation();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[Library] UnlockNavigation error: {ex.Message}");
+            }
+
             if (!_isDisposed)
             {
                 IsSyncing = false;
                 SyncProgress = 0;
-                SyncStatus = "";
-                await LoadPlaylistsAsync();
+                SyncStatus = string.Empty;
+
+                try
+                {
+                    await LoadPlaylistsAsync();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[Library] Post-sync reload error: {ex.Message}");
+                }
             }
         }
     }

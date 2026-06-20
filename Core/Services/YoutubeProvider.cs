@@ -1576,7 +1576,7 @@ public partial class YoutubeProvider : IDisposable
     }
 
     public async Task<Playlist?> ImportPlaylistAsync(
-     string playlistId, bool isAccountSync = false, CancellationToken ct = default)
+    string playlistId, bool isAccountSync = false, CancellationToken ct = default)
     {
         try
         {
@@ -1591,28 +1591,39 @@ public partial class YoutubeProvider : IDisposable
         try
         {
             var plId = new PlaylistId(playlistId);
-            var playlist = await _youtube.Playlists.GetAsync(plId, ct);
 
-            playlist.SyncMode = isAccountSync ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.CloudPublic;
+            // Единый HTTP-запрос: метаданные + треки без дублирующего browse
+            var result = await _youtube.Playlists.ImportAsync(plId, ct).ConfigureAwait(false);
 
-            var tracks = await _youtube.Playlists.GetVideosAsync(plId, ct).CollectAsync();
+            var playlist = result.Playlist;
+            playlist.SyncMode = isAccountSync
+                ? PlaylistSyncMode.TwoWaySync
+                : PlaylistSyncMode.CloudPublic;
 
+            var tracks = result.Tracks;
             for (int i = 0; i < tracks.Count; i++)
             {
+                ct.ThrowIfCancellationRequested();
                 var track = tracks[i];
                 if (_libraryService != null)
-                    await _libraryService.AddOrUpdateTrackAsync(track, ct);
+                    await _libraryService.AddOrUpdateTrackAsync(track, ct).ConfigureAwait(false);
                 playlist.TrackIds.Add(track.Id);
             }
+
+            Log.Info($"[YouTube] ImportPlaylist '{playlistId}': {tracks.Count} tracks, " +
+                     $"SyncMode={playlist.SyncMode}");
             return playlist;
         }
-        catch (BotDetectionException)
+        catch (BotDetectionException) { return null; }
+        catch (OperationCanceledException) { throw; }
+        catch (PlaylistUnavailableException ex)
         {
+            Log.Warn($"[YouTube] Playlist '{playlistId}' unavailable: {ex.Message}");
             return null;
         }
         catch (Exception ex)
         {
-            NotifyError($"Error importing playlist {playlistId}: {ex.Message}");
+            NotifyError($"[YouTube] Error importing playlist '{playlistId}': {ex.Message}");
             return null;
         }
     }

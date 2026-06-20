@@ -40,42 +40,138 @@ public class PlaylistClient(HttpClient http)
     }
 
     /// <summary>
+    /// Единый импорт плейлиста: метаданные и полный список треков за один начальный HTTP-запрос.
+    /// Устраняет дублирующий browse, который возникал при раздельных вызовах
+    /// <see cref="GetAsync"/> и <see cref="GetVideosAsync"/>.
+    /// При пустом browse-ответе автоматически применяет fallback на Next response.
+    /// Поддерживает пагинацию через continuation token.
+    /// </summary>
+    /// <param name="playlistId">Идентификатор плейлиста.</param>
+    /// <param name="cancellationToken">Токен отмены операции.</param>
+    /// <returns>Метаданные плейлиста и полный упорядоченный список треков.</returns>
+    public async Task<PlaylistImportResult> ImportAsync(
+        PlaylistId playlistId,
+        CancellationToken cancellationToken = default)
+    {
+        PlaylistBrowseResponse? browseResponse = null;
+        try
+        {
+            browseResponse = await _controller.GetPlaylistBrowseResponseAsync(
+                playlistId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PlaylistUnavailableException)
+        {
+            // Browse недоступен — полный fallback на Next для метаданных и треков
+            var nextResponse = await _controller.GetPlaylistNextResponseAsync(
+                playlistId, null, 0, null, cancellationToken).ConfigureAwait(false);
+
+            return new PlaylistImportResult(
+                BuildPlaylistFromData(playlistId, nextResponse),
+                CollectTracks(nextResponse.Videos, new HashSet<string>(StringComparer.Ordinal)));
+        }
+
+        var playlist = BuildPlaylistFromData(playlistId, browseResponse);
+
+        var encounteredIds = new HashSet<string>(
+            browseResponse.Count ?? 64, StringComparer.Ordinal);
+
+        IReadOnlyList<PlaylistVideoData> firstPage = browseResponse.Videos;
+        string? continuationToken = browseResponse.ContinuationToken;
+        string? visitorData = browseResponse.VisitorData;
+
+        // Browse вернул 0 видео — fallback на Next только для треков
+        if (firstPage.Count == 0)
+        {
+            Log.Info($"[PlaylistClient] Browse returned 0 videos for '{playlistId}', attempting Next fallback");
+            try
+            {
+                var nextFallback = await _controller.GetPlaylistNextResponseAsync(
+                    playlistId, null, 0, visitorData, cancellationToken).ConfigureAwait(false);
+
+                firstPage = nextFallback.Videos;
+                visitorData ??= nextFallback.VisitorData;
+                continuationToken = null;
+
+                Log.Info($"[PlaylistClient] Next fallback: {firstPage.Count} videos");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Warn($"[PlaylistClient] Next fallback failed for '{playlistId}': {ex.Message}");
+            }
+        }
+
+        Log.Debug($"[PlaylistClient] Import initial page: {firstPage.Count} videos, " +
+                  $"has continuation: {continuationToken != null}");
+
+        var allTracks = CollectTracks(firstPage, encounteredIds);
+
+        // Пагинация через continuation token
+        while (!string.IsNullOrEmpty(continuationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                var contResp = await _controller.GetPlaylistContinuationAsync(
+                    continuationToken, visitorData, cancellationToken).ConfigureAwait(false);
+
+                var contVideos = contResp.Videos;
+                Log.Debug($"[PlaylistClient] Import continuation: {contVideos.Count} videos, " +
+                          $"has more: {contResp.ContinuationToken != null}");
+
+                if (contVideos.Count == 0) break;
+
+                AppendTracks(contVideos, encounteredIds, allTracks);
+                visitorData ??= contResp.VisitorData;
+                continuationToken = contResp.ContinuationToken;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn($"[PlaylistClient] Import pagination error for '{playlistId}': {ex.Message}");
+                break;
+            }
+        }
+
+        Log.Info($"[PlaylistClient] Import complete: '{playlistId}' → {allTracks.Count} tracks");
+        return new PlaylistImportResult(playlist, allTracks);
+    }
+
+    /// <summary>
     /// Асинхронно получает видеоролики плейлиста батчами.
-    /// При пустом результате browse-запроса выполняет fallback на Next response
-    /// (симметрично с <see cref="PlaylistController.GetPlaylistResponseAsync"/> для метаданных).
+    /// При пустом browse-результате выполняет fallback на Next response.
     /// </summary>
     public async IAsyncEnumerable<Batch<TrackInfo>> GetVideoBatchesAsync(
         PlaylistId playlistId,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var encounteredIds = new HashSet<string>();
+        var encounteredIds = new HashSet<string>(StringComparer.Ordinal);
         string? continuationToken = null;
         string? visitorData = null;
         bool isFirstRequest = true;
 
         do
         {
-            List<PlaylistVideoData> videos;
+            IReadOnlyList<PlaylistVideoData> videos;
 
             if (isFirstRequest)
             {
                 var browseResponse = await _controller.GetPlaylistBrowseResponseAsync(
-                    playlistId,
-                    cancellationToken
-                );
+                    playlistId, cancellationToken);
 
-                videos = [.. browseResponse.Videos];
+                videos = browseResponse.Videos;
                 continuationToken = browseResponse.ContinuationToken;
                 visitorData = browseResponse.VisitorData;
                 isFirstRequest = false;
 
-                Log.Debug($"[PlaylistClient] Initial browse: {videos.Count} videos, has continuation: {continuationToken != null}");
+                Log.Debug($"[PlaylistClient] Initial browse: {videos.Count} videos, " +
+                          $"has continuation: {continuationToken != null}");
 
-                // Fallback: browse вернул 0 видео — пробуем Next response.
-                // Симметрия с GetPlaylistResponseAsync, который использует тот же fallback для метаданных.
+                // Fallback: browse вернул 0 видео — пробуем Next response
                 if (videos.Count == 0)
                 {
-                    Log.Info($"[PlaylistClient] Browse returned 0 videos for '{playlistId}', attempting Next fallback");
+                    Log.Info($"[PlaylistClient] Browse returned 0 videos for '{playlistId}', " +
+                             $"attempting Next fallback");
                     try
                     {
                         var nextResponse = await _controller.GetPlaylistNextResponseAsync(
@@ -83,7 +179,7 @@ public class PlaylistClient(HttpClient http)
 
                         if (nextResponse.IsAvailable)
                         {
-                            videos = [.. nextResponse.Videos];
+                            videos = nextResponse.Videos;
                             visitorData ??= nextResponse.VisitorData;
                             continuationToken = null;
 
@@ -99,64 +195,107 @@ public class PlaylistClient(HttpClient http)
             else if (!string.IsNullOrEmpty(continuationToken))
             {
                 var contResponse = await _controller.GetPlaylistContinuationAsync(
-                    continuationToken,
-                    visitorData,
-                    cancellationToken
-                );
+                    continuationToken, visitorData, cancellationToken);
 
-                videos = [.. contResponse.Videos];
+                videos = contResponse.Videos;
                 continuationToken = contResponse.ContinuationToken;
                 visitorData ??= contResponse.VisitorData;
 
-                Log.Debug($"[PlaylistClient] Continuation: {videos.Count} videos, has more: {continuationToken != null}");
+                Log.Debug($"[PlaylistClient] Continuation: {videos.Count} videos, " +
+                          $"has more: {continuationToken != null}");
             }
             else
             {
                 break;
             }
 
-            var batch = new List<TrackInfo>();
-
-            foreach (var videoData in videos)
-            {
-                var videoId = videoData.Id;
-                if (string.IsNullOrEmpty(videoId)) continue;
-
-                if (!encounteredIds.Add(videoId)) continue;
-
-                var title = videoData.Title ?? "";
-                var author = videoData.Author ?? LocalizationService.Instance["Track_UnknownAuthor"];
-
-                var bestThumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(videoData.Thumbnails, videoId);
-
-                bool isMusic = DetectIfMusic(title, author, videoData.Duration);
-
-                var track = new TrackInfo
-                {
-                    Id = $"yt_{videoId}",
-                    Title = title,
-                    Author = author,
-                    ChannelId = videoData.ChannelId,
-                    Duration = videoData.Duration ?? TimeSpan.Zero,
-                    ThumbnailUrl = bestThumb,
-                    Url = $"https://www.youtube.com/watch?v={videoId}",
-                    IsMusic = isMusic
-                };
-
-                batch.Add(track);
-            }
+            var batch = new List<TrackInfo>(videos.Count);
+            AppendTracks(videos, encounteredIds, batch);
 
             if (batch.Count > 0)
-            {
                 yield return Batch.Create(batch);
-            }
 
             if (string.IsNullOrEmpty(continuationToken) && batch.Count == 0)
-            {
                 break;
-            }
 
         } while (!string.IsNullOrEmpty(continuationToken));
+    }
+
+    /// <summary>
+    /// Строит модель плейлиста из данных API-ответа.
+    /// Поддерживает оба варианта: Browse и Next response через <see cref="IPlaylistData"/>.
+    /// </summary>
+    private static Playlist BuildPlaylistFromData(PlaylistId playlistId, IPlaylistData data)
+    {
+        string? bestThumb = null;
+
+        if (data.Thumbnails.Count > 0)
+        {
+            var domainThumbs = new List<Thumbnail>(data.Thumbnails.Count);
+            for (int i = 0; i < data.Thumbnails.Count; i++)
+            {
+                var t = data.Thumbnails[i];
+                domainThumbs.Add(new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)));
+            }
+            bestThumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(domainThumbs);
+        }
+
+        return new Playlist
+        {
+            Id = $"yt_{playlistId.Value}",
+            YoutubeId = playlistId.Value,
+            StoredName = data.Title ?? string.Empty,
+            Author = data.Author,
+            Description = data.Description,
+            ThumbnailUrl = bestThumb,
+            SyncMode = PlaylistSyncMode.CloudPublic
+        };
+    }
+
+    /// <summary>
+    /// Конвертирует страницу видео в новый список <see cref="TrackInfo"/>.
+    /// </summary>
+    private static List<TrackInfo> CollectTracks(
+        IReadOnlyList<PlaylistVideoData> videos,
+        HashSet<string> encounteredIds)
+    {
+        var result = new List<TrackInfo>(videos.Count);
+        AppendTracks(videos, encounteredIds, result);
+        return result;
+    }
+
+    /// <summary>
+    /// Добавляет треки из <paramref name="videos"/> в <paramref name="target"/>
+    /// с дедупликацией через <paramref name="encounteredIds"/>.
+    /// Zero-LINQ, индексированный цикл.
+    /// </summary>
+    private static void AppendTracks(
+        IReadOnlyList<PlaylistVideoData> videos,
+        HashSet<string> encounteredIds,
+        List<TrackInfo> target)
+    {
+        for (int i = 0; i < videos.Count; i++)
+        {
+            var videoData = videos[i];
+            var videoId = videoData.Id;
+            if (string.IsNullOrEmpty(videoId) || !encounteredIds.Add(videoId))
+                continue;
+
+            var title = videoData.Title ?? string.Empty;
+            var author = videoData.Author ?? LocalizationService.Instance["Track_UnknownAuthor"];
+
+            target.Add(new TrackInfo
+            {
+                Id = $"yt_{videoId}",
+                Title = title,
+                Author = author,
+                ChannelId = videoData.ChannelId,
+                Duration = videoData.Duration ?? TimeSpan.Zero,
+                ThumbnailUrl = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(videoData.Thumbnails, videoId),
+                Url = $"https://www.youtube.com/watch?v={videoId}",
+                IsMusic = DetectIfMusic(title, author, videoData.Duration)
+            });
+        }
     }
 
     /// <summary>
@@ -166,33 +305,19 @@ public class PlaylistClient(HttpClient http)
     {
         if (author.EndsWith(" - Topic", StringComparison.OrdinalIgnoreCase) ||
             author.EndsWith("VEVO", StringComparison.OrdinalIgnoreCase))
-        {
             return true;
-        }
 
         if (duration.HasValue)
         {
             var mins = duration.Value.TotalMinutes;
             if (mins < 1 || mins > 15)
-            {
                 return ContainsMusicKeywords(title);
-            }
-
             if (mins >= 2 && mins <= 6)
-            {
                 return true;
-            }
         }
 
-        if (ContainsMusicKeywords(title))
-        {
-            return true;
-        }
-
-        if (ContainsNonMusicKeywords(title))
-        {
-            return false;
-        }
+        if (ContainsMusicKeywords(title)) return true;
+        if (ContainsNonMusicKeywords(title)) return false;
 
         return true;
     }
@@ -223,8 +348,19 @@ public class PlaylistClient(HttpClient http)
         return keywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// Возвращает все видео плейлиста как плоский поток <see cref="TrackInfo"/>.
+    /// </summary>
     public IAsyncEnumerable<TrackInfo> GetVideosAsync(
         PlaylistId playlistId,
         CancellationToken cancellationToken = default
     ) => GetVideoBatchesAsync(playlistId, cancellationToken).FlattenAsync();
 }
+
+/// <summary>
+/// Результат единого импорта плейлиста: метаданные и полный список треков
+/// без дублирующего browse-запроса.
+/// </summary>
+/// <param name="Playlist">Метаданные плейлиста, полученные из API.</param>
+/// <param name="Tracks">Полный список треков со всеми страницами пагинации.</param>
+public sealed record PlaylistImportResult(Playlist Playlist, List<TrackInfo> Tracks);
