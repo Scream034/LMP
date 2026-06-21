@@ -246,7 +246,7 @@
                         <Panel>
                             <PathIcon Data="{StaticResource Icon.MusicNote}"
                                       Width="64" Height="64"
-                                      Foreground="{DynamicResource TextMutedBrush}"
+                                      Foreground="{DynamicResource TextSecondaryBrush}"
                                       HorizontalAlignment="Center"
                                       VerticalAlignment="Center"
                                       IsVisible="{Binding ThumbnailUrl,
@@ -339,7 +339,7 @@
                                 IsVisible="{Binding ShowAuthor}"
                                 Margin="0,0,0,4">
                         <TextBlock Text="от" FontSize="14"
-                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
                                    VerticalAlignment="Center" />
                         <Button Classes="author-link"
                                 Background="Transparent" BorderThickness="0"
@@ -361,7 +361,7 @@
                     <!-- DESCRIPTION -->
                     <TextBlock Text="{Binding Description}"
                                FontSize="14"
-                               Foreground="{DynamicResource TextMutedBrush}"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
                                TextWrapping="Wrap" MaxLines="2"
                                TextTrimming="CharacterEllipsis"
                                Margin="0,2,0,0"
@@ -406,7 +406,7 @@
                         <StackPanel Orientation="Horizontal" IsVisible="{Binding LastSyncedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                             <Border Classes="meta-divider" />
                             <TextBlock Text="{Binding LastSyncedText}"
-                                       FontSize="12" Foreground="{DynamicResource TextMutedBrush}"
+                                       FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"
                                        VerticalAlignment="Center"
                                        ToolTip.Tip="{Binding L[Playlist_Synced_Tooltip]}" />
                         </StackPanel>
@@ -432,8 +432,8 @@
                                         IsVisible="{Binding IsReadOnly}"
                                         ToolTip.Tip="{Binding L[Playlist_ReadOnly_Tooltip]}">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
-                                        <PathIcon Data="{StaticResource Icon.EyeOff}" Width="12" Height="12" Foreground="{DynamicResource TextMutedBrush}" />
-                                        <TextBlock Text="{Binding L[Playlist_ReadOnly]}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                        <PathIcon Data="{StaticResource Icon.EyeOff}" Width="12" Height="12" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding L[Playlist_ReadOnly]}" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" />
                                     </StackPanel>
                                 </Border>
 
@@ -441,8 +441,8 @@
                                         IsVisible="{Binding IsPrivate}"
                                         ToolTip.Tip="{Binding L[Playlist_Private_Tooltip]}">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
-                                        <PathIcon Data="{StaticResource Icon.Lock}" Width="12" Height="12" Foreground="{DynamicResource TextMutedBrush}" />
-                                        <TextBlock Text="{Binding L[Playlist_Private]}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                        <PathIcon Data="{StaticResource Icon.Lock}" Width="12" Height="12" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding L[Playlist_Private]}" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" />
                                     </StackPanel>
                                 </Border>
 
@@ -450,8 +450,8 @@
                                         IsVisible="{Binding IsUnlisted}"
                                         ToolTip.Tip="{Binding L[Playlist_Unlisted_Tooltip]}">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
-                                        <PathIcon Data="{StaticResource Icon.Link}" Width="12" Height="12" Foreground="{DynamicResource TextMutedBrush}" />
-                                        <TextBlock Text="{Binding L[Playlist_Unlisted]}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                        <PathIcon Data="{StaticResource Icon.Link}" Width="12" Height="12" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding L[Playlist_Unlisted]}" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" />
                                     </StackPanel>
                                 </Border>
 
@@ -459,8 +459,8 @@
                                         IsVisible="{Binding HasCloudSource}"
                                         ToolTip.Tip="{Binding L[Playlist_Synced_Tooltip]}">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
-                                        <PathIcon Data="{StaticResource Icon.CloudCheck}" Width="12" Height="12" Foreground="{DynamicResource TextMutedBrush}" />
-                                        <TextBlock Text="{Binding L[Library_CloudSyncTooltip]}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                        <PathIcon Data="{StaticResource Icon.CloudCheck}" Width="12" Height="12" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding L[Library_CloudSyncTooltip]}" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" />
                                     </StackPanel>
                                 </Border>
                             </StackPanel>

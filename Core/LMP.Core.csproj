@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!--
+      net11.0 — preview (GA ожидается ноябрь 2026).
+      Осознанный выбор: синхронизировано с корневым проектом.
+    -->
     <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -14,9 +18,10 @@
     <EfCoreVersion>10.0.2</EfCoreVersion>
     <MsExtVersion>10.0.2</MsExtVersion>
     <ReactiveUIFodyVersion>19.5.41</ReactiveUIFodyVersion>
-    <CommunityToolkitMvvmVersion>8.4.0</CommunityToolkitMvvmVersion>
-    <AvaloniaVersion>12.0.3</AvaloniaVersion>
+    <CommunityToolkitMvvmVersion>8.4.2</CommunityToolkitMvvmVersion>
+    <AvaloniaVersion>12.0.4</AvaloniaVersion>
     <AsyncImageLoaderVersion>3.8.0</AsyncImageLoaderVersion>
+    <!-- SkiaSharp 3.119.4: актуальная версия, используемая Avalonia 12.0.4 -->
     <SkiaSharpVersion>3.119.4</SkiaSharpVersion>
   </PropertyGroup>
 
@@ -39,7 +44,12 @@
   </ItemGroup>
 
   <ItemGroup Label="MVVM">
-    <PackageReference Include="ReactiveUI" Version="23.1.8" />
+    <!--
+      ReactiveUI.Fody помечен upstream как legacy.
+      Рекомендуемая замена: ReactiveUI.SourceGenerators.
+      Миграция — отдельная задача.
+    -->
+    <PackageReference Include="ReactiveUI" Version="23.2.28" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
     <PackageReference Include="ReactiveUI.Fody" Version="$(ReactiveUIFodyVersion)" />
   </ItemGroup>
@@ -64,8 +74,11 @@
   <ItemGroup>
     <!-- Синхронизировано до $(EfCoreVersion) для работы с базами SQLite браузеров -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="$(EfCoreVersion)" />
-    <!-- Для работы с DPAPI в Windows -->
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <!--
+      Обновлено с 8.0.0 → 9.0.0: алигн с TFM net11.0 / net10-compatible runtime.
+      На Windows DPAPI доступен inbox, пакет нужен только для явной ссылки на тип.
+    -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
   </ItemGroup>
 
   <ItemGroup>

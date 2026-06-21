@@ -898,22 +898,30 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
     #region Formatting
 
     /// <summary>
-    /// Форматирует количество просмотров в компактный вид с локализованным суффиксом.
+    /// Форматирует количество просмотров в компактный вид с правильным локализованным склонением.
     /// </summary>
     private static string? FormatViewCount(long? views)
     {
         if (views is null or <= 0) return null;
 
         long v = views.Value;
+
+        // Для точных чисел меньше 10 000 используем полноценное языковое склонение
+        if (v < 10_000)
+        {
+            return SL.GetPlural("Playlist_Views", (int)v);
+        }
+
+        // Для сокращенных единиц (K, M, B) форматируем число и подставляем форму множественного числа (other)
         string number = v switch
         {
             >= 1_000_000_000 => string.Create(CultureInfo.CurrentCulture, $"{v / 1_000_000_000.0:0.#}B"),
             >= 1_000_000 => string.Create(CultureInfo.CurrentCulture, $"{v / 1_000_000.0:0.#}M"),
-            >= 10_000 => string.Create(CultureInfo.CurrentCulture, $"{v / 1_000.0:0.#}K"),
-            _ => v.ToString("N0", CultureInfo.CurrentCulture)
+            _ => string.Create(CultureInfo.CurrentCulture, $"{v / 1_000.0:0.#}K")
         };
 
-        return $"{number} {SL["Playlist_Views"] ?? "views"}";
+        var pattern = SL.Get("Playlist_Views_other", "{0} views");
+        return string.Format(CultureInfo.CurrentCulture, pattern, number);
     }
 
     /// <summary>

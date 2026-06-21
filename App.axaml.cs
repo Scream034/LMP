@@ -218,13 +218,37 @@ public partial class App : Application
             _splash?.SetProgress(100);
 
             // Switch Windows - Без искусственной паузы MinSplashTimeMs!
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            await Dispatcher.UIThread.InvokeAsync(async () =>
             {
                 desktop.MainWindow = mainWindow;
                 mainWindow?.Show();
                 mainWindowVM?.NotifyWindowShown();
                 _splash?.Close();
                 _splash = null;
+
+                // Если произошла миграция со старой версии (v1/v2) на v3
+                if (AppEntry.WasMigratedFromLegacy)
+                {
+                    try
+                    {
+                        var notifications = AppEntry.Services.GetRequiredService<NotificationService>();
+                        var dialogService = AppEntry.Services.GetRequiredService<DialogService>();
+
+                        // Отправляем предупреждающий Toast
+                        await notifications.ShowToastAsync(
+                            "Dialog_Warning_Title",
+                            "Library_LegacyPlaylists_Message",
+                            NotificationSeverity.Warning,
+                            durationMs: 12000);
+
+                        // Блокируем интерфейс модальным оверлеем
+                        await dialogService.ShowLegacyMigrationAlertAsync(30);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"[Startup] Failed to show legacy warning: {ex.Message}");
+                    }
+                }
             });
 
             Log.Info($"Main window ready. Total splash time: {stopwatch.ElapsedMilliseconds}ms");

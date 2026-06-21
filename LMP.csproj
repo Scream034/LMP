@@ -3,18 +3,16 @@
   <!--      ВЕРСИИ ПАКЕТОВ        -->
   <PropertyGroup Label="Package Versions">
     <!--
-      Avalonia 12.0.3 — стабильная.
-      Производительность: до 1867% FPS в сложных сценах, новый рендерер.
-      Breaking: DoDragDropAsync → PointerPressedEventArgs, IDataObject → IDataTransfer.
+      Avalonia 12.0.4 — стабильный патч-релиз (28.05.2026).
+      Включает фиксы рендерера, TextRunCache, улучшения XAML-компилятора.
     -->
-    <AvaloniaVersion>12.0.3</AvaloniaVersion>
+    <AvaloniaVersion>12.0.4</AvaloniaVersion>
 
     <!--
-      ReactiveUI.Avalonia 12.0.1 — замена deprecated Avalonia.ReactiveUI.
-      Пакет Avalonia.ReactiveUI помечен как legacy и больше не поддерживается.
-      ReactiveUI.Avalonia — официальная замена с поддержкой Avalonia 12.
+      ReactiveUI.Avalonia 12.0.3 — актуальный релиз для Avalonia 12.
+      Пакет Avalonia.ReactiveUI помечен как legacy и более не поддерживается.
     -->
-    <ReactiveUIAvaloniaVersion>12.0.1</ReactiveUIAvaloniaVersion>
+    <ReactiveUIAvaloniaVersion>12.0.3</ReactiveUIAvaloniaVersion>
 
     <!-- Dev-инструменты -->
     <HotAvaloniaVersion>3.1.0</HotAvaloniaVersion>
@@ -24,7 +22,7 @@
 
     <!-- MVVM -->
     <ReactiveUIFodyVersion>19.5.41</ReactiveUIFodyVersion>
-    <CommunityToolkitMvvmVersion>8.4.0</CommunityToolkitMvvmVersion>
+    <CommunityToolkitMvvmVersion>8.4.2</CommunityToolkitMvvmVersion>
 
     <!-- Microsoft Extensions (совпадает с TFM) -->
     <MsExtVersion>10.0.2</MsExtVersion>
@@ -39,6 +37,10 @@
     <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
     <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
 
+    <!--
+      net11.0 — preview (GA ожидается ноябрь 2026).
+      Осознанный выбор: Runtime Async без EnablePreviewFeatures, JIT-улучшения.
+    -->
     <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -166,6 +168,11 @@
 
   <ItemGroup Label="MVVM">
     <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
+    <!--
+      ReactiveUI.Fody помечен upstream как legacy.
+      Рекомендуемая замена: ReactiveUI.SourceGenerators.
+      Миграция — отдельная задача.
+    -->
     <PackageReference Include="ReactiveUI.Fody" Version="$(ReactiveUIFodyVersion)" />
   </ItemGroup>
 

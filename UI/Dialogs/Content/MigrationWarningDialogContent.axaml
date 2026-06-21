@@ -1,0 +1,49 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:dialogs="using:LMP.UI.Dialogs"
+             x:Class="LMP.UI.Dialogs.Content.MigrationWarningDialogContent"
+             x:DataType="dialogs:MigrationWarningDialogViewModel">
+
+    <!-- Дизайн выровнен с ChoiceDialogContent.axaml -->
+    <Border Background="{DynamicResource BgPrimaryBrush}"
+            BorderBrush="{DynamicResource BgHighlightBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="24"
+            MinWidth="400"
+            MaxWidth="520">
+
+        <StackPanel Spacing="16">
+
+            <!-- Заголовок с плоской оранжевой иконкой Icon.AlertCircle (без вложенных кругов) -->
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <PathIcon Data="{StaticResource Icon.AlertCircle}"
+                          Width="24" Height="24"
+                          Foreground="{DynamicResource SystemWarnOrangeBrush}"
+                          VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Title}"
+                           FontSize="18" FontWeight="Bold"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Сообщение -->
+            <ScrollViewer MaxHeight="240" VerticalScrollBarVisibility="Auto">
+                <TextBlock Text="{Binding Message}"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           FontSize="14"
+                           LineHeight="20" />
+            </ScrollViewer>
+
+            <!-- Кнопка с таймером -->
+            <Button Content="{Binding ButtonText}"
+                    Command="{Binding CloseCommand}"
+                    IsEnabled="{Binding CanClose}"
+                    MinWidth="110"
+                    HorizontalAlignment="Right"
+                    HorizontalContentAlignment="Center"
+                    Classes="accent accent-base" />
+        </StackPanel>
+    </Border>
+</UserControl>

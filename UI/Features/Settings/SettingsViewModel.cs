@@ -481,7 +481,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
             return;
         }
 
-        await Task.Delay(NavigationDebounceMs).ConfigureAwait(false);
+        await Task.Delay(NavigationDebounceMs);
         if (_isDisposed) return;
 
         await Dispatcher.UIThread.InvokeAsync(() =>

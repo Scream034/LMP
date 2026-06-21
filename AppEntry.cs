@@ -21,7 +21,6 @@ using LMP.UI.Features.Notifications;
 using ReactiveUI.Avalonia;
 using LMP.UI.Features.Queue;
 using LMP.Core.Data.Entities;
-using LMP.Core.Models;
 
 namespace LMP;
 
@@ -34,6 +33,11 @@ public sealed class AppEntry
     /// Глобальный провайдер служб внедрения зависимостей.
     /// </summary>
     public static IServiceProvider Services { get; private set; } = null!;
+
+    /// <summary>
+    /// Флаг, указывающий, была ли выполнена инкрементальная миграция схемы с версии ниже v3 на старте этого запуска.
+    /// </summary>
+    public static bool WasMigratedFromLegacy { get; private set; }
 
     [STAThread]
     public static void Main(string[] args)
@@ -106,6 +110,12 @@ public sealed class AppEntry
 
             if (dbVersion < DatabaseExtensions.CurrentDbVersion)
             {
+                // Если старая версия базы данных была меньше v3 (в которой произошла крупная миграция плейлистов)
+                if (dbVersion < 3)
+                {
+                    WasMigratedFromLegacy = true;
+                }
+
                 Log.Info($"[DB] Upgrading schema: v{dbVersion} -> v{DatabaseExtensions.CurrentDbVersion}");
 
                 ctx.Database.EnsureCreated();
@@ -302,22 +312,46 @@ public sealed class AppEntry
         return false;
     }
 
+    /// <summary>
+    /// Настраивает конфигурацию сборщика приложения Avalonia.
+    /// Выполняет условную настройку графического стека в зависимости от версии ОС.
+    /// </summary>
     public static AppBuilder BuildAvaloniaApp()
     {
         BootstrapSettings.Initialize();
         var gpuCacheBytes = BootstrapSettings.Current.GpuTextureCacheMb * 1024L * 1024L;
 
-        return AppBuilder.Configure<App>()
+        var builder = AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .WithInterFont()
             .With(new SkiaOptions
             {
                 MaxGpuResourceSizeBytes = gpuCacheBytes
-            })
+            });
+
+        // Windows 11 начинается со сборки 22000.
+        // Если это Windows, но версия сборки ниже 22000 — значит это Windows 10 или старше.
+        if (OperatingSystem.IsWindows() && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
+        {
+            Log.Info("[AppEntry] Windows 10 detected. Using DirectComposition to prevent DWM deadlocks.");
+
+            builder.With(new Win32PlatformOptions
+            {
+                // Отключаем WinUIComposition (вызывающий дедлоки при закрытии окон на Win 10),
+                // оставляем проверенный аппаратный DirectComposition.
+                CompositionMode =
+                [
+                    Win32CompositionMode.DirectComposition,
+                    Win32CompositionMode.RedirectionSurface
+                ]
+            });
+        }
+
 #if DEBUG
-            .LogToTrace()
+        builder.LogToTrace();
 #endif
-            .UseReactiveUI(_ => { });
+
+        return builder.UseReactiveUI(_ => { });
     }
 
     private static void ConfigureServices(IServiceCollection services)

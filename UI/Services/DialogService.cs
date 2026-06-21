@@ -574,6 +574,29 @@ public sealed class DialogService
             L[exception.GetLocalizationKey()],
             L["Common_OK"]);
 
+    /// <summary>
+    /// Показывает модальное оверлей-предупреждение о необходимости повторной синхронизации плейлистов после миграции БД.
+    /// Полностью блокирует интерфейс на указанное время (обратный отсчет) с помощью DialogHost.
+    /// </summary>
+    public async Task ShowLegacyMigrationAlertAsync(int countdownSeconds)
+    {
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<object?>();
+
+        var vm = new MigrationWarningDialogViewModel(
+            title: L["Dialog_Warning_Title"] ?? "Warning",
+            message: L["Library_LegacyPlaylists_Message"] ?? "Please re-sync your playlists.",
+            countdownSeconds: countdownSeconds,
+            onClose: () =>
+            {
+                host.CloseDialog();
+                tcs.TrySetResult(null);
+            });
+
+        _ = host.ShowAsync<object>(vm);
+        await tcs.Task;
+    }
+
     #endregion
 }
 

@@ -57,7 +57,7 @@ public sealed class DialogHostViewModel : ViewModelBase
 
         Log.Debug($"[DialogHost] Showing: {dialogContent.GetType().Name}");
 
-        var result = await tcs.Task.ConfigureAwait(false);
+        var result = await tcs.Task;
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
