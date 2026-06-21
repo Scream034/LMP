@@ -3,7 +3,7 @@ namespace LMP.Core.Data;
 /// <summary>
 /// Legacy playlist model for JSON migration (without JsonIgnore on TrackIds).
 /// </summary>
-internal sealed class LegacyPlaylist
+public sealed class LegacyPlaylist
 {
     public string Id { get; set; } = string.Empty;
     
@@ -44,7 +44,7 @@ internal sealed class LegacyPlaylist
 /// <summary>
 /// Legacy model for JSON migration. Matches old LibraryData structure.
 /// </summary>
-internal sealed class LegacyLibraryData
+public sealed class LegacyLibraryData
 {
     public Dictionary<string, TrackInfo>? Tracks { get; set; }
     public Dictionary<string, LegacyPlaylist>? Playlists { get; set; }

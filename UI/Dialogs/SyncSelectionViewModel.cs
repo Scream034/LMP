@@ -1,6 +1,6 @@
-﻿using LMP.Core.Youtube.Search;
+using LMP.Core.Youtube.Search;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -16,7 +16,7 @@ public sealed record SyncActionOption(MergeAction Action, string DisplayName)
     public override string ToString() => DisplayName;
 }
 
-public sealed class SyncSelectionViewModel : ViewModelBase
+public sealed partial class SyncSelectionViewModel : ViewModelBase
 {
     private readonly List<SyncItemViewModel> _allItems = [];
     private readonly List<SyncItemViewModel> _conflictingItems = [];
@@ -32,14 +32,14 @@ public sealed class SyncSelectionViewModel : ViewModelBase
     public List<SyncActionOption> ConflictTemplates { get; }
     public List<SyncActionOption> NewTemplates { get; }
 
-    [Reactive] public SyncActionOption SelectedConflictTemplate { get; set; }
-    [Reactive] public SyncActionOption SelectedNewTemplate { get; set; }
+    [Reactive] public partial SyncActionOption SelectedConflictTemplate { get; set; }
+    [Reactive] public partial SyncActionOption SelectedNewTemplate { get; set; }
 
     // ═══ Статистика ═══
 
-    [Reactive] public string TotalSummary { get; private set; } = "";
-    [Reactive] public string SelectedSummary { get; private set; } = "";
-    [Reactive] public string SearchQuery { get; set; } = "";
+    [Reactive] public partial string TotalSummary { get; private set; } = "";
+    [Reactive] public partial string SelectedSummary { get; private set; } = "";
+    [Reactive] public partial string SearchQuery { get; set; } = "";
 
     // ═══ Команды ═══
 
@@ -257,7 +257,7 @@ public sealed class SyncSelectionViewModel : ViewModelBase
     }
 }
 
-public sealed class SyncItemViewModel : ReactiveObject
+public sealed partial class SyncItemViewModel : ReactiveObject
 {
     public PlaylistSearchResult Original { get; }
     public string PlaylistUrl => Original.Url;
@@ -272,9 +272,9 @@ public sealed class SyncItemViewModel : ReactiveObject
     public string FormattedTrackCount => HasTrackCount
         ? LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount) : "";
 
-    [Reactive] public bool IsHighlighted { get; set; }
+    [Reactive] public partial bool IsHighlighted { get; set; }
     public List<SyncActionOption> AvailableActions { get; }
-    [Reactive] public SyncActionOption? SelectedOption { get; set; }
+    [Reactive] public partial SyncActionOption? SelectedOption { get; set; }
     public MergeAction SelectedAction => SelectedOption?.Action ?? MergeAction.Skip;
     public static LocalizationService L => LocalizationService.Instance;
 

@@ -123,13 +123,21 @@
 
   <!--   RELEASE КОНФИГУРАЦИЯ     -->
   <PropertyGroup Label="Release" Condition="'$(Configuration)' == 'Release'">
-    <!-- Без отладочных символов в продакшне -->
     <DebugType>none</DebugType>
     <Optimize>true</Optimize>
 
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
 
     <DefaultItemExcludes>$(DefaultItemExcludes);UI/Features/Debug/**;Tests/**;Tools/**</DefaultItemExcludes>
+
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+    <TrimmerRootDescriptor>trimming.xml</TrimmerRootDescriptor>
+    
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+
+    <NoWarn>$(NoWarn);IL2026</NoWarn>
+    <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
   </PropertyGroup>
 
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">

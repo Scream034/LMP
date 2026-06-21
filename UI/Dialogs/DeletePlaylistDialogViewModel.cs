@@ -1,15 +1,15 @@
-﻿using System.Reactive;
+using System.Reactive;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Dialogs;
 
-public sealed class DeletePlaylistDialogViewModel : ViewModelBase
+public sealed partial class DeletePlaylistDialogViewModel : ViewModelBase
 {
     public string PlaylistName { get; }
 
-    [Reactive] public bool IsLocalOnly { get; set; } = true;
-    [Reactive] public bool IsDeleteEverywhere { get; set; }
+    [Reactive] public partial bool IsLocalOnly { get; set; } = true;
+    [Reactive] public partial bool IsDeleteEverywhere { get; set; }
 
     public bool CanDeleteFromCloud { get; }
 

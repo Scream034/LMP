@@ -1,11 +1,11 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Windows.Input;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Features.Shared;
 
-public sealed class TrackItemViewModel : ViewModelBase
+public sealed partial class TrackItemViewModel : ViewModelBase
 {
     #region Weak Event Subscription
 
@@ -81,14 +81,14 @@ public sealed class TrackItemViewModel : ViewModelBase
         ? Duration.ToString(@"h\:mm\:ss")
         : Duration.ToString(@"m\:ss");
 
-    [Reactive] public bool IsActive { get; private set; }
-    [Reactive] public bool IsPlaying { get; private set; }
-    [Reactive] public bool IsDownloading { get; private set; }
-    [Reactive] public float DownloadProgress { get; private set; }
-    [Reactive] public bool IsMenuOpen { get; set; }
-    [Reactive] public bool IsSelected { get; set; }
-    [Reactive] public bool IsPlaylistContext { get; set; }
-    [Reactive] public bool IsQueueContext { get; set; }
+    [Reactive] public partial bool IsActive { get; private set; }
+    [Reactive] public partial bool IsPlaying { get; private set; }
+    [Reactive] public partial bool IsDownloading { get; private set; }
+    [Reactive] public partial float DownloadProgress { get; private set; }
+    [Reactive] public partial bool IsMenuOpen { get; set; }
+    [Reactive] public partial bool IsSelected { get; set; }
+    [Reactive] public partial bool IsPlaylistContext { get; set; }
+    [Reactive] public partial bool IsQueueContext { get; set; }
 
     public bool ShowAddToQueue => !IsQueueContext;
 

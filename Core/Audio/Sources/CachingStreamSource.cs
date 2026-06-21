@@ -128,7 +128,7 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// Метаданные кэша текущего трека. Гарантированно не null после успешного
     /// <see cref="InitializeAsync"/>; обращение снаружи init — программная ошибка.
     /// </summary>
-    private CacheEntry? _cacheEntry;
+    private AudioCacheEntry? _cacheEntry;
     private IContainerParser? _parser;
     private AsyncCachingReadStream? _readStream;
 

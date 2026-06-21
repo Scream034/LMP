@@ -3,7 +3,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using Avalonia.Media.Imaging;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Dialogs;
 
@@ -25,7 +25,7 @@ namespace LMP.UI.Dialogs;
 /// <para><c>_selectionOrder</c> модифицируется только на UI-потоке (через ToggleSelection).
 /// Перед итерацией в async-методах делается snapshot через <c>.ToList()</c>.</para>
 /// </summary>
-public sealed class PlaylistCoverPickerViewModel : ViewModelBase
+public sealed partial class PlaylistCoverPickerViewModel : ViewModelBase
 {
     /// <summary>Максимальное количество выбранных обложек.</summary>
     private const int MaxSelection = 4;
@@ -64,22 +64,22 @@ public sealed class PlaylistCoverPickerViewModel : ViewModelBase
     public ObservableCollection<TrackCoverItemViewModel> TrackCovers { get; } = [];
 
     /// <summary>Превью сгенерированной мозаики.</summary>
-    [Reactive] public Bitmap? MosaicPreview { get; private set; }
+    [Reactive] public partial Bitmap? MosaicPreview { get; private set; }
 
     /// <summary>Есть ли превью для отображения.</summary>
-    [Reactive] public bool HasPreview { get; private set; }
+    [Reactive] public partial bool HasPreview { get; private set; }
 
     /// <summary>Текст подсказки: "Выберите 1-4 обложки".</summary>
-    [Reactive] public string SelectionHint { get; private set; } = "";
+    [Reactive] public partial string SelectionHint { get; private set; } = "";
 
     /// <summary>Статус выбора: "Выбрано: 2/4".</summary>
-    [Reactive] public string SelectionStatus { get; private set; } = "";
+    [Reactive] public partial string SelectionStatus { get; private set; } = "";
 
     /// <summary>
     /// Результат: путь к сохранённому PNG файлу мозаики.
     /// Заполняется после Apply. null = ещё не применено.
     /// </summary>
-    [Reactive] public string? ResultPath { get; private set; }
+    [Reactive] public partial string? ResultPath { get; private set; }
 
     /// <summary>Применить мозаику: сохраняет PNG и устанавливает ResultPath.</summary>
     public ReactiveCommand<Unit, Unit> ApplyCommand { get; }
@@ -343,7 +343,7 @@ public sealed class PlaylistCoverPickerViewModel : ViewModelBase
 /// <summary>
 /// ViewModel одной обложки трека в сетке выбора.
 /// </summary>
-public sealed class TrackCoverItemViewModel : ReactiveObject
+public sealed partial class TrackCoverItemViewModel : ReactiveObject
 {
     /// <summary>ID трека (для генерации имени файла мозаики).</summary>
     public string TrackId { get; }
@@ -355,10 +355,10 @@ public sealed class TrackCoverItemViewModel : ReactiveObject
     public string TrackTitle { get; }
 
     /// <summary>Выбран ли трек для мозаики.</summary>
-    [Reactive] public bool IsSelected { get; set; }
+    [Reactive] public partial bool IsSelected { get; set; }
 
     /// <summary>Порядковый номер выбора (1-4). 0 = не выбран.</summary>
-    [Reactive] public int SelectionOrder { get; set; }
+    [Reactive] public partial int SelectionOrder { get; set; }
 
     /// <summary>Команда переключения выбора. Устанавливается parent VM.</summary>
     public ReactiveCommand<Unit, Unit>? ToggleCommand { get; set; }

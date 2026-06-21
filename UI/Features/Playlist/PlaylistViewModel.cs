@@ -1,9 +1,9 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
 using Avalonia.Media;
 using LMP.UI.Features.Shell;
 using LMP.UI.Features.Shared;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using System.Reactive;
 using System.Reactive.Linq;
 using LMP.UI.Dialogs;
@@ -18,7 +18,7 @@ namespace LMP.UI.Features.Playlist;
 /// Управляет метаданными, отображением ownership/visibility,
 /// воспроизведением и двусторонней синхронизацией с YouTube.
 /// </summary>
-public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTransitionViewModel
+public sealed partial class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTransitionViewModel
 {
     #region Fields
 
@@ -52,20 +52,20 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
     #region Properties — Metadata
 
-    [Reactive] public string PlaylistName { get; private set; } = string.Empty;
-    [Reactive] public string? ThumbnailUrl { get; private set; }
-    [Reactive] public string? Description { get; private set; }
-    [Reactive] public int TrackCount { get; private set; }
-    [Reactive] public TimeSpan TotalDuration { get; private set; }
-    [Reactive] public string FormattedDuration { get; set; } = "";
-    [Reactive] public IBrush? HeaderBackground { get; private set; }
-    [Reactive] public bool IsLikedPlaylist { get; private set; }
+    [Reactive] public partial string PlaylistName { get; private set; } = string.Empty;
+    [Reactive] public partial string? ThumbnailUrl { get; private set; }
+    [Reactive] public partial string? Description { get; private set; }
+    [Reactive] public partial int TrackCount { get; private set; }
+    [Reactive] public partial TimeSpan TotalDuration { get; private set; }
+    [Reactive] public partial string FormattedDuration { get; set; } = "";
+    [Reactive] public partial IBrush? HeaderBackground { get; private set; }
+    [Reactive] public partial bool IsLikedPlaylist { get; private set; }
 
     /// <summary>Отформатированное количество просмотров (компактный вид: 1.2K, 3.5M).</summary>
-    [Reactive] public string? FormattedViewCount { get; private set; }
+    [Reactive] public partial string? FormattedViewCount { get; private set; }
 
     /// <summary>Отформатированная дата обновления плейлиста.</summary>
-    [Reactive] public string? FormattedReleaseDate { get; private set; }
+    [Reactive] public partial string? FormattedReleaseDate { get; private set; }
 
     public string FormattedTrackCount =>
         LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
@@ -77,66 +77,66 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
                 ? $"https://www.youtube.com/playlist?list={id}"
                 : null;
 
-    [Reactive] public bool HasYoutubeLink { get; private set; }
+    [Reactive] public partial bool HasYoutubeLink { get; private set; }
 
     #endregion
 
     #region Properties — Author & Ownership
 
     /// <summary>Имя автора/владельца плейлиста.</summary>
-    [Reactive] public string? AuthorName { get; private set; }
+    [Reactive] public partial string? AuthorName { get; private set; }
 
     /// <summary>Показывать строку автора (любой плейлист с известным автором).</summary>
-    [Reactive] public bool ShowAuthor { get; private set; }
+    [Reactive] public partial bool ShowAuthor { get; private set; }
 
     /// <summary>Плейлист доступен только для прослушивания (Foreign / CloudPublic).</summary>
-    [Reactive] public bool IsReadOnly { get; private set; }
+    [Reactive] public partial bool IsReadOnly { get; private set; }
 
     /// <summary>Плейлист можно редактировать (не read-only, не system).</summary>
-    [Reactive] public bool CanEdit { get; private set; }
+    [Reactive] public partial bool CanEdit { get; private set; }
 
     /// <summary>Плейлист приватный (🔒).</summary>
-    [Reactive] public bool IsPrivate { get; private set; }
+    [Reactive] public partial bool IsPrivate { get; private set; }
 
     /// <summary>Плейлист доступен по ссылке (🔗).</summary>
-    [Reactive] public bool IsUnlisted { get; private set; }
+    [Reactive] public partial bool IsUnlisted { get; private set; }
 
     #endregion
 
     #region Properties — Cloud & Sync
 
     /// <summary>Плейлист связан с YouTube (есть YoutubeId и он доступен).</summary>
-    [Reactive] public bool HasCloudSource { get; private set; }
+    [Reactive] public partial bool HasCloudSource { get; private set; }
 
     /// <summary>Можно запустить refresh/sync из облака (TwoWaySync или Liked).</summary>
-    [Reactive] public bool CanRefreshFromCloud { get; private set; }
+    [Reactive] public partial bool CanRefreshFromCloud { get; private set; }
 
     /// <summary>Двусторонняя синхронизация активна.</summary>
-    [Reactive] public bool IsTwoWaySynced { get; private set; }
+    [Reactive] public partial bool IsTwoWaySynced { get; private set; }
 
     /// <summary>Синхронизация в процессе прямо сейчас.</summary>
-    [Reactive] public bool IsSyncing { get; private set; }
+    [Reactive] public partial bool IsSyncing { get; private set; }
 
     /// <summary>Есть хотя бы один статусный чип для отображения рядом с action-кнопками.</summary>
-    [Reactive] public bool HasStatusChips { get; private set; }
+    [Reactive] public partial bool HasStatusChips { get; private set; }
 
     /// <summary>Локализованная строка последней синхронизации (null если не синхронизировался).</summary>
-    [Reactive] public string? LastSyncedText { get; private set; }
+    [Reactive] public partial string? LastSyncedText { get; private set; }
 
     #endregion
 
     #region Properties — Playback State
 
-    [Reactive] public bool IsPlayingThisPlaylist { get; private set; }
-    [Reactive] public bool IsShuffleActive { get; private set; }
-    [Reactive] public bool IsDownloadingActive { get; private set; }
-    [Reactive] public bool CanReorderItems { get; private set; }
+    [Reactive] public partial bool IsPlayingThisPlaylist { get; private set; }
+    [Reactive] public partial bool IsShuffleActive { get; private set; }
+    [Reactive] public partial bool IsDownloadingActive { get; private set; }
+    [Reactive] public partial bool CanReorderItems { get; private set; }
 
     /// <summary>Очередь «чистая» — запущена из этого плейлиста без сторонних треков.</summary>
-    [Reactive] public bool IsQueuePure { get; private set; }
+    [Reactive] public partial bool IsQueuePure { get; private set; }
 
     /// <summary>Очередь чистая и сейчас активно играет (для анимации эквалайзера).</summary>
-    [Reactive] public bool IsPlayingPure { get; private set; }
+    [Reactive] public partial bool IsPlayingPure { get; private set; }
 
     /// <summary>Динамическая подсказка для кнопки-трансформера Play/Pause/Replace.</summary>
     public string PlayButtonTooltip

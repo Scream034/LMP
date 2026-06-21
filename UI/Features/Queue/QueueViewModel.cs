@@ -1,7 +1,7 @@
-﻿using Avalonia.Collections;
+using Avalonia.Collections;
 using LMP.UI.Features.Shared;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using System.Reactive;
 using System.Reactive.Linq;
 
@@ -12,7 +12,7 @@ namespace LMP.UI.Features.Queue;
 /// Наследует TrackListReorderableViewModel для полного устранения дублирования кода.
 /// Использует изолированный кэш базового класса и инкрементальные обновления.
 /// </summary>
-public sealed class QueueViewModel : TrackListReorderableViewModel
+public sealed partial class QueueViewModel : TrackListReorderableViewModel
 {
     #region Fields
 
@@ -30,12 +30,12 @@ public sealed class QueueViewModel : TrackListReorderableViewModel
     #region Properties
 
     /// <summary>True когда очередь пуста (нет треков вообще).</summary>
-    [Reactive] public bool IsEmpty { get; private set; } = true;
+    [Reactive] public partial bool IsEmpty { get; private set; } = true;
 
     /// <summary>True когда очередь не пуста, но фильтр не нашёл совпадений.</summary>
-    [Reactive] public bool IsFilterEmpty { get; private set; }
+    [Reactive] public partial bool IsFilterEmpty { get; private set; }
 
-    [Reactive] public bool CanReorderItems { get; private set; } = true;
+    [Reactive] public partial bool CanReorderItems { get; private set; } = true;
 
     /// <summary>
     /// Псевдоним для Items, сохраняющий совместимость с биндингом в QueueView.axaml.

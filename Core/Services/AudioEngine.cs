@@ -1,11 +1,11 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Helpers;
 using LMP.Core.Audio.Normalization;
 using LMP.Core.Exceptions;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.Core.Services;
 
@@ -181,8 +181,8 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
     #region Observable Properties
 
-    [Reactive] public TrackInfo? CurrentTrack { get; private set; }
-    [Reactive] public AudioStreamInfo StreamInfo { get; private set; } = AudioStreamInfo.Empty;
+    [Reactive] public partial TrackInfo? CurrentTrack { get; private set; }
+    [Reactive] public partial AudioStreamInfo StreamInfo { get; private set; } = AudioStreamInfo.Empty;
 
     public bool IsPlaying => _player.State == PlaybackState.Playing;
     public bool IsPaused => _player.State == PlaybackState.Paused;
@@ -919,7 +919,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     /// Позиция seek-before-play. Если указана и не равна нулю, partial fast-start отключается,
     /// чтобы не стартовать с неподходящего локального префикса.
     /// </param>
-    private static CacheEntry? TryGetPartialBootstrapCache(TrackInfo track, TimeSpan? seekPosition)
+    private static AudioCacheEntry? TryGetPartialBootstrapCache(TrackInfo track, TimeSpan? seekPosition)
     {
         if (seekPosition is { TotalMilliseconds: > 0 })
             return null;
@@ -975,7 +975,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     /// </summary>
     private async Task PrimeContinuationUrlAsync(
         TrackInfo track,
-        CacheEntry expectedEntry,
+        AudioCacheEntry expectedEntry,
         CancellationToken ct)
     {
         try
@@ -1530,7 +1530,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     /// <param name="container">Контейнер continuation stream.</param>
     /// <param name="bitrate">Битрейт continuation stream.</param>
     private static bool IsContinuationVariantCompatible(
-        CacheEntry expectedEntry,
+        AudioCacheEntry expectedEntry,
         string? container,
         int bitrate)
     {
@@ -1560,7 +1560,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     /// <param name="url">Совместимый continuation URL.</param>
     private static bool TryGetCompatibleContinuationUrl(
         TrackInfo track,
-        CacheEntry expectedEntry,
+        AudioCacheEntry expectedEntry,
         out string url)
     {
         url = track.StreamUrl;
@@ -1582,7 +1582,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     /// Возвращает наиболее релевантную metadata-запись кэша для нормализации.
     /// </summary>
     /// <param name="trackId">Идентификатор трека.</param>
-    private static CacheEntry? FindNormalizationCacheEntry(string trackId)
+    private static AudioCacheEntry? FindNormalizationCacheEntry(string trackId)
     {
         var cache = AudioSourceFactory.GlobalCache;
         if (cache == null || string.IsNullOrEmpty(trackId))
@@ -1596,7 +1596,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     /// </summary>
     /// <param name="track">Рантайм-модель трека.</param>
     /// <param name="entry">Metadata-запись кэша.</param>
-    private static void TryHydrateTrackNormalizationFromCache(TrackInfo track, CacheEntry entry)
+    private static void TryHydrateTrackNormalizationFromCache(TrackInfo track, AudioCacheEntry entry)
     {
         if (!track.HasCachedNormalizationGain
             && entry.CachedNormalizationGain is float cachedGain

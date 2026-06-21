@@ -1,14 +1,14 @@
 using System.Reactive;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Dialogs;
 
-public sealed class CreatePlaylistDialogViewModel : ViewModelBase
+public sealed partial class CreatePlaylistDialogViewModel : ViewModelBase
 {
     public PlaylistEditorViewModel Editor { get; }
 
-    [Reactive] public bool SyncToCloud { get; set; }
+    [Reactive] public partial bool SyncToCloud { get; set; }
     public bool ShowSyncToggle { get; }
 
     /// <summary>

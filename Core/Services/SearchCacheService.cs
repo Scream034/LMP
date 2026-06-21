@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace LMP.Core.Services;
 
-public class CachedSearchResult
+public sealed class CachedSearchResult
 {
     public string Query { get; set; } = "";
     public string Source { get; set; } = "";
@@ -12,7 +12,7 @@ public class CachedSearchResult
     public List<TrackInfo> Tracks { get; set; } = [];
 }
 
-public class SearchCacheService
+public sealed class SearchCacheService
 {
     private readonly LibraryService _libraryService;
     private readonly int _maxCacheFiles = 50;
@@ -74,7 +74,7 @@ public class SearchCacheService
             if (!File.Exists(filePath)) return null;
 
             var json = await File.ReadAllTextAsync(filePath);
-            var cached = JsonSerializer.Deserialize<CachedSearchResult>(json);
+            var cached = JsonSerializer.Deserialize(json, AppJsonContext.Default.CachedSearchResult);
 
             if (cached == null) return null;
 
@@ -125,7 +125,7 @@ public class SearchCacheService
         {
             EnsureCacheDirectoryExists();
             var filePath = GetFilePath(key);
-            var json = JsonSerializer.Serialize(cached, G.Json.Compact);
+            var json = JsonSerializer.Serialize(cached, AppJsonContext.Default.CachedSearchResult);
             await File.WriteAllTextAsync(filePath, json);
             Log.Debug($"[SearchCache] Stored: '{query}' ({source}), {tracks.Count} items");
         }

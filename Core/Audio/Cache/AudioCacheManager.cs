@@ -27,18 +27,18 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// Обёртка индекса кэша с версионированием схемы.
     /// Используется для сериализации/десериализации JSON-файла metadata.
     /// </summary>
-    private sealed class CacheIndexEnvelope
+    public sealed class AudioCacheIndexEnvelope
     {
         /// <summary>Версия схемы metadata.</summary>
         public int SchemaVersion { get; set; }
 
         /// <summary>Записи кэша.</summary>
-        public List<CacheEntry> Entries { get; set; } = [];
+        public List<AudioCacheEntry> Entries { get; set; } = [];
     }
 
     private readonly string _cacheDirectory;
     private readonly long _maxCacheSize;
-    private readonly ConcurrentDictionary<string, CacheEntry> _entries = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, AudioCacheEntry> _entries = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _trackIndex = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _saveLock = new(1, 1);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileLocks = new(StringComparer.Ordinal);
@@ -46,11 +46,6 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     private readonly CancellationTokenSource _timerCts = new();
     private readonly Task _autoSaveTask;
     private volatile bool _disposed;
-
-    private static readonly JsonSerializerOptions s_jsonOptions = new()
-    {
-        WriteIndented = true
-    };
 
     public event Action<string, string, int, bool>? OnFormatCached;
     public event Action? OnCacheCleared;
@@ -69,7 +64,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     public bool IsTrackFullyCached(string trackId) => FindBestCache(trackId) != null;
 
-    public CacheEntry? FindBestCacheByTrackId(string trackId) => FindBestCache(trackId);
+    public AudioCacheEntry? FindBestCacheByTrackId(string trackId) => FindBestCache(trackId);
 
     public void HydrateCacheStatus(IEnumerable<TrackInfo> tracks)
     {
@@ -95,7 +90,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         {
             if (!_trackIndex.TryGetValue(trackId, out var keys)) continue;
 
-            CacheEntry? bestEntry = null;
+            AudioCacheEntry? bestEntry = null;
 
             foreach (var key in keys.Keys)
             {
@@ -132,7 +127,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// Лучшую запись кэша, если найден локальный contiguous prefix достаточной длины;
     /// иначе <c>null</c>.
     /// </returns>
-    public CacheEntry? FindBestStartupCache(string trackId, int minContiguousBytes)
+    public AudioCacheEntry? FindBestStartupCache(string trackId, int minContiguousBytes)
     {
         var entry = FindBestStartupCacheCore(trackId, minContiguousBytes);
         if (entry != null)
@@ -152,7 +147,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         return null;
     }
 
-    public CacheEntry? FindBestCache(string trackId)
+    public AudioCacheEntry? FindBestCache(string trackId)
     {
         var entry = FindBestCacheCore(trackId);
         if (entry != null)
@@ -226,12 +221,12 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         return true;
     }
 
-    private CacheEntry? FindBestStartupCacheCore(string trackId, int minContiguousBytes)
+    private AudioCacheEntry? FindBestStartupCacheCore(string trackId, int minContiguousBytes)
     {
         if (string.IsNullOrEmpty(trackId)) return null;
         if (!_trackIndex.TryGetValue(trackId, out var keys)) return null;
 
-        CacheEntry? best = null;
+        AudioCacheEntry? best = null;
         long bestContiguous = long.MinValue;
 
         foreach (var key in keys.Keys)
@@ -265,12 +260,12 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         return best;
     }
 
-    private CacheEntry? FindBestCacheCore(string trackId)
+    private AudioCacheEntry? FindBestCacheCore(string trackId)
     {
         if (string.IsNullOrEmpty(trackId)) return null;
         if (!_trackIndex.TryGetValue(trackId, out var keys)) return null;
 
-        CacheEntry? best = null;
+        AudioCacheEntry? best = null;
 
         foreach (var key in keys.Keys)
         {
@@ -322,7 +317,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     public bool HasPartialCache(string cacheKey) =>
         _entries.TryGetValue(cacheKey, out var entry) && entry.DownloadedBytes > 0;
 
-    public CacheEntry? GetCacheInfo(string cacheKey) =>
+    public AudioCacheEntry? GetCacheInfo(string cacheKey) =>
         _entries.TryGetValue(cacheKey, out var entry) ? entry : null;
 
     public string GetCachePath(string cacheKey)
@@ -340,7 +335,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// <summary>
     /// Создаёт или обновляет metadata-запись range-based кэша.
     /// </summary>
-    public CacheEntry CreateOrUpdate(
+    public AudioCacheEntry CreateOrUpdate(
         string cacheKey,
         string trackId,
         string url,
@@ -351,7 +346,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         long durationMs = -1,
         int alignmentBytes = ChunkSize)
     {
-        var entry = _entries.GetOrAdd(cacheKey, _ => new CacheEntry
+        var entry = _entries.GetOrAdd(cacheKey, _ => new AudioCacheEntry
         {
             CacheKey = cacheKey,
             TrackId = trackId,
@@ -414,7 +409,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         _ = SaveIndexAsync();
     }
 
-    private void InvalidateCompleteEntry(CacheEntry entry)
+    private void InvalidateCompleteEntry(AudioCacheEntry entry)
     {
         entry.IsComplete = false;
         entry.CompletedAt = null;
@@ -830,7 +825,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     }
 
     private async Task<bool> PromoteCacheToDownloadsAsync(
-        CacheEntry entry,
+        AudioCacheEntry entry,
         Func<string, Task<TrackInfo?>> getTrackFunc,
         Func<TrackInfo, Task> updateTrackFunc,
         CancellationToken ct)
@@ -1074,7 +1069,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// вместо деструктивного удаления.</para>
     /// <para>Удаление выполняется только при реальном усечении файла на диске.</para>
     /// </remarks>
-    private bool EnsureCacheFileIntegrity(CacheEntry entry)
+    private bool EnsureCacheFileIntegrity(AudioCacheEntry entry)
     {
         if (!entry.IsComplete) return false;
 
@@ -1211,7 +1206,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             DisposeHandle(key);
     }
 
-    private void UpdateFileSizeCache(CacheEntry entry)
+    private void UpdateFileSizeCache(AudioCacheEntry entry)
     {
         try
         {
@@ -1225,7 +1220,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         }
     }
 
-    private void RaiseFormatCached(CacheEntry entry)
+    private void RaiseFormatCached(AudioCacheEntry entry)
     {
         try
         {
@@ -1248,19 +1243,19 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             if (string.IsNullOrWhiteSpace(json)) return;
 
             int loadedSchemaVersion;
-            List<CacheEntry>? entries;
+            List<AudioCacheEntry>? entries;
 
             var trimmed = json.AsSpan().TrimStart();
             if (trimmed.Length > 0 && trimmed[0] == '{')
             {
-                var envelope = JsonSerializer.Deserialize<CacheIndexEnvelope>(json);
+                var envelope = JsonSerializer.Deserialize(json, AppJsonContext.Default.AudioCacheIndexEnvelope);
                 loadedSchemaVersion = envelope?.SchemaVersion ?? 0;
                 entries = envelope?.Entries;
             }
             else
             {
                 loadedSchemaVersion = 1;
-                entries = JsonSerializer.Deserialize<List<CacheEntry>>(json);
+                entries = JsonSerializer.Deserialize(json, AppJsonContext.Default.ListAudioCacheEntry);
             }
 
             if (entries == null) return;
@@ -1331,7 +1326,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// для возможной перезаписи при повторном кэшировании.</para>
     /// </remarks>
     private static void MigrateEntry(
-        CacheEntry entry,
+        AudioCacheEntry entry,
         string filePath,
         ref int migratedComplete,
         ref int droppedPartial)
@@ -1386,13 +1381,13 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             for (int i = 0; i < entries.Count; i++)
                 entries[i].PrepareForSave();
 
-            var envelope = new CacheIndexEnvelope
+            var envelope = new AudioCacheIndexEnvelope
             {
                 SchemaVersion = CurrentSchemaVersion,
                 Entries = entries
             };
 
-            string json = JsonSerializer.Serialize(envelope, s_jsonOptions);
+            string json = JsonSerializer.Serialize(envelope, G.Json.Beautiful);
             await File.WriteAllTextAsync(indexPath, json).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -1423,13 +1418,13 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             for (int i = 0; i < entries.Count; i++)
                 entries[i].PrepareForSave();
 
-            var envelope = new CacheIndexEnvelope
+            var envelope = new AudioCacheIndexEnvelope
             {
                 SchemaVersion = CurrentSchemaVersion,
                 Entries = entries
             };
 
-            string json = JsonSerializer.Serialize(envelope, s_jsonOptions);
+            string json = JsonSerializer.Serialize(envelope, G.Json.Beautiful);
             File.WriteAllText(indexPath, json);
         }
         catch (Exception ex)
@@ -1657,7 +1652,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 /// <summary>
 /// Метаданные range-based кэша одного аудиопотока.
 /// </summary>
-public sealed class CacheEntry
+public sealed class AudioCacheEntry
 {
     /// <summary>Уникальный ключ кэша.</summary>
     public string CacheKey { get; init; } = "";

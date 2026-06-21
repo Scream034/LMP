@@ -36,7 +36,7 @@ public sealed class BootstrapSettings
             if (File.Exists(FilePath))
             {
                 var json = File.ReadAllText(FilePath);
-                var settings = JsonSerializer.Deserialize<BootstrapSettings>(json);
+                var settings = JsonSerializer.Deserialize(json, AppJsonContext.Default.BootstrapSettings);
                 if (settings != null)
                 {
                     // ═══ ОЧИСТКА КЭША ПРИ ОБНОВЛЕНИИ ВЕРСИИ ПЛЕЕРА ═══
@@ -107,7 +107,7 @@ public sealed class BootstrapSettings
     {
         try
         {
-            var json = JsonSerializer.Serialize(this, G.Json.Beautiful);
+            var json = JsonSerializer.Serialize(this, AppJsonContext.Default.BootstrapSettings);
             File.WriteAllText(FilePath, json);
         }
         catch (Exception ex)

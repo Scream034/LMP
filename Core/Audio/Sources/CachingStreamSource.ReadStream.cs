@@ -56,7 +56,7 @@ public sealed partial class CachingStreamSource
 
         /// <summary>
         /// Устанавливает позицию потока И отменяет все pending ReadAsync.
-        /// Вызывается ТОЛЬКО из <see cref="CachingStreamSource.SeekAsync"/> при внешнем seek.
+        /// Вызывается ТОЛЬКО из <see cref="SeekAsync"/> при внешнем seek.
         /// </summary>
         /// <param name="position">Новая абсолютная позиция в байтах.</param>
         internal void SeekAndCancelPendingReads(long position)
@@ -152,7 +152,7 @@ public sealed partial class CachingStreamSource
         }
 
         /// <summary>
-        /// Ядро чтения: делегирует в <see cref="CachingStreamSource.ReadAtAsync"/> и
+        /// Ядро чтения: делегирует в <see cref="ReadAtAsync"/> и
         /// атомарно продвигает позицию только если seek не произошёл во время чтения.
         /// </summary>
         private async ValueTask<int> ReadAsyncCore(Memory<byte> buffer, CancellationToken ct)

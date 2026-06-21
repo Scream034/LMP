@@ -115,7 +115,7 @@ public sealed class DecryptorCache
             if (!File.Exists(DiskPath)) return;
 
             var json = await File.ReadAllTextAsync(DiskPath);
-            var data = JsonSerializer.Deserialize<CacheData>(json);
+            var data = JsonSerializer.Deserialize(json, AppJsonContext.Default.DecryptorCacheData);
 
             if (data is null || data.PlayerVersion != playerVersion)
             {
@@ -157,13 +157,13 @@ public sealed class DecryptorCache
                     static kvp => kvp.Key,
                     static kvp => kvp.Value.Value);
 
-            var data = new CacheData
+            var data = new DecryptorCacheData
             {
                 PlayerVersion = _playerVersion ?? "unknown",
                 Entries = entries
             };
 
-            var json = JsonSerializer.Serialize(data);
+            var json = JsonSerializer.Serialize(data, AppJsonContext.Default.DecryptorCacheData);
             await File.WriteAllTextAsync(DiskPath, json);
         }
         catch (Exception ex)
@@ -219,7 +219,7 @@ public sealed class DecryptorCache
         }
     }
 
-    private sealed class CacheData
+    public sealed class DecryptorCacheData
     {
         public string PlayerVersion { get; set; } = "";
         public Dictionary<string, string> Entries { get; set; } = [];

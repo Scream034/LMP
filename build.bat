@@ -122,6 +122,8 @@ if exist "publish" rmdir /s /q "publish"
 dotnet publish LMP.csproj -c Release -r win-x64 --self-contained true ^
     -p:PublishSingleFile=true ^
     -p:PublishReadyToRun=true ^
+    -p:PublishTrimmed=true ^
+    -p:TrimMode=partial ^
     -p:IncludeNativeLibrariesForSelfExtract=true ^
     -p:EnableCompressionInSingleFile=true ^
     -p:DebugType=None ^

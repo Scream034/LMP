@@ -5,7 +5,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Dialogs;
 
@@ -26,12 +26,12 @@ public enum CoverMode
 /// ViewModel редактора плейлиста. Используется как для создания, так и для редактирования.
 /// Создаётся через фабричные методы <see cref="ForCreate"/> и <see cref="ForEdit"/>.
 /// </summary>
-public sealed class PlaylistEditorViewModel : ViewModelBase
+public sealed partial class PlaylistEditorViewModel : ViewModelBase
 {
-    [Reactive] public string Name { get; set; }
-    [Reactive] public string? ThumbnailUrl { get; set; }
-    [Reactive] public string? CustomColor { get; set; }
-    [Reactive] public string? Description { get; set; }
+    [Reactive] public partial string Name { get; set; }
+    [Reactive] public partial string? ThumbnailUrl { get; set; }
+    [Reactive] public partial string? CustomColor { get; set; }
+    [Reactive] public partial string? Description { get; set; }
 
     /// <summary>Исходное описание (для определения изменения).</summary>
     private readonly string? _originalDescription;
@@ -52,16 +52,16 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     /// Показывается в UI как информационное поле.
     /// Обновляется при пересчёте через RecalculateColorCommand.
     /// </summary>
-    [Reactive] public string? ComputedColor { get; private set; }
+    [Reactive] public partial string? ComputedColor { get; private set; }
 
     /// <summary>Кисть превью вычисленного цвета.</summary>
-    [Reactive] public IBrush ComputedColorPreviewBrush { get; private set; } = Brushes.Transparent;
+    [Reactive] public partial IBrush ComputedColorPreviewBrush { get; private set; } = Brushes.Transparent;
 
     /// <summary>
     /// Идёт ли пересчёт цвета из обложки или загрузка обложки в YouTube.
     /// Используется для блокировки UI во время длительных операций.
     /// </summary>
-    [Reactive] public bool IsRecalculatingColor { get; set; }
+    [Reactive] public partial bool IsRecalculatingColor { get; set; }
 
     /// <summary>Команда пересчёта доминантного цвета из текущей обложки.</summary>
     public ReactiveCommand<Unit, Unit> RecalculateColorCommand { get; }
@@ -103,21 +103,21 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     // ═══ Cover Mode ═══
 
     /// <summary>Текущий режим выбора обложки: URL, из треков, или файл.</summary>
-    [Reactive] public CoverMode SelectedCoverMode { get; set; } = CoverMode.Url;
+    [Reactive] public partial CoverMode SelectedCoverMode { get; set; } = CoverMode.Url;
 
     /// <summary>true если выбран режим ручного URL.</summary>
-    [Reactive] public bool IsCoverModeUrl { get; set; } = true;
+    [Reactive] public partial bool IsCoverModeUrl { get; set; } = true;
 
     /// <summary>true если выбран режим "Из треков".</summary>
-    [Reactive] public bool IsCoverModeFromTracks { get; set; }
+    [Reactive] public partial bool IsCoverModeFromTracks { get; set; }
 
     /// <summary>true если выбран режим "Файл".</summary>
-    [Reactive] public bool IsCoverModeFile { get; set; }
+    [Reactive] public partial bool IsCoverModeFile { get; set; }
 
     /// <summary>
     /// ViewModel выбора обложки из треков. null если треки не предоставлены.
     /// </summary>
-    [Reactive] public PlaylistCoverPickerViewModel? CoverPicker { get; set; }
+    [Reactive] public partial PlaylistCoverPickerViewModel? CoverPicker { get; set; }
 
     /// <summary>
     /// Показывать ли переключатель режима обложки.
@@ -129,7 +129,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     public bool HasTracksCoverOption { get; }
 
     /// <summary>Путь выбранного файла (для отображения в UI).</summary>
-    [Reactive] public string? SelectedFilePath { get; set; }
+    [Reactive] public partial string? SelectedFilePath { get; set; }
 
     /// <summary>Команда выбора файла через системный диалог.</summary>
     public ReactiveCommand<Unit, Unit> SelectFileCommand { get; }
@@ -140,22 +140,22 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     /// Показывать ли кнопку загрузки обложки в YouTube.
     /// Видна только для TwoWaySync плейлистов с непустой обложкой.
     /// </summary>
-    [Reactive] public bool ShowUploadThumbnailButton { get; private set; }
+    [Reactive] public partial bool ShowUploadThumbnailButton { get; private set; }
 
     /// <summary>Загрузить текущую обложку в YouTube.</summary>
     public ReactiveCommand<Unit, Unit> UploadThumbnailCommand { get; }
 
     // ═══ Sync ═══
 
-    [Reactive] public bool ShowSyncSection { get; set; }
-    [Reactive] public bool IsSyncedToCloud { get; set; }
+    [Reactive] public partial bool ShowSyncSection { get; set; }
+    [Reactive] public partial bool IsSyncedToCloud { get; set; }
     public bool IsAuthenticated { get; }
     public bool HasYoutubeBinding { get; }
     public bool OriginalSyncState { get; }
 
     // ═══ Validation ═══
-    [Reactive] public string? ErrorMessage { get; set; }
-    [Reactive] public bool HasErrors { get; private set; }
+    [Reactive] public partial string? ErrorMessage { get; set; }
+    [Reactive] public partial bool HasErrors { get; private set; }
     public IObservable<bool> CanSave { get; }
 
     // ═══ Preview ═══
@@ -163,24 +163,24 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     /// <summary>
     /// URL или путь для превью обложки (HTTP URL или локальный путь).
     /// </summary>
-    [Reactive] public string? ThumbnailPreviewUrl { get; private set; }
+    [Reactive] public partial string? ThumbnailPreviewUrl { get; private set; }
 
     /// <summary>Есть ли превью для отображения.</summary>
-    [Reactive] public bool HasThumbnailPreview { get; private set; }
+    [Reactive] public partial bool HasThumbnailPreview { get; private set; }
 
     /// <summary>Превью — это HTTP URL (для AsyncImageLoader).</summary>
-    [Reactive] public bool IsPreviewHttp { get; private set; }
+    [Reactive] public partial bool IsPreviewHttp { get; private set; }
 
     /// <summary>Превью — это локальный файл (для LocalFileImageConverter).</summary>
-    [Reactive] public bool IsPreviewLocal { get; private set; }
+    [Reactive] public partial bool IsPreviewLocal { get; private set; }
 
     /// <summary>
     /// Bitmap превью для локальных файлов (загружается напрямую).
     /// Для HTTP URL остаётся null — используется AsyncImageLoader.
     /// </summary>
-    [Reactive] public Bitmap? LocalPreviewBitmap { get; private set; }
+    [Reactive] public partial Bitmap? LocalPreviewBitmap { get; private set; }
 
-    [Reactive] public IBrush ColorPreviewBrush { get; private set; } = Brushes.Transparent;
+    [Reactive] public partial IBrush ColorPreviewBrush { get; private set; } = Brushes.Transparent;
 
     public PlaylistEditorViewModel(
         string name = "",

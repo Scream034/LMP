@@ -14,7 +14,6 @@ public interface ISettingsRepository
 public sealed class SettingsRepository(IDbContextFactory<LibraryDbContext> factory) : ISettingsRepository
 {
     private readonly IDbContextFactory<LibraryDbContext> _factory = factory;
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default) where T : class
     {
@@ -23,7 +22,7 @@ public sealed class SettingsRepository(IDbContextFactory<LibraryDbContext> facto
         
         if (entity is null) return null;
         
-        return JsonSerializer.Deserialize<T>(entity.Value, JsonOptions);
+        return JsonSerializer.Deserialize<T>(entity.Value, G.Json.Beautiful);
     }
 
     public async Task<T> GetOrDefaultAsync<T>(string key, T defaultValue, CancellationToken ct = default) where T : class
@@ -35,7 +34,7 @@ public sealed class SettingsRepository(IDbContextFactory<LibraryDbContext> facto
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
         
-        var json = JsonSerializer.Serialize(value, JsonOptions);
+        var json = JsonSerializer.Serialize(value, G.Json.Beautiful);
         var existing = await ctx.Settings.FirstOrDefaultAsync(s => s.Key == key, ct);
         
         Log.Trace(json);

@@ -1,6 +1,6 @@
-﻿using LMP.UI.Features.Shell;
+using LMP.UI.Features.Shell;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -23,7 +23,7 @@ namespace LMP.UI.Features.Library;
 ///   <item>O(1) запрос длительности вместо N+1</item>
 /// </list>
 /// </summary>
-public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
+public sealed partial class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 {
     private const int NavigationDebounceMs = 64;
 
@@ -67,24 +67,24 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
     #region Reactive-свойства
 
-    [Reactive] public bool IsContentReady { get; private set; }
-    [Reactive] public bool IsLoading { get; private set; }
-    [Reactive] public bool IsSyncing { get; private set; }
-    [Reactive] public double SyncProgress { get; private set; }
-    [Reactive] public string SyncStatus { get; private set; } = "";
-    [Reactive] public bool IsAuthenticated { get; private set; }
-    [Reactive] public bool HasPlaylists { get; private set; }
+    [Reactive] public partial bool IsContentReady { get; private set; }
+    [Reactive] public partial bool IsLoading { get; private set; }
+    [Reactive] public partial bool IsSyncing { get; private set; }
+    [Reactive] public partial double SyncProgress { get; private set; }
+    [Reactive] public partial string SyncStatus { get; private set; } = "";
+    [Reactive] public partial bool IsAuthenticated { get; private set; }
+    [Reactive] public partial bool HasPlaylists { get; private set; }
 
     #endregion
 
     #region Статистика
 
-    [Reactive] public bool IsStatsVisible { get; private set; }
-    [Reactive] public string PlaylistCountText { get; private set; } = "";
-    [Reactive] public string TotalTracksText { get; private set; } = "";
-    [Reactive] public string TotalDurationText { get; private set; } = "";
-    [Reactive] public string AvgTrackDurationText { get; private set; } = "";
-    [Reactive] public string AvgPlaylistDurationText { get; private set; } = "";
+    [Reactive] public partial bool IsStatsVisible { get; private set; }
+    [Reactive] public partial string PlaylistCountText { get; private set; } = "";
+    [Reactive] public partial string TotalTracksText { get; private set; } = "";
+    [Reactive] public partial string TotalDurationText { get; private set; } = "";
+    [Reactive] public partial string AvgTrackDurationText { get; private set; } = "";
+    [Reactive] public partial string AvgPlaylistDurationText { get; private set; } = "";
 
     #endregion
 

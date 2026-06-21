@@ -5,23 +5,23 @@ using Avalonia.Threading;
 using LMP.Core.Services;
 using LMP.UI.Features.Shell;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Dialogs;
 
 /// <summary>
 /// ViewModel для диалога предупреждения об обновлении базы данных с таймером удержания.
 /// </summary>
-public sealed class MigrationWarningDialogViewModel : ViewModelBase
+public sealed partial class MigrationWarningDialogViewModel : ViewModelBase
 {
     private readonly Action _onClose;
     private readonly DispatcherTimer _timer;
     private int _secondsRemaining;
 
-    [Reactive] public string Title { get; set; } = string.Empty;
-    [Reactive] public string Message { get; set; } = string.Empty;
-    [Reactive] public string ButtonText { get; set; } = string.Empty;
-    [Reactive] public bool CanClose { get; set; }
+    [Reactive] public partial string Title { get; set; } = string.Empty;
+    [Reactive] public partial string Message { get; set; } = string.Empty;
+    [Reactive] public partial string ButtonText { get; set; } = string.Empty;
+    [Reactive] public partial bool CanClose { get; set; }
 
     public ReactiveCommand<Unit, Unit> CloseCommand { get; }
 

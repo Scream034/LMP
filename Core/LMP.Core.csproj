@@ -24,6 +24,14 @@
     <SkiaSharpVersion>3.119.4</SkiaSharpVersion>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!--
+      Синхронизировано с LMP.csproj: SettingsRepository<T> и LocalizationService
+      используют reflection-based JSON, который отключается при PublishTrimmed.
+    -->
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
   <ItemGroup Label="UI Core Dependencies">
     <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
     <PackageReference Include="AsyncImageLoader.Avalonia" Version="$(AsyncImageLoaderVersion)" />

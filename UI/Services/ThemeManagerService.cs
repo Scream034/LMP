@@ -481,7 +481,7 @@ public sealed class ThemeManagerService
     {
         try
         {
-            var json = JsonSerializer.Serialize(theme, G.Json.Beautiful);
+            var json = JsonSerializer.Serialize(theme, AppJsonContext.Default.ThemeSettings);
             File.WriteAllText(G.FilePath.Theme, json);
             _cachedTheme = theme;
             Log.Info($"Theme '{theme.Name}' saved.");
@@ -645,7 +645,7 @@ public sealed class ThemeManagerService
             if (File.Exists(G.FilePath.Theme))
             {
                 var json = File.ReadAllText(G.FilePath.Theme);
-                var theme = JsonSerializer.Deserialize<ThemeSettings>(json, G.Json.Beautiful);
+                var theme = JsonSerializer.Deserialize(json, AppJsonContext.Default.ThemeSettings);
                 if (theme != null)
                 {
                     _cachedTheme = theme;

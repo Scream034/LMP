@@ -10,33 +10,33 @@ using LMP.UI.Helpers;
 using LMP.UI.Services;
 using LMP.UI.Features.Shell;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Dialogs;
 
 /// <summary>
 /// Модель представления для диалога авторизации через расширение браузера.
 /// </summary>
-public sealed class AuthDialogViewModel : ViewModelBase
+public sealed partial class AuthDialogViewModel : ViewModelBase
 {
     private readonly CookieAuthService _auth;
     private readonly YoutubeUserDataService _userData;
     private readonly LocalAuthServer _localServer;
 
-    [Reactive] public string CookiesText { get; set; } = string.Empty;
-    [Reactive] public bool IsAuthenticating { get; private set; }
-    [Reactive] public string StatusText { get; private set; } = string.Empty;
-    [Reactive] public bool IsError { get; private set; }
-    [Reactive] public int AttemptCount { get; private set; }
+    [Reactive] public partial string CookiesText { get; set; } = string.Empty;
+    [Reactive] public partial bool IsAuthenticating { get; private set; }
+    [Reactive] public partial string StatusText { get; private set; } = string.Empty;
+    [Reactive] public partial bool IsError { get; private set; }
+    [Reactive] public partial int AttemptCount { get; private set; }
 
-    [Reactive] public bool IsExtensionDownloading { get; private set; }
-    [Reactive] public bool IsExtensionReady { get; private set; }
-    [Reactive] public bool IsGuideExpanded { get; set; } = true;
-    [Reactive] public string ExtensionFolderPath { get; private set; } = string.Empty;
+    [Reactive] public partial bool IsExtensionDownloading { get; private set; }
+    [Reactive] public partial bool IsExtensionReady { get; private set; }
+    [Reactive] public partial bool IsGuideExpanded { get; set; } = true;
+    [Reactive] public partial string ExtensionFolderPath { get; private set; } = string.Empty;
 
-    [Reactive] public bool IsPathCopied { get; private set; }
-    [Reactive] public int SelectedBrowserTabIndex { get; set; }
-    [Reactive] public string InstalledExtensionVersion { get; private set; } = "—";
+    [Reactive] public partial bool IsPathCopied { get; private set; }
+    [Reactive] public partial int SelectedBrowserTabIndex { get; set; }
+    [Reactive] public partial string InstalledExtensionVersion { get; private set; } = "—";
 
     /// <summary>
     /// Возвращает текстовое представление установленной версии расширения на основе текущей локализации.

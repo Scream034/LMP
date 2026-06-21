@@ -96,7 +96,7 @@ public static class AudioSourceFactory
     /// Кортеж (Path, CacheEntry) где CacheEntry.Bitrate — **реальный** битрейт
     /// из метаданных кэша (например, 134), не нормализованный.
     /// </returns>
-    public static (string Path, CacheEntry Entry)? FindAnyCachedTrack(string trackId)
+    public static (string Path, AudioCacheEntry Entry)? FindAnyCachedTrack(string trackId)
     {
         if (_globalCacheManager == null) return null;
 
@@ -222,9 +222,9 @@ public static class AudioSourceFactory
     /// Возвращает информацию о кэше для трека.
     /// </summary>
     /// <returns>
-    /// <see cref="CacheEntry"/> с **реальным** битрейтом (не нормализованным).
+    /// <see cref="AudioCacheEntry"/> с **реальным** битрейтом (не нормализованным).
     /// </returns>
-    public static CacheEntry? GetCacheInfo(string trackId) =>
+    public static AudioCacheEntry? GetCacheInfo(string trackId) =>
         _globalCacheManager?.FindBestCache(trackId);
 
     #region Format Detection

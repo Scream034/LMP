@@ -211,7 +211,7 @@ public sealed class LibraryService : IAsyncDisposable
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             var json = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-            var legacy = JsonSerializer.Deserialize<LegacyLibraryData>(json);
+            var legacy = JsonSerializer.Deserialize(json, AppJsonContext.Default.LegacyLibraryData);
             if (legacy == null)
             {
                 Log.Warn("[Migration] Could not deserialize legacy data");

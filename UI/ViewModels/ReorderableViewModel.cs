@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using System.Reactive.Linq;
 using LMP.UI.Features.Shell;
 using Avalonia.Collections;
@@ -319,7 +319,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     /// <para><b>Fast path:</b> если состав и порядок уже идентичны, не делает ничего.</para>
     /// <para><b>Batch path:</b> если между текущим и новым списком нет ни одного
     /// общего VM-экземпляра, выполняет полную замену через <see cref="AvaloniaList{T}.Clear"/>
-    /// и <see cref="AvaloniaList{T}.AddRange(System.Collections.Generic.IEnumerable{T})"/>.</para>
+    /// и <see cref="AvaloniaList{T}.AddRange(IEnumerable{T})"/>.</para>
     /// <para><b>Incremental path:</b> если пересечение есть, сначала удаляет из текущего
     /// списка все VM, отсутствующие в целевом, затем выравнивает порядок через
     /// <see cref="AvaloniaList{T}.Move"/> и вставляет недостающие элементы через

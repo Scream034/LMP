@@ -1,6 +1,6 @@
 using System.Reactive;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Dialogs;
 
@@ -9,11 +9,11 @@ namespace LMP.UI.Dialogs;
 /// Показывает diff между локальным и облачным состоянием,
 /// позволяет выбрать стратегию и поля для синхронизации.
 /// </summary>
-public sealed class SyncPlaylistDialogViewModel : ViewModelBase
+public sealed partial class SyncPlaylistDialogViewModel : ViewModelBase
 {
     public PlaylistSyncPreview Preview { get; }
 
-    [Reactive] public int SelectedStrategyIndex { get; set; }
+    [Reactive] public partial int SelectedStrategyIndex { get; set; }
 
     public PlaylistSyncStrategy SelectedStrategy => SelectedStrategyIndex switch
     {
@@ -23,10 +23,10 @@ public sealed class SyncPlaylistDialogViewModel : ViewModelBase
         _ => PlaylistSyncStrategy.Merge
     };
 
-    [Reactive] public bool SyncName { get; set; } = true;
-    [Reactive] public bool SyncDescription { get; set; } = true;
-    [Reactive] public bool SyncThumbnail { get; set; }
-    [Reactive] public bool SyncTracks { get; set; } = true;
+    [Reactive] public partial bool SyncName { get; set; } = true;
+    [Reactive] public partial bool SyncDescription { get; set; } = true;
+    [Reactive] public partial bool SyncThumbnail { get; set; }
+    [Reactive] public partial bool SyncTracks { get; set; } = true;
 
     public bool HasNameDiff => Preview.NameDiffers;
     public bool HasDescDiff => Preview.DescriptionDiffers;

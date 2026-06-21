@@ -243,7 +243,7 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
                 if (cancellationToken.IsCancellationRequested && ex is OperationCanceledException)
                     throw;
 
-                if (i < 2 && (ex is HttpRequestException || ex is OperationCanceledException || ex is System.IO.IOException))
+                if (i < 2 && (ex is HttpRequestException || ex is OperationCanceledException || ex is IOException))
                 {
                     Log.Warn($"[YouTube] Network error: {ex.Message}. Retrying {i + 1}...");
                     try

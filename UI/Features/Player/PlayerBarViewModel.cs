@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -7,7 +7,7 @@ using Avalonia;
 using Avalonia.Media;
 using LMP.Core.Youtube.Exceptions;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Features.Player;
 
@@ -15,7 +15,7 @@ namespace LMP.UI.Features.Player;
 /// ViewModel для нижней панели управления плеером (Player Bar).
 /// </summary>
 /// 
-public sealed class PlayerBarViewModel : ViewModelBase
+public sealed partial class PlayerBarViewModel : ViewModelBase
 {
     #region Constants - UI & UX
 
@@ -91,15 +91,15 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Properties - Playback State
 
-    [Reactive] public TrackInfo? CurrentTrack { get; private set; }
-    [Reactive] public bool IsLoading { get; private set; }
-    [Reactive] public bool IsPlaying { get; private set; }
-    [Reactive] public bool IsPaused { get; private set; }
-    [Reactive] public bool HasTrack { get; private set; }
-    [Reactive] public bool IsLiked { get; private set; }
-    [Reactive] public bool IsNavigating { get; private set; }
-    [Reactive] public bool IsTrackResetting { get; private set; }
-    [Reactive] public bool IsFormatsLoading { get; private set; }
+    [Reactive] public partial TrackInfo? CurrentTrack { get; private set; }
+    [Reactive] public partial bool IsLoading { get; private set; }
+    [Reactive] public partial bool IsPlaying { get; private set; }
+    [Reactive] public partial bool IsPaused { get; private set; }
+    [Reactive] public partial bool HasTrack { get; private set; }
+    [Reactive] public partial bool IsLiked { get; private set; }
+    [Reactive] public partial bool IsNavigating { get; private set; }
+    [Reactive] public partial bool IsTrackResetting { get; private set; }
+    [Reactive] public partial bool IsFormatsLoading { get; private set; }
 
     public string? CurrentTrackUrl => CurrentTrack?.Url;
 
@@ -111,9 +111,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Properties - Queue Info
 
-    [Reactive] public int CurrentTrackIndex { get; private set; }
-    [Reactive] public int TotalTracksInQueue { get; private set; }
-    [Reactive] public bool HasQueueToShuffle { get; private set; }
+    [Reactive] public partial int CurrentTrackIndex { get; private set; }
+    [Reactive] public partial int TotalTracksInQueue { get; private set; }
+    [Reactive] public partial bool HasQueueToShuffle { get; private set; }
 
     public string CurrentTrackIndexDisplay => (CurrentTrackIndex + 1).ToString();
 
@@ -121,30 +121,30 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Properties - Seek & Duration
 
-    [Reactive] public TimeSpan Position { get; set; }
-    [Reactive] public TimeSpan Duration { get; private set; }
-    [Reactive] public double PositionSeconds { get; set; }
-    [Reactive] public double DurationSeconds { get; private set; }
-    [Reactive] public bool IsSeekBusy { get; private set; }
-    [Reactive] public bool IsSeekPreviewVisible { get; set; }
+    [Reactive] public partial TimeSpan Position { get; set; }
+    [Reactive] public partial TimeSpan Duration { get; private set; }
+    [Reactive] public partial double PositionSeconds { get; set; }
+    [Reactive] public partial double DurationSeconds { get; private set; }
+    [Reactive] public partial bool IsSeekBusy { get; private set; }
+    [Reactive] public partial bool IsSeekPreviewVisible { get; set; }
 
     #endregion
 
     #region Properties - Buffer Progress
 
-    [Reactive] public double BufferProgressPercent { get; private set; }
-    [Reactive] public IReadOnlyList<(double Start, double End)> BufferedRanges { get; private set; } = [];
+    [Reactive] public partial double BufferProgressPercent { get; private set; }
+    [Reactive] public partial IReadOnlyList<(double Start, double End)> BufferedRanges { get; private set; } = [];
     public bool UseSegmentedBuffer => BufferedRanges.Count > 1;
-    [Reactive] public bool IsFullyBuffered { get; private set; }
+    [Reactive] public partial bool IsFullyBuffered { get; private set; }
 
     #endregion
 
     #region Properties - Volume
 
-    [Reactive] public int Volume { get; set; }
-    [Reactive] public int MaxVolume { get; private set; } = DefaultMaxVolume;
-    [Reactive] public bool IsVolumePopupOpen { get; set; }
-    [Reactive] public bool IsVolumePreviewVisible { get; set; }
+    [Reactive] public partial int Volume { get; set; }
+    [Reactive] public partial int MaxVolume { get; private set; } = DefaultMaxVolume;
+    [Reactive] public partial bool IsVolumePopupOpen { get; set; }
+    [Reactive] public partial bool IsVolumePreviewVisible { get; set; }
 
     public float RealGain
     {
@@ -209,9 +209,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Properties - Repeat & Shuffle
 
-    [Reactive] public bool IsShuffleAnimating { get; private set; }
-    [Reactive] public bool AutoShuffleEnabled { get; private set; }
-    [Reactive] public RepeatMode RepeatMode { get; set; }
+    [Reactive] public partial bool IsShuffleAnimating { get; private set; }
+    [Reactive] public partial bool AutoShuffleEnabled { get; private set; }
+    [Reactive] public partial RepeatMode RepeatMode { get; set; }
 
     public bool IsRepeatNone => RepeatMode == RepeatMode.None;
     public bool IsRepeatOne => RepeatMode == RepeatMode.One;
@@ -221,22 +221,22 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Properties - Hints
 
-    [Reactive] public bool IsRepeatHintVisible { get; private set; }
-    [Reactive] public string RepeatHintText { get; private set; } = "";
-    [Reactive] public bool IsLikeHintVisible { get; private set; }
-    [Reactive] public string LikeHintText { get; private set; } = "";
+    [Reactive] public partial bool IsRepeatHintVisible { get; private set; }
+    [Reactive] public partial string RepeatHintText { get; private set; } = "";
+    [Reactive] public partial bool IsLikeHintVisible { get; private set; }
+    [Reactive] public partial string LikeHintText { get; private set; } = "";
 
     #endregion
 
     #region Properties - Stream Info
 
-    [Reactive] public string StreamInfo { get; private set; } = "";
-    [Reactive] public bool ShowStreamInfo { get; private set; }
-    [Reactive] public string NetworkSpeedText { get; private set; } = "";
-    [Reactive] public string PingText { get; private set; } = "";
-    [Reactive] public IBrush PingBrush { get; private set; } = Brushes.White;
-    [Reactive] public FontWeight PingWeight { get; private set; } = FontWeight.SemiBold;
-    [Reactive] public bool ShowNetworkStats { get; private set; }
+    [Reactive] public partial string StreamInfo { get; private set; } = "";
+    [Reactive] public partial bool ShowStreamInfo { get; private set; }
+    [Reactive] public partial string NetworkSpeedText { get; private set; } = "";
+    [Reactive] public partial string PingText { get; private set; } = "";
+    [Reactive] public partial IBrush PingBrush { get; private set; } = Brushes.White;
+    [Reactive] public partial FontWeight PingWeight { get; private set; } = FontWeight.SemiBold;
+    [Reactive] public partial bool ShowNetworkStats { get; private set; }
 
     public ObservableCollection<StreamOption> AvailableFormats { get; } = [];
 

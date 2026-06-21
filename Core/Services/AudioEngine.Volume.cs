@@ -111,7 +111,7 @@ public sealed partial class AudioEngine
             audioSettings.NormalizationMode);
 
         var track = CurrentTrack;
-        CacheEntry? cacheEntry = null;
+        AudioCacheEntry? cacheEntry = null;
 
         if (track != null)
         {

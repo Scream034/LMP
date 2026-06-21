@@ -1,6 +1,6 @@
-﻿using System.Reactive.Disposables;
+using System.Reactive.Disposables;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.Core.ViewModels;
 
@@ -8,7 +8,7 @@ namespace LMP.Core.ViewModels;
 /// Базовый класс для всех моделей представления (ViewModels) приложения.
 /// Обеспечивает поддержку реактивного изменения свойств и управление жизненным циклом ресурсов.
 /// </summary>
-public abstract class ViewModelBase : ReactiveObject, IDisposable, ISuspendable, IAccountAware
+public abstract partial class ViewModelBase : ReactiveObject, IDisposable, ISuspendable, IAccountAware
 {
     #region Properties
 
@@ -25,7 +25,7 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable, ISuspendable,
     /// <summary>
     /// Указывает, находится ли текущий компонент в состоянии приостановки (фоновом режиме).
     /// </summary>
-    [Reactive] public bool IsSuspended { get; private set; }
+    [Reactive] public partial bool IsSuspended { get; private set; }
 
     /// <summary>
     /// Предоставляет доступ к службе локализации для одноуровневого биндинга (требование IFilterable).

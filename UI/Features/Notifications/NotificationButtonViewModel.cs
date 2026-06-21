@@ -1,15 +1,15 @@
 using System.Reactive;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Features.Notifications;
 
-public sealed class NotificationButtonViewModel : ViewModelBase
+public sealed partial class NotificationButtonViewModel : ViewModelBase
 {
     private readonly NotificationService _notificationService;
     private readonly NotificationPanelViewModel _panelViewModel;
 
-    [Reactive] public bool IsPanelOpen { get; set; }
+    [Reactive] public partial bool IsPanelOpen { get; set; }
 
     public bool HasUnread => _notificationService.HasUnread;
     public int UnreadCount => _notificationService.UnreadCount;

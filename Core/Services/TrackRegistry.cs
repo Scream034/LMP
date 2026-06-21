@@ -95,7 +95,7 @@ public sealed class TrackRegistry
         if (audioCache == null || string.IsNullOrEmpty(track.Id))
             return;
 
-        CacheEntry? completeEntry = null;
+        AudioCacheEntry? completeEntry = null;
 
         if (!track.IsDownloaded && !track.IsCached)
         {

@@ -284,13 +284,17 @@ public sealed class NotificationService : ReactiveObject, IDisposable
         string? attemptsJson = null;
         if (n.Attempts is { Count: > 0 })
         {
-            var records = n.Attempts.Select(a => new AttemptDto(a.ClientName, a.Success, a.ErrorMessage, a.Timestamp));
-            attemptsJson = JsonSerializer.Serialize(records);
+            var records = n.Attempts
+                .Select(a => new AttemptDto(a.ClientName, a.Success, a.ErrorMessage, a.Timestamp))
+                .ToList();
+            attemptsJson = JsonSerializer.Serialize(records, AppJsonContext.Default.ListAttemptDto);
         }
 
         string? argsJson = null;
         if (n.MessageArgs is { Length: > 0 })
-            argsJson = JsonSerializer.Serialize(n.MessageArgs.Select(a => a?.ToString()).ToArray());
+            argsJson = JsonSerializer.Serialize(
+                n.MessageArgs.Select(a => a?.ToString()).ToArray(),
+                AppJsonContext.Default.StringArray);
 
         return new NotificationEntity
         {
@@ -318,7 +322,7 @@ public sealed class NotificationService : ReactiveObject, IDisposable
         {
             try
             {
-                var dtos = JsonSerializer.Deserialize<List<AttemptDto>>(e.AttemptsJson);
+                var dtos = JsonSerializer.Deserialize(e.AttemptsJson, AppJsonContext.Default.ListAttemptDto);
                 if (dtos is { Count: > 0 })
                     attempts = new ObservableCollection<AttemptRecord>(
                         dtos.Select(d => new AttemptRecord(d.ClientName, d.Success, d.ErrorMessage, d.Timestamp)));
@@ -331,7 +335,7 @@ public sealed class NotificationService : ReactiveObject, IDisposable
         {
             try
             {
-                args = JsonSerializer.Deserialize<string[]>(e.MessageArgsJson)?
+                args = JsonSerializer.Deserialize(e.MessageArgsJson, AppJsonContext.Default.StringArray)?
                     .Cast<object>().ToArray();
             }
             catch { /* ignore */ }
@@ -356,7 +360,7 @@ public sealed class NotificationService : ReactiveObject, IDisposable
         };
     }
 
-    private sealed record AttemptDto(string ClientName, bool Success, string? ErrorMessage, DateTime Timestamp);
+    public sealed record AttemptDto(string ClientName, bool Success, string? ErrorMessage, DateTime Timestamp);
 
     #endregion
 

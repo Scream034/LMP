@@ -540,10 +540,10 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     /// </summary>
     private static PlaybackWarmupPlan ComputePlaybackWarmupPlan(AudioPipeline pipeline, bool isSeek)
     {
-        if (pipeline.Source.IsFullyBuffered || pipeline.Source is Audio.Sources.LocalFileSource)
+        if (pipeline.Source.IsFullyBuffered || pipeline.Source is Sources.LocalFileSource)
             return new PlaybackWarmupPlan(0, 0, 0);
 
-        double avgPingMs = pipeline.Source is Audio.Sources.CachingStreamSource cs
+        double avgPingMs = pipeline.Source is Sources.CachingStreamSource cs
             ? cs.AveragePingMs
             : 0;
 
@@ -586,10 +586,10 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     /// </summary>
     private static int GetSourceBufferedAheadMs(AudioPipeline pipeline)
     {
-        if (pipeline.Source.IsFullyBuffered || pipeline.Source is Audio.Sources.LocalFileSource)
+        if (pipeline.Source.IsFullyBuffered || pipeline.Source is Sources.LocalFileSource)
             return int.MaxValue;
 
-        if (pipeline.Source is Audio.Sources.CachingStreamSource cs)
+        if (pipeline.Source is Sources.CachingStreamSource cs)
             return cs.BufferedAheadMs;
 
         return 0;

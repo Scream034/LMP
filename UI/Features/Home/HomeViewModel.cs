@@ -1,5 +1,5 @@
-﻿using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+using ReactiveUI;
+
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -10,7 +10,7 @@ namespace LMP.UI.Features.Home;
 /// <summary>
 /// ViewModel главного экрана. Категории + поиск через YouTube с кэшированием.
 /// </summary>
-public sealed class HomeViewModel : TrackListReorderableViewModel
+public sealed partial class HomeViewModel : TrackListReorderableViewModel
 {
     #region Constants
 
@@ -34,8 +34,8 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
 
     #region Properties
 
-    [Reactive] public string Greeting { get; private set; } = string.Empty;
-    [Reactive] public CategoryItem? SelectedCategory { get; set; }
+    [Reactive] public partial string Greeting { get; private set; } = string.Empty;
+    [Reactive] public partial CategoryItem? SelectedCategory { get; set; }
 
     public ObservableCollection<CategoryItem> Categories { get; } = [];
 
@@ -311,9 +311,9 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
     #endregion
 }
 
-public sealed class CategoryItem : ReactiveObject
+public sealed partial class CategoryItem : ReactiveObject
 {
-    [Reactive] public string Name { get; set; } = string.Empty;
+    [Reactive] public partial string Name { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
     public bool IsSpecial { get; set; }
     public string LocKey { get; set; } = "";

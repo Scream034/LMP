@@ -1,7 +1,7 @@
-﻿using System.Reactive;
+using System.Reactive;
 using System.Reactive.Linq;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using LMP.Core.Services;
 using Avalonia.Media;
 
@@ -10,7 +10,7 @@ namespace LMP.UI.Features.Library;
 /// <summary>
 /// ViewModel карточки плейлиста в библиотеке.
 /// </summary>
-public sealed class PlaylistCardViewModel : ViewModelBase
+public sealed partial class PlaylistCardViewModel : ViewModelBase
 {
     #region Fields
 
@@ -55,22 +55,22 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// <summary>
     /// Название плейлиста. Реактивное — обновляется при переименовании.
     /// </summary>
-    [Reactive] public string Name { get; private set; }
+    [Reactive] public partial string Name { get; private set; }
 
     /// <summary>
     /// URL обложки с upscale для YouTube-превью. Реактивное — обновляется при смене обложки.
     /// </summary>
-    [Reactive] public string? ThumbnailUrl { get; private set; }
+    [Reactive] public partial string? ThumbnailUrl { get; private set; }
 
     /// <summary>
     /// Количество треков в плейлисте. Реактивное — обновляется при add/remove треков.
     /// </summary>
-    [Reactive] public int TrackCount { get; set; }
+    [Reactive] public partial int TrackCount { get; set; }
 
     /// <summary>
     /// Видимость карточки. Управляется stagger-анимацией в <see cref="LibraryViewModel"/>.
     /// </summary>
-    [Reactive] public bool IsVisible { get; set; }
+    [Reactive] public partial bool IsVisible { get; set; }
 
     /// <summary>
     /// Форматированное количество треков с правильным склонением.
@@ -118,36 +118,36 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// <summary>
     /// Имя автора/владельца плейлиста. Реактивное.
     /// </summary>
-    [Reactive] public string? Author { get; private set; }
+    [Reactive] public partial string? Author { get; private set; }
 
     /// <summary>
     /// Показывать строку автора на карточке.
     /// True только для чужих плейлистов с известным автором.
     /// Реактивное — обновляется при смене ownership.
     /// </summary>
-    [Reactive] public bool ShowAuthor { get; private set; }
+    [Reactive] public partial bool ShowAuthor { get; private set; }
 
     /// <summary>
     /// Отображаемая строка автора с предлогом «от X».
     /// Локализованная, реактивная.
     /// </summary>
-    [Reactive] public string? AuthorDisplayText { get; private set; }
+    [Reactive] public partial string? AuthorDisplayText { get; private set; }
 
     /// <summary>
     /// Tooltip для строки автора: «Плейлист от X».
     /// Локализованный, реактивный.
     /// </summary>
-    [Reactive] public string? AuthorTooltip { get; private set; }
+    [Reactive] public partial string? AuthorTooltip { get; private set; }
 
     /// <summary>
     /// Плейлист приватный (🔒). Реактивное.
     /// </summary>
-    [Reactive] public bool IsPrivate { get; private set; }
+    [Reactive] public partial bool IsPrivate { get; private set; }
 
     /// <summary>
     /// Плейлист по ссылке (🔗). Реактивное.
     /// </summary>
-    [Reactive] public bool IsUnlisted { get; private set; }
+    [Reactive] public partial bool IsUnlisted { get; private set; }
 
     /// <summary>
     /// Плейлист хранится локально (LocalOnly или TwoWaySync).
@@ -179,13 +179,13 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// Используется для отображения иконки облака (☁).
     /// Реактивное.
     /// </summary>
-    [Reactive] public bool HasCloudSource { get; private set; }
+    [Reactive] public partial bool HasCloudSource { get; private set; }
 
     /// <summary>
     /// Двусторонняя синхронизация активна (TwoWaySync или Liked + auth).
     /// Реактивное.
     /// </summary>
-    [Reactive] public bool IsTwoWaySynced { get; private set; }
+    [Reactive] public partial bool IsTwoWaySynced { get; private set; }
 
     #endregion
 
@@ -195,18 +195,18 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// Данный плейлист активен в плеере и очередь «чистая».
     /// Используется для анимации пульсации рамки карточки.
     /// </summary>
-    [Reactive] public bool IsActive { get; private set; }
+    [Reactive] public partial bool IsActive { get; private set; }
 
     /// <summary>
     /// Очередь полностью совпадает с треками этого плейлиста.
     /// </summary>
-    [Reactive] public bool IsQueuePure { get; private set; }
+    [Reactive] public partial bool IsQueuePure { get; private set; }
 
     /// <summary>
     /// Очередь чистая и прямо сейчас активно играет.
     /// Используется для иконки Play/Pause в контекстном меню.
     /// </summary>
-    [Reactive] public bool IsPlayingPure { get; private set; }
+    [Reactive] public partial bool IsPlayingPure { get; private set; }
 
     /// <summary>
     /// Текст для пункта контекстного меню «Воспроизвести / Пауза».

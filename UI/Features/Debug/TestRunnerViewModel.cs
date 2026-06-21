@@ -4,7 +4,7 @@ using System.Text;
 using Avalonia.Threading;
 using LMP.Tests.Framework;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Features.Debug;
 
@@ -22,7 +22,7 @@ namespace LMP.UI.Features.Debug;
 /// </list>
 /// </para>
 /// </summary>
-public sealed class TestRunnerViewModel : ViewModelBase
+public sealed partial class TestRunnerViewModel : ViewModelBase
 {
     private readonly TestRunner _runner;
     private CancellationTokenSource? _runCts;
@@ -35,28 +35,28 @@ public sealed class TestRunnerViewModel : ViewModelBase
     public ObservableCollection<TestItemViewModel> AllTests { get; } = [];
 
     /// <summary>Отфильтрованные тесты для отображения.</summary>
-    [Reactive] public ObservableCollection<TestItemViewModel> FilteredTests { get; set; } = [];
+    [Reactive] public partial ObservableCollection<TestItemViewModel> FilteredTests { get; set; } = [];
 
     /// <summary>Выбранный фильтр категории (null = все).</summary>
-    [Reactive] public TestCategory? SelectedCategory { get; set; }
+    [Reactive] public partial TestCategory? SelectedCategory { get; set; }
 
     /// <summary>Выбранный фильтр тематической группы (null = все).</summary>
-    [Reactive] public string? SelectedGroup { get; set; }
+    [Reactive] public partial string? SelectedGroup { get; set; }
 
     /// <summary>Текст поиска по имени теста.</summary>
-    [Reactive] public string SearchFilter { get; set; } = "";
+    [Reactive] public partial string SearchFilter { get; set; } = "";
 
     /// <summary>Идёт ли запуск тестов.</summary>
-    [Reactive] public bool IsRunning { get; set; }
+    [Reactive] public partial bool IsRunning { get; set; }
 
     /// <summary>Суммарная статистика.</summary>
-    [Reactive] public string Summary { get; set; } = "";
+    [Reactive] public partial string Summary { get; set; } = "";
 
     /// <summary>Лог выполнения.</summary>
-    [Reactive] public string LogOutput { get; set; } = "";
+    [Reactive] public partial string LogOutput { get; set; } = "";
 
     /// <summary>Прогресс batch-запуска (0-100).</summary>
-    [Reactive] public int Progress { get; set; }
+    [Reactive] public partial int Progress { get; set; }
 
     /// <summary>
     /// Все доступные тематические группы для UI-кнопок фильтра.
@@ -447,7 +447,7 @@ public sealed class TestRunnerViewModel : ViewModelBase
 /// <summary>
 /// UI-модель одного теста в списке.
 /// </summary>
-public sealed class TestItemViewModel : ViewModelBase
+public sealed partial class TestItemViewModel : ViewModelBase
 {
     public TestDescriptor Descriptor { get; }
 
@@ -456,9 +456,9 @@ public sealed class TestItemViewModel : ViewModelBase
     public string Group => Descriptor.Group;
     public bool RequiresNetwork => Descriptor.RequiresNetwork;
 
-    [Reactive] public TestRunState State { get; set; } = TestRunState.NotRun;
-    [Reactive] public string Duration { get; set; } = "";
-    [Reactive] public string? ErrorMessage { get; set; }
+    [Reactive] public partial TestRunState State { get; set; } = TestRunState.NotRun;
+    [Reactive] public partial string Duration { get; set; } = "";
+    [Reactive] public partial string? ErrorMessage { get; set; }
 
     /// <summary>Иконка состояния.</summary>
     public string StateIcon => State switch
@@ -506,7 +506,7 @@ public sealed class TestItemViewModel : ViewModelBase
 /// <summary>
 /// Элемент фильтра по тематической группе. Используется в UI как toggle-кнопка.
 /// </summary>
-public sealed class GroupFilterItem : ViewModelBase
+public sealed partial class GroupFilterItem : ViewModelBase
 {
     /// <summary>Имя группы: "NToken", "SigCipher" и т.д.</summary>
     public string Name { get; }
@@ -518,7 +518,7 @@ public sealed class GroupFilterItem : ViewModelBase
     public string Label => $"{Name} ({Count})";
 
     /// <summary>Выбрана ли эта группа в фильтре.</summary>
-    [Reactive] public bool IsSelected { get; set; }
+    [Reactive] public partial bool IsSelected { get; set; }
 
     public GroupFilterItem(string name, int count)
     {

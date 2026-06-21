@@ -203,9 +203,9 @@ public static class G
             WriteIndented = true,
         };
 
-        public static readonly JsonSerializerOptions Compact = new()
-        {
-            WriteIndented = false,
-        };
+        // public static readonly JsonSerializerOptions Compact = new()
+        // {
+        //     WriteIndented = false,
+        // };
     }
 }

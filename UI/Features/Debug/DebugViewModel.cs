@@ -1,7 +1,7 @@
 using System.Reactive;
 using LMP.Core.Youtube.Search;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using Microsoft.Extensions.DependencyInjection;
 using LMP.UI.Features.Shared;
 using LMP.Core.Audio.Helpers;
@@ -17,7 +17,7 @@ namespace LMP.UI.Features.Debug;
 /// ViewModel для Debug-окна. Содержит логику YouTube/Memory/Audio вкладок
 /// и предоставляет <see cref="TestRunner"/> для вкладки Tests.
 /// </summary>
-public sealed class DebugViewModel : ViewModelBase, IDisposable
+public sealed partial class DebugViewModel : ViewModelBase, IDisposable
 {
     private readonly Lazy<YoutubeProvider> _youtubeLazy;
     private YoutubeProvider Youtube => _youtubeLazy.Value;
@@ -33,13 +33,13 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
     // EXISTING PROPERTIES (YouTube / Memory / Audio)
     // ═══════════════════════════════════════════════════════════════
 
-    [Reactive] public string LogOutput { get; set; } = "Debug Session Started...\n";
-    [Reactive] public string SearchQuery { get; set; } = "Linkin Park";
-    [Reactive] public bool IsBusy { get; set; }
+    [Reactive] public partial string LogOutput { get; set; } = "Debug Session Started...\n";
+    [Reactive] public partial string SearchQuery { get; set; } = "Linkin Park";
+    [Reactive] public partial bool IsBusy { get; set; }
 
-    [Reactive] public string AudioTestInput { get; set; } = "aG_i7fvGSXU";
-    [Reactive] public int AudioTestDuration { get; set; } = 10;
-    [Reactive] public bool IsAudioPlaying { get; set; }
+    [Reactive] public partial string AudioTestInput { get; set; } = "aG_i7fvGSXU";
+    [Reactive] public partial int AudioTestDuration { get; set; } = 10;
+    [Reactive] public partial bool IsAudioPlaying { get; set; }
 
     private CancellationTokenSource? _audioTestCts;
     private AudioPlayer? _testPlayer;

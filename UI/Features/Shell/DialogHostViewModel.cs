@@ -1,5 +1,5 @@
 using Avalonia.Threading;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Features.Shell;
 
@@ -8,13 +8,13 @@ namespace LMP.UI.Features.Shell;
 /// Поддерживает стек диалогов: если новый диалог открывается поверх активного,
 /// активный приостанавливается и восстанавливается после закрытия нового.
 /// </summary>
-public sealed class DialogHostViewModel : ViewModelBase
+public sealed partial class DialogHostViewModel : ViewModelBase
 {
     /// <summary>Текущий отображаемый диалог.</summary>
-    [Reactive] public object? CurrentDialog { get; private set; }
+    [Reactive] public partial object? CurrentDialog { get; private set; }
 
     /// <summary>Есть ли активный диалог.</summary>
-    [Reactive] public bool HasActiveDialog { get; private set; }
+    [Reactive] public partial bool HasActiveDialog { get; private set; }
 
     //  Стек: (контент диалога, его TCS) 
     private readonly Stack<(object Content, TaskCompletionSource<object?> Tcs)> _stack = new();

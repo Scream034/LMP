@@ -1,10 +1,10 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Diagnostics;
 using LMP.Core.Youtube.Search;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using Avalonia.Threading;
 
 namespace LMP.UI.Features.Search;
@@ -31,7 +31,7 @@ public sealed record SearchHistoryItem(string Query, SearchViewModel Owner);
 /// <para><b>Smart Parent</b> (активный трек, прогресс загрузки) унаследован от
 /// <see cref="TrackListPaginatedViewModel"/>: нет N подписок на каждую TrackItemViewModel.</para>
 /// </summary>
-public sealed class SearchViewModel : TrackListPaginatedViewModel
+public sealed partial class SearchViewModel : TrackListPaginatedViewModel
 {
     #region Constants
 
@@ -67,17 +67,17 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
         ? LibService.Settings.SearchBatchSize
         : 30;
 
-    [Reactive] public string SearchQuery { get; set; } = string.Empty;
+    [Reactive] public partial string SearchQuery { get; set; } = string.Empty;
 
     /// <summary>
     /// Источник поиска: YouTube Music (музыка), YouTube (всё), Local (локальные).
     /// </summary>
-    [Reactive] public ContentSource Source { get; set; } = ContentSource.YouTubeMusic;
+    [Reactive] public partial ContentSource Source { get; set; } = ContentSource.YouTubeMusic;
 
-    [Reactive] public bool HasResults { get; private set; }
-    [Reactive] public string? ErrorMessage { get; private set; }
-    [Reactive] public bool IsFromCache { get; private set; }
-    [Reactive] public bool IsOfflineMode { get; private set; }
+    [Reactive] public partial bool HasResults { get; private set; }
+    [Reactive] public partial string? ErrorMessage { get; private set; }
+    [Reactive] public partial bool IsFromCache { get; private set; }
+    [Reactive] public partial bool IsOfflineMode { get; private set; }
 
     /// <summary>
     /// Кнопка принудительного обновления: видна только при наличии кэшированных результатов.

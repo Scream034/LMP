@@ -3,12 +3,12 @@ using System.Collections.Specialized;
 using System.Reactive;
 using Avalonia.Threading;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using Notification = LMP.Core.Models.Notification;
 
 namespace LMP.UI.Features.Notifications;
 
-public sealed class NotificationPanelViewModel : ViewModelBase
+public sealed partial class NotificationPanelViewModel : ViewModelBase
 {
     private readonly NotificationService _notificationService;
 
@@ -37,7 +37,7 @@ public sealed class NotificationPanelViewModel : ViewModelBase
 
     public bool HasNotifications => Notifications.Count > 0;
 
-    [Reactive] public bool IsLoading { get; private set; }
+    [Reactive] public partial bool IsLoading { get; private set; }
 
     public ReactiveCommand<Unit, Unit> ClearAllCommand { get; }
     public ReactiveCommand<string?, Unit> CopyErrorCommand { get; }

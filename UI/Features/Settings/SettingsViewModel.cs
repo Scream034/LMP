@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -12,7 +12,7 @@ using LMP.UI.Dialogs;
 using LMP.UI.Features.Shell;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Features.Settings;
 
@@ -43,7 +43,7 @@ public enum ImageCachePreset { Custom, Low, Medium, High }
 /// Все страницы получают DataContext = этот VM напрямую (без Owner.*).
 /// </para>
 /// </summary>
-public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTransitionViewModel
+public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTransitionViewModel
 {
     /// <inheritdoc />
     protected override bool HandlesAccountChanges => true;
@@ -79,7 +79,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     /// После <c>true</c> — sidebar + страница контента.
     /// </para>
     /// </summary>
-    [Reactive] public bool IsContentReady { get; private set; }
+    [Reactive] public partial bool IsContentReady { get; private set; }
 
     #region Sidebar
 
@@ -94,7 +94,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     public ObservableCollection<SettingsSidebarItemBase> SidebarItems { get; } = [];
 
     /// <summary>Текущий выбранный элемент sidebar — определяет какая страница отображается.</summary>
-    [Reactive] public SettingsSidebarItemBase? SelectedSidebarItem { get; set; }
+    [Reactive] public partial SettingsSidebarItemBase? SelectedSidebarItem { get; set; }
 
     /// <summary>
     /// Управляет видимостью текстовых лейблов в sidebar.
@@ -104,14 +104,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     /// Значение устанавливается из code-behind при изменении ширины колонки GridSplitter-ом.
     /// </para>
     /// </summary>
-    [Reactive] public bool IsSidebarExpanded { get; set; } = true;
+    [Reactive] public partial bool IsSidebarExpanded { get; set; } = true;
 
     #endregion
 
     #region Account
 
     /// <summary>Признак авторизации пользователя через cookies.</summary>
-    [Reactive] public bool IsAuthenticated { get; private set; }
+    [Reactive] public partial bool IsAuthenticated { get; private set; }
 
     /// <summary>Имя пользователя или локализованная строка "не авторизован".</summary>
     public string AccountName => IsAuthenticated ? _auth.State.UserName : SL["Auth_NotSignedIn"];
@@ -125,7 +125,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     /// <summary>
     /// Указывает, выполняется ли в данный момент сетевая транзакция с аккаунтом (вход, смена канала, выход).
     /// </summary>
-    [Reactive] public bool IsAccountLoading { get; private set; }
+    [Reactive] public partial bool IsAccountLoading { get; private set; }
 
     #endregion
 
@@ -135,67 +135,67 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     public ObservableCollection<LocalizedItem<InternetProfile>> InternetProfileOptions { get; } = [];
 
     /// <summary>Выбранный профиль скорости; синхронизируется с настройками через подписку.</summary>
-    [Reactive] public LocalizedItem<InternetProfile>? SelectedInternetProfile { get; set; }
+    [Reactive] public partial LocalizedItem<InternetProfile>? SelectedInternetProfile { get; set; }
 
     /// <summary>Доступные YouTube-клиенты для ComboBox.</summary>
     public ObservableCollection<LocalizedItem<YoutubeClientProfile>> ClientOptions { get; } = [];
 
     /// <summary>Выбранный YouTube-клиент; синхронизируется с настройками через подписку.</summary>
-    [Reactive] public LocalizedItem<YoutubeClientProfile>? SelectedClient { get; set; }
+    [Reactive] public partial LocalizedItem<YoutubeClientProfile>? SelectedClient { get; set; }
 
-    [Reactive] public bool ProxyEnabled { get; set; }
-    [Reactive] public string ProxyHost { get; set; } = "";
-    [Reactive] public int ProxyPort { get; set; } = 8080;
-    [Reactive] public bool ProxyAuth { get; set; }
-    [Reactive] public string ProxyUser { get; set; } = "";
-    [Reactive] public string ProxyPass { get; set; } = "";
+    [Reactive] public partial bool ProxyEnabled { get; set; }
+    [Reactive] public partial string ProxyHost { get; set; } = "";
+    [Reactive] public partial int ProxyPort { get; set; } = 8080;
+    [Reactive] public partial bool ProxyAuth { get; set; }
+    [Reactive] public partial string ProxyUser { get; set; } = "";
+    [Reactive] public partial string ProxyPass { get; set; } = "";
 
     /// <summary>
     /// Признак того, что изменения сети требуют перезапуска.
     /// <para>Устанавливается при смене профиля, прокси или клиента.</para>
     /// </summary>
-    [Reactive] public bool NetworkRestartRequired { get; set; }
+    [Reactive] public partial bool NetworkRestartRequired { get; set; }
 
     #endregion
 
     #region Storage
 
     /// <summary>Текущий путь к папке загрузок.</summary>
-    [Reactive] public string DownloadPath { get; set; } = string.Empty;
+    [Reactive] public partial string DownloadPath { get; set; } = string.Empty;
 
     /// <summary>Пресеты количества bitmap-объектов в RAM для ComboBox.</summary>
     public ObservableCollection<LocalizedItem<ImageCachePreset>> ImageCachePresets { get; } = [];
 
     /// <summary>Выбранный пресет; <c>null</c> означает Custom (произвольное значение слайдера).</summary>
-    [Reactive] public LocalizedItem<ImageCachePreset>? SelectedImageCachePreset { get; set; }
+    [Reactive] public partial LocalizedItem<ImageCachePreset>? SelectedImageCachePreset { get; set; }
 
     /// <summary>Максимальное количество bitmap-объектов в RAM-кэше.</summary>
-    [Reactive] public int MaxBitmapCacheItems { get; set; }
+    [Reactive] public partial int MaxBitmapCacheItems { get; set; }
 
-    [Reactive] public int ImageCacheLimitMb { get; set; }
-    [Reactive] public int AudioCacheLimitMb { get; set; }
-    [Reactive] public int DownloadedTracksLimitMb { get; set; }
+    [Reactive] public partial int ImageCacheLimitMb { get; set; }
+    [Reactive] public partial int AudioCacheLimitMb { get; set; }
+    [Reactive] public partial int DownloadedTracksLimitMb { get; set; }
 
     /// <summary>Статистика кэша изображений в формате "X MB / Y MB (N files, RAM: M)".</summary>
-    [Reactive] public string ImageCacheStats { get; private set; } = "...";
+    [Reactive] public partial string ImageCacheStats { get; private set; } = "...";
 
     /// <summary>Статистика аудиокэша в формате "X MB / Y MB (N files)".</summary>
-    [Reactive] public string AudioCacheStats { get; private set; } = "...";
+    [Reactive] public partial string AudioCacheStats { get; private set; } = "...";
 
     /// <summary>Доля занятого места в кэше изображений [0..1] для ProgressBar.</summary>
-    [Reactive] public double ImageCacheUsagePercent { get; private set; }
+    [Reactive] public partial double ImageCacheUsagePercent { get; private set; }
 
     /// <summary>Доля занятого места в аудиокэше [0..1] для ProgressBar.</summary>
-    [Reactive] public double AudioCacheUsagePercent { get; private set; }
+    [Reactive] public partial double AudioCacheUsagePercent { get; private set; }
 
     /// <summary>Статистика загрузок в формате "X MB / Y MB (N files)".</summary>
-    [Reactive] public string DownloadsStats { get; private set; } = "...";
+    [Reactive] public partial string DownloadsStats { get; private set; } = "...";
 
     /// <summary>Доля занятого места загрузками [0..1] для ProgressBar.</summary>
-    [Reactive] public double DownloadsUsagePercent { get; private set; }
+    [Reactive] public partial double DownloadsUsagePercent { get; private set; }
 
     /// <summary>Автоматически сохранять загрузки в папку Downloads.</summary>
-    [Reactive] public bool AutoSaveToDownloads { get; set; }
+    [Reactive] public partial bool AutoSaveToDownloads { get; set; }
 
     #endregion
 
@@ -205,20 +205,20 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     public ObservableCollection<ThemeSettings> ThemePresets { get; } = [];
 
     /// <summary>Выбранный пресет темы; при смене — цвета применяются к color picker'ам.</summary>
-    [Reactive] public ThemeSettings? SelectedPreset { get; set; }
+    [Reactive] public partial ThemeSettings? SelectedPreset { get; set; }
 
-    [Reactive] public Color AccentColor { get; set; }
-    [Reactive] public Color BgPrimaryColor { get; set; }
-    [Reactive] public Color BgSecondaryColor { get; set; }
-    [Reactive] public Color BgElevatedColor { get; set; }
-    [Reactive] public Color TextPrimaryColor { get; set; }
-    [Reactive] public Color TextSecondaryColor { get; set; }
+    [Reactive] public partial Color AccentColor { get; set; }
+    [Reactive] public partial Color BgPrimaryColor { get; set; }
+    [Reactive] public partial Color BgSecondaryColor { get; set; }
+    [Reactive] public partial Color BgElevatedColor { get; set; }
+    [Reactive] public partial Color TextPrimaryColor { get; set; }
+    [Reactive] public partial Color TextSecondaryColor { get; set; }
 
     /// <summary>
     /// Признак несохранённых изменений темы.
     /// <para>Управляет видимостью кнопок Apply / Reset.</para>
     /// </summary>
-    [Reactive] public bool HasUnsavedThemeChanges { get; set; }
+    [Reactive] public partial bool HasUnsavedThemeChanges { get; set; }
 
     #endregion
 
@@ -231,36 +231,36 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     public List<LocalizedItem<AudioQualityPreference>> QualityOptions { get; private set; } = [];
 
     /// <summary>Выбранный элемент качества; синхронизируется с настройками через подписку.</summary>
-    [Reactive] public LocalizedItem<AudioQualityPreference>? SelectedQualityItem { get; set; }
+    [Reactive] public partial LocalizedItem<AudioQualityPreference>? SelectedQualityItem { get; set; }
 
-    [Reactive] public int MaxVolumeLimit { get; set; }
-    [Reactive] public float TargetGainDb { get; set; }
-    [Reactive] public bool RememberTrackFormat { get; set; }
-    [Reactive] public bool VolumeBoostEnabled { get; set; }
-    [Reactive] public bool AudioNormalizationEnabled { get; set; }
-    [Reactive] public float NormalizationTargetLufs { get; set; }
-    [Reactive] public float NormalizationMaxGain { get; set; }
+    [Reactive] public partial int MaxVolumeLimit { get; set; }
+    [Reactive] public partial float TargetGainDb { get; set; }
+    [Reactive] public partial bool RememberTrackFormat { get; set; }
+    [Reactive] public partial bool VolumeBoostEnabled { get; set; }
+    [Reactive] public partial bool AudioNormalizationEnabled { get; set; }
+    [Reactive] public partial float NormalizationTargetLufs { get; set; }
+    [Reactive] public partial float NormalizationMaxGain { get; set; }
 
     /// <summary>Варианты кривой громкости для ComboBox.</summary>
     public ObservableCollection<LocalizedItem<VolumeCurveType>> VolumeCurveOptions { get; } = [];
 
     /// <summary>Выбранная кривая громкости; синхронизируется с настройками через подписку.</summary>
-    [Reactive] public LocalizedItem<VolumeCurveType>? SelectedVolumeCurve { get; set; }
+    [Reactive] public partial LocalizedItem<VolumeCurveType>? SelectedVolumeCurve { get; set; }
 
     /// <summary>Варианты поведения при ошибке воспроизведения для ComboBox.</summary>
     public ObservableCollection<LocalizedItem<PlaybackErrorBehavior>> ErrorBehaviorOptions { get; } = [];
 
     /// <summary>Выбранное поведение при ошибке; синхронизируется с настройками через подписку.</summary>
-    [Reactive] public LocalizedItem<PlaybackErrorBehavior>? SelectedErrorBehavior { get; set; }
+    [Reactive] public partial LocalizedItem<PlaybackErrorBehavior>? SelectedErrorBehavior { get; set; }
 
-    [Reactive] public bool PlayErrorSound { get; set; }
-    [Reactive] public bool SkipNTokenTracks { get; set; }
+    [Reactive] public partial bool PlayErrorSound { get; set; }
+    [Reactive] public partial bool SkipNTokenTracks { get; set; }
 
     /// <summary>Варианты режима нормализации для ComboBox.</summary>
     public ObservableCollection<LocalizedItem<NormalizationMode>> NormalizationModeOptions { get; } = [];
 
     /// <summary>Выбранный режим нормализации; синхронизируется с настройками через подписку.</summary>
-    [Reactive] public LocalizedItem<NormalizationMode>? SelectedNormalizationMode { get; set; }
+    [Reactive] public partial LocalizedItem<NormalizationMode>? SelectedNormalizationMode { get; set; }
 
     /// <summary>
     /// Флаг программного отката при отмене выключения нормализации.
@@ -275,25 +275,25 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
 
     #region UI & Behavior
 
-    [Reactive] public bool DiscordRpcEnabled { get; set; }
-    [Reactive] public bool AutoPlayOnPaste { get; set; }
-    [Reactive] public int SearchBatchSize { get; set; }
-    [Reactive] public bool EnableSearchCache { get; set; }
-    [Reactive] public int SearchCacheTtlMinutes { get; set; }
+    [Reactive] public partial bool DiscordRpcEnabled { get; set; }
+    [Reactive] public partial bool AutoPlayOnPaste { get; set; }
+    [Reactive] public partial int SearchBatchSize { get; set; }
+    [Reactive] public partial bool EnableSearchCache { get; set; }
+    [Reactive] public partial int SearchCacheTtlMinutes { get; set; }
 
     /// <summary>Список доступных языков — статический, берётся из LocalizationService.</summary>
     public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
 
     /// <summary>Выбранный язык; при смене применяется немедленно.</summary>
-    [Reactive] public LanguageItem? SelectedLanguage { get; set; }
+    [Reactive] public partial LanguageItem? SelectedLanguage { get; set; }
 
     /// <summary>Варианты действия при закрытии окна для ComboBox.</summary>
     public ObservableCollection<LocalizedItem<CloseAction>> CloseActionOptions { get; } = [];
 
     /// <summary>Выбранное действие при закрытии; синхронизируется с настройками через подписку.</summary>
-    [Reactive] public LocalizedItem<CloseAction>? SelectedCloseAction { get; set; }
+    [Reactive] public partial LocalizedItem<CloseAction>? SelectedCloseAction { get; set; }
 
-    [Reactive] public bool MinimizeToTray { get; set; }
+    [Reactive] public partial bool MinimizeToTray { get; set; }
 
     /// <summary>Флаг однократной инициализации подписок.</summary>
     private bool _subscriptionsSetup;
@@ -315,14 +315,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     public ObservableCollection<GpuCachePresetItem> GpuCachePresets { get; } = [];
 
     /// <summary>Выбранный пресет GPU-кэша; при смене требует перезапуска.</summary>
-    [Reactive] public GpuCachePresetItem? SelectedGpuCachePreset { get; set; }
+    [Reactive] public partial GpuCachePresetItem? SelectedGpuCachePreset { get; set; }
 
     /// <summary>Признак того, что изменение GPU-кэша требует перезапуска приложения.</summary>
-    [Reactive] public bool GpuCacheRestartRequired { get; private set; }
+    [Reactive] public partial bool GpuCacheRestartRequired { get; private set; }
 
-    [Reactive] public bool AutoMemoryCleanupEnabled { get; set; }
-    [Reactive] public int MemoryCleanupIntervalMinutes { get; set; }
-    [Reactive] public int MemoryPressureThresholdMb { get; set; }
+    [Reactive] public partial bool AutoMemoryCleanupEnabled { get; set; }
+    [Reactive] public partial int MemoryCleanupIntervalMinutes { get; set; }
+    [Reactive] public partial int MemoryPressureThresholdMb { get; set; }
 
     /// <summary>Принудительная очистка памяти прямо сейчас (aggressive GC).</summary>
     public ReactiveCommand<Unit, Unit> CleanupMemoryNowCommand { get; }

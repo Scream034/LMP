@@ -90,7 +90,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
 
             // JsonSerializer бросит JsonException при невалидной структуре
             // (вложенные объекты вместо строк, массивы и т.д.)
-            var resources = JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? throw new InvalidOperationException("Deserialization returned null");
+            var resources = JsonSerializer.Deserialize(json, AppJsonContext.Default.DictionaryStringString) ?? throw new InvalidOperationException("Deserialization returned null");
             _resources = resources;
             
             Log.Info($"✓ Loaded {langCode}.json ({_resources.Count} keys)");

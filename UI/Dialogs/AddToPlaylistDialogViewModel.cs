@@ -2,11 +2,11 @@ using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Dialogs;
 
-public sealed class AddToPlaylistDialogViewModel : ViewModelBase
+public sealed partial class AddToPlaylistDialogViewModel : ViewModelBase
 {
     public TrackInfo Track { get; }
     public string TrackDisplayName { get; }
@@ -14,8 +14,8 @@ public sealed class AddToPlaylistDialogViewModel : ViewModelBase
     private readonly List<PlaylistCheckItem> _allItems = [];
     public ObservableCollection<PlaylistCheckItem> FilteredPlaylists { get; } = [];
 
-    [Reactive] public string FilterQuery { get; set; } = "";
-    [Reactive] public string SummaryText { get; private set; } = "";
+    [Reactive] public partial string FilterQuery { get; set; } = "";
+    [Reactive] public partial string SummaryText { get; private set; } = "";
 
     /// <summary>
     /// Callback для закрытия диалога с результатом.
@@ -110,14 +110,14 @@ public sealed class AddToPlaylistDialogViewModel : ViewModelBase
     }
 }
 
-public sealed class PlaylistCheckItem : ReactiveObject
+public sealed partial class PlaylistCheckItem : ReactiveObject
 {
     public string PlaylistId { get; }
     public string Name { get; }
     public int TrackCount { get; }
     public bool WasAlreadyIn { get; }
 
-    [Reactive] public bool IsChecked { get; set; }
+    [Reactive] public partial bool IsChecked { get; set; }
 
     public PlaylistCheckItem(Playlist playlist, bool alreadyContains)
     {

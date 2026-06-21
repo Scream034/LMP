@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Runtime.CompilerServices;
@@ -13,7 +13,7 @@ using LMP.Core.Youtube.Videos.Streams;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Helpers.Extensions;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
@@ -1997,7 +1997,7 @@ public partial class YoutubeProvider : IDisposable
     #endregion
 }
 
-public class StreamOption : ReactiveObject
+public partial class StreamOption : ReactiveObject
 {
     public string Container { get; set; } = "";
     public double Bitrate { get; set; }
@@ -2010,8 +2010,8 @@ public class StreamOption : ReactiveObject
         LocalizationService.Instance.Get("Stream_Format_Mb", "{0:F1} MB"),
         SizeMb);
 
-    [Reactive] public bool IsDownloaded { get; set; }
-    [Reactive] public bool IsActive { get; set; }
+    [Reactive] public partial bool IsDownloaded { get; set; }
+    [Reactive] public partial bool IsActive { get; set; }
 }
 
 public class HomeSection

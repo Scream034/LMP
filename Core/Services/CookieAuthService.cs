@@ -10,8 +10,6 @@ namespace LMP.Core.Services;
 
 public partial class CookieAuthService
 {
-    public event Action? OnLoginSuccess;
-
     private readonly Lock _lock = new();
     private readonly Dictionary<string, string> _cookieMap = new(32, StringComparer.Ordinal);
     private string _cachedHeaderString = "";
@@ -491,7 +489,6 @@ public partial class CookieAuthService
             // НЕ стреляем OnAuthStateChanged — иначе LibraryService гидрирует для "guest".
             // Запускаем фоновую валидацию → UpdateUserProfile → OnAuthStateChanged с корректным GaiaId.
             Log.Info("[Auth] Fresh authentication detected. Deferring auth state notification until profile is validated.");
-            OnLoginSuccess?.Invoke();
             _ = ValidateAndNotifyAsync();
         }
         else

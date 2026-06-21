@@ -290,7 +290,7 @@ public sealed class TestConfig
             if (File.Exists(configPath))
             {
                 var json = File.ReadAllText(configPath);
-                var config = JsonSerializer.Deserialize<TestConfig>(json, JsonOptions);
+                var config = JsonSerializer.Deserialize<TestConfig>(json, G.Json.Beautiful);
 
                 if (config is not null)
                 {
@@ -332,7 +332,7 @@ public sealed class TestConfig
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
             // Чистый JSON без комментариев — валидный для любого парсера
-            var json = JsonSerializer.Serialize(config, JsonOptionsIndented);
+            var json = JsonSerializer.Serialize(config, G.Json.Beautiful);
             File.WriteAllText(path, json);
 
             Log.Info($"[TestConfig] Saved config to {path}");
@@ -475,22 +475,4 @@ public sealed class TestConfig
             return _instance;
         }
     }
-
-    // ═══════════════════════════════════════════════════════════════
-    // JSON OPTIONS
-    // ═══════════════════════════════════════════════════════════════
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        ReadCommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true,
-    };
-
-    private static readonly JsonSerializerOptions JsonOptionsIndented = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
 }

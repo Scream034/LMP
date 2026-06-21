@@ -1,16 +1,16 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using DynamicData;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 using LMP.UI.Features.Shell; // Добавлено
 
 namespace LMP.UI.ViewModels;
 
-public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IFilterable, ISmoothTransitionViewModel
+public abstract partial class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IFilterable, ISmoothTransitionViewModel
     where TViewModel : IDisposable
     where TSource : notnull
 {
@@ -57,10 +57,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         }
     }
 
-    [Reactive] public bool IsLoadingMore { get; protected set; }
-    [Reactive] public bool IsFetchingFromNetwork { get; protected set; }
-    [Reactive] public bool HasMoreItems { get; protected set; }
-    [Reactive] public bool ReachedEnd { get; protected set; }
+    [Reactive] public partial bool IsLoadingMore { get; protected set; }
+    [Reactive] public partial bool IsFetchingFromNetwork { get; protected set; }
+    [Reactive] public partial bool HasMoreItems { get; protected set; }
+    [Reactive] public partial bool ReachedEnd { get; protected set; }
 
     public string FilterQuery
     {

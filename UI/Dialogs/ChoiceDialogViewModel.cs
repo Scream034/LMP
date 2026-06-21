@@ -1,6 +1,6 @@
 using System.Reactive;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.UI.Dialogs;
 
@@ -65,7 +65,7 @@ public sealed class ChoiceButtonViewModel
 /// 
 /// <para>Кнопка Cancel добавляется автоматически если указан <c>cancelText</c>.</para>
 /// </summary>
-public sealed class ChoiceDialogViewModel : ReactiveObject
+public sealed partial class ChoiceDialogViewModel : ReactiveObject
 {
     /// <summary>Заголовок диалога.</summary>
     public string Title { get; }
@@ -80,7 +80,7 @@ public sealed class ChoiceDialogViewModel : ReactiveObject
     public bool HasCheckBox => !string.IsNullOrEmpty(CheckBoxText);
 
     /// <summary>Текущее состояние чекбокса.</summary>
-    [Reactive] public bool IsChecked { get; set; }
+    [Reactive] public partial bool IsChecked { get; set; }
 
     /// <summary>Список кнопок для отображения.</summary>
     public IReadOnlyList<ChoiceButtonViewModel> Buttons { get; }

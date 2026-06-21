@@ -1,8 +1,8 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using LMP.Core.Youtube.Search;
 using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
+
 
 namespace LMP.Core.Models;
 
@@ -10,7 +10,7 @@ namespace LMP.Core.Models;
 /// Представляет музыкальный трек.
 /// string interning для ID, минимизированы аллокации.
 /// </summary>
-public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
+public sealed partial class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 {
     private static readonly ConditionalWeakTable<string, string> _idCache = [];
 
@@ -89,32 +89,32 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     /// <summary>
     /// Название трека.
     /// </summary>
-    [Reactive] public string Title { get; set; } = string.Empty;
+    [Reactive] public partial string Title { get; set; } = string.Empty;
 
     /// <summary>
     /// Исполнитель/автор.
     /// </summary>
-    [Reactive] public string Author { get; set; } = string.Empty;
+    [Reactive] public partial string Author { get; set; } = string.Empty;
 
     /// <summary>
     /// ID канала YouTube.
     /// </summary>
-    [Reactive] public string? ChannelId { get; set; }
+    [Reactive] public partial string? ChannelId { get; set; }
 
     /// <summary>
     /// URL трека на YouTube.
     /// </summary>
-    [Reactive] public string Url { get; set; } = string.Empty;
+    [Reactive] public partial string Url { get; set; } = string.Empty;
 
     /// <summary>
     /// Длительность трека.
     /// </summary>
-    [Reactive] public TimeSpan Duration { get; set; }
+    [Reactive] public partial TimeSpan Duration { get; set; }
 
     /// <summary>
     /// URL обложки.
     /// </summary>
-    [Reactive] public string ThumbnailUrl { get; set; } = string.Empty;
+    [Reactive] public partial string ThumbnailUrl { get; set; } = string.Empty;
 
     /// <summary>
     /// Флаг официального канала исполнителя.
@@ -136,15 +136,15 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
     #region User State
 
-    [Reactive] public bool IsLiked { get; set; }
-    [Reactive] public bool IsDisliked { get; set; }
-    [Reactive] public bool IsDownloaded { get; set; }
-    [Reactive] public bool IsCached { get; set; }
+    [Reactive] public partial bool IsLiked { get; set; }
+    [Reactive] public partial bool IsDisliked { get; set; }
+    [Reactive] public partial bool IsDownloaded { get; set; }
+    [Reactive] public partial bool IsCached { get; set; }
 
     [JsonIgnore]
     public bool IsAvailableOffline => IsDownloaded || IsCached;
 
-    [Reactive] public string? LocalPath { get; set; }
+    [Reactive] public partial string? LocalPath { get; set; }
 
     #endregion
 
@@ -161,8 +161,8 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
     #region Format Preferences
 
-    [Reactive] public string? PreferredContainer { get; set; }
-    [Reactive] public int PreferredBitrate { get; set; }
+    [Reactive] public partial string? PreferredContainer { get; set; }
+    [Reactive] public partial int PreferredBitrate { get; set; }
 
     public string? RadioSeedId { get; set; }
 
@@ -174,7 +174,7 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     [JsonIgnore] public int TransientBitrate { get; set; }
     [JsonIgnore] public long TransientSize { get; set; }
 
-    [JsonIgnore, Reactive] public string StreamUrl { get; set; } = string.Empty;
+    [JsonIgnore, Reactive] public partial string StreamUrl { get; set; } = string.Empty;
 
     [JsonIgnore] public string CachedCodec { get; set; } = string.Empty;
     [JsonIgnore] public int CachedBitrate { get; set; }
