@@ -8,8 +8,7 @@
         "**/.svn": true,
         "**/.hg": true,
         "**/.DS_Store": true,
-        "**/Thumbs.db": true,
-        "FodyWeavers.xsd": true
+        "**/Thumbs.db": true
     },
     "[bat]": {
         "files.encoding": "utf8bom"

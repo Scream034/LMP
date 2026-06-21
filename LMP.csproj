@@ -21,7 +21,7 @@
     <EfCoreVersion>10.0.2</EfCoreVersion>
 
     <!-- MVVM -->
-    <ReactiveUIFodyVersion>19.5.41</ReactiveUIFodyVersion>
+    <ReactiveUISourceGenVersion>2.6.30</ReactiveUISourceGenVersion>
     <CommunityToolkitMvvmVersion>8.4.2</CommunityToolkitMvvmVersion>
 
     <!-- Microsoft Extensions (совпадает с TFM) -->
@@ -61,7 +61,10 @@
     <!-- Нужно для низкоуровневых аудио-операций (PCM-буферы, нативный interop) -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-    <!-- Подавляем предупреждение о дублирующихся типах из-за Fody-weavers -->
+    <!--
+      CS0436: ReactiveUI.SourceGenerators генерирует ReactiveAttribute в каждом проекте.
+      LMP видит свой + экспортированный из LMP.Core → конфликт типов (безопасен).
+    -->
     <NoWarn>$(NoWarn);CS0436</NoWarn>
 
     <!-- Lock-файл обязателен для cache: true в GitHub Actions CI -->
@@ -169,11 +172,13 @@
   <ItemGroup Label="MVVM">
     <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
     <!--
-      ReactiveUI.Fody помечен upstream как legacy.
-      Рекомендуемая замена: ReactiveUI.SourceGenerators.
-      Миграция — отдельная задача.
+      ReactiveUI.SourceGenerators 2.6.30 — compile-time замена ReactiveUI.Fody.
+      PrivateAssets="all": генератор не попадает в transitive-зависимости потребителей.
     -->
-    <PackageReference Include="ReactiveUI.Fody" Version="$(ReactiveUIFodyVersion)" />
+    <PackageReference Include="ReactiveUI.SourceGenerators" Version="$(ReactiveUISourceGenVersion)">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup Label="UI Utilities">

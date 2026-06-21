@@ -17,11 +17,10 @@
   <PropertyGroup Label="Package Versions">
     <EfCoreVersion>10.0.2</EfCoreVersion>
     <MsExtVersion>10.0.2</MsExtVersion>
-    <ReactiveUIFodyVersion>19.5.41</ReactiveUIFodyVersion>
+    <ReactiveUISourceGenVersion>2.6.30</ReactiveUISourceGenVersion>
     <CommunityToolkitMvvmVersion>8.4.2</CommunityToolkitMvvmVersion>
     <AvaloniaVersion>12.0.4</AvaloniaVersion>
     <AsyncImageLoaderVersion>3.8.0</AsyncImageLoaderVersion>
-    <!-- SkiaSharp 3.119.4: актуальная версия, используемая Avalonia 12.0.4 -->
     <SkiaSharpVersion>3.119.4</SkiaSharpVersion>
   </PropertyGroup>
 
@@ -44,14 +43,16 @@
   </ItemGroup>
 
   <ItemGroup Label="MVVM">
-    <!--
-      ReactiveUI.Fody помечен upstream как legacy.
-      Рекомендуемая замена: ReactiveUI.SourceGenerators.
-      Миграция — отдельная задача.
-    -->
     <PackageReference Include="ReactiveUI" Version="23.2.28" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
-    <PackageReference Include="ReactiveUI.Fody" Version="$(ReactiveUIFodyVersion)" />
+    <!--
+      ReactiveUI.SourceGenerators 2.6.30 — compile-time замена ReactiveUI.Fody.
+      PrivateAssets="all": генератор не попадает в transitive-зависимости потребителей.
+    -->
+    <PackageReference Include="ReactiveUI.SourceGenerators" Version="$(ReactiveUISourceGenVersion)">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup Label="Microsoft Extensions">

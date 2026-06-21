@@ -101,14 +101,13 @@
           "Splat": "19.4.1"
         }
       },
-      "ReactiveUI.Fody": {
+      "ReactiveUI.SourceGenerators": {
         "type": "Direct",
-        "requested": "[19.5.41, )",
-        "resolved": "19.5.41",
-        "contentHash": "bh6OH1WsSHf/ryUVaPnI6LWl1+lrCvq4L/AoHpzPXCKxtR4p0ogPVONnkq0jYgSQ55x7YNCVkthBKeb6uUSbpg==",
+        "requested": "[2.6.30, )",
+        "resolved": "2.6.30",
+        "contentHash": "Y9YtEMxjZxndLYVmgY2EnIlSUf9m72ljXYcs7q+RmSfFKTxwwaObBWrU3YmCW7buKyx7Ygq7XwR8/WPLRvZjvA==",
         "dependencies": {
-          "Fody": "6.8.0",
-          "ReactiveUI": "19.5.41"
+          "ReactiveUI.SourceGenerators.Analyzers.CodeFixes": "2.6.30"
         }
       },
       "Tmds.DBus.Protocol": {
@@ -468,6 +467,16 @@
           "System.Reactive": "6.1.0"
         }
       },
+      "ReactiveUI.Fody": {
+        "type": "Transitive",
+        "resolved": "1.0.0",
+        "contentHash": "ucA6fJajJt0q9HydcKa0qHyfn1sk7za4bhUB+sqn9DNp7vHn4n1MrtYhs9TMjiAZkNpRn3aoTClDPMtxRhmZNw=="
+      },
+      "ReactiveUI.SourceGenerators.Analyzers.CodeFixes": {
+        "type": "Transitive",
+        "resolved": "2.6.30",
+        "contentHash": "NfA4aLhj8nRMHbyFdTKXmTck0XMq1vAVJwZnnPAGaO8/xW0zWrA/nBMmYIv7GYtV5L5t8pIPrnhnzCnhUjMSPg=="
+      },
       "SkiaSharp": {
         "type": "Transitive",
         "resolved": "3.119.4",
@@ -642,7 +651,7 @@
           "Avalonia": "[12.0.4, )",
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "Concentus": "[2.2.2, )",
-          "LMP.Decoders.AAC": "[0.0.301, )",
+          "LMP.Decoders.AAC": "[1.0.0-dev, )",
           "Microsoft.Data.Sqlite": "[10.0.2, )",
           "Microsoft.Diagnostics.NETCore.Client": "[0.2.*, )",
           "Microsoft.EntityFrameworkCore": "[10.0.2, )",
@@ -650,7 +659,7 @@
           "Microsoft.Extensions.DependencyInjection": "[10.0.2, )",
           "NAudio": "[2.3.0, )",
           "ReactiveUI": "[23.2.28, )",
-          "ReactiveUI.Fody": "[19.5.41, )",
+          "ReactiveUI.Fody": "(, )",
           "SQLitePCLRaw.bundle_e_sqlite3": "[3.0.3, )",
           "SkiaSharp": "[3.119.4, )",
           "System.Security.Cryptography.ProtectedData": "[9.0.0, )"
