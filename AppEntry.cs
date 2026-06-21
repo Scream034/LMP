@@ -76,120 +76,126 @@ public sealed class AppEntry
     }
 
     /// <summary>
-    /// Выполняет инициализацию базы данных. При обнаружении старой версии схемы 
-    /// осуществляет её резервное копирование и разворачивает чистую БД.
+    /// Выполняет инициализацию базы данных с поддержкой инкрементных миграций.
+    /// <para><b>Алгоритм:</b></para>
+    /// <list type="number">
+    ///   <item>БД отсутствует → создать с нуля</item>
+    ///   <item>Версия устарела → выполнить инкрементную миграцию</item>
+    ///   <item>Миграция упала → backup + recreate как аварийный fallback</item>
+    ///   <item>Версия актуальна → только оптимизация и проверка FTS</item>
+    /// </list>
     /// </summary>
     private static void MigrateDatabaseSync()
     {
         var dbPath = G.FilePath.Database;
-        bool needsRecreation = false;
 
-        if (File.Exists(dbPath))
+        if (!File.Exists(dbPath))
         {
-            try
-            {
-                // Ограничиваем область видимости DbContext, чтобы он гарантированно закрылся
-                using (var ctx = Services.GetRequiredService<IDbContextFactory<LibraryDbContext>>().CreateDbContext())
-                {
-                    int dbVersion = ctx.GetDatabaseVersionAsync(CancellationToken.None).GetAwaiter().GetResult();
-                    if (dbVersion < DatabaseExtensions.CurrentDbVersion)
-                    {
-                        Log.Info($"[DB] Outdated database version detected (Current: {dbVersion}, Required: {DatabaseExtensions.CurrentDbVersion}). Requiring clean recreation...");
-                        needsRecreation = true;
-                    }
-                }
-
-                // КРИТИЧЕСКИЙ ПАТЧ: Освобождаем пулы соединений SQLite, снимая блокировку с файла БД
-                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[DB] Error while verifying database schema version: {ex.Message}. Recreating to be safe...");
-                needsRecreation = true;
-
-                // Сбрасываем пулы в случае исключения
-                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            }
+            CreateFreshDatabase();
+            return;
         }
 
-        if (needsRecreation)
-        {
-            try
-            {
-                if (File.Exists(dbPath))
-                {
-                    // Принудительно собираем мусор, чтобы закрыть невыгруженные файловые дескрипторы
-                    GC.Collect();
-                    GC.WaitForPendingFinalizers();
-
-                    var backupPath = dbPath + $".backup.{DateTime.Now:yyyyMMddHHmmss}";
-                    File.Move(dbPath, backupPath, overwrite: true);
-                    Log.Info($"[DB] Old database successfully backed up to: {backupPath}");
-                }
-
-                // Сбрасываем сессию, чтобы гарантировать чистый вход в аккаунт на новой БД
-                var auth = Services.GetRequiredService<CookieAuthService>();
-                auth.Logout();
-                Log.Info("[DB] Authorization cleared to prevent state conflicts.");
-            }
-            catch (Exception backupEx)
-            {
-                Log.Error($"[DB] Failed to backup legacy database or clear cookies: {backupEx.Message}");
-            }
-        }
+        int dbVersion = 0;
 
         try
         {
-            TryInitializeDatabaseInternal();
+            var dbFactory = Services.GetRequiredService<IDbContextFactory<LibraryDbContext>>();
+            using var ctx = dbFactory.CreateDbContext();
 
-            if (needsRecreation)
+            dbVersion = ctx.GetDatabaseVersionAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+            if (dbVersion < DatabaseExtensions.CurrentDbVersion)
             {
-                SaveEmergencyNotification();
+                Log.Info($"[DB] Upgrading schema: v{dbVersion} -> v{DatabaseExtensions.CurrentDbVersion}");
+
+                ctx.Database.EnsureCreated();
+                ctx.MigrateSchemaAsync(CancellationToken.None).GetAwaiter().GetResult();
+                ctx.OptimizeAsync(CancellationToken.None).GetAwaiter().GetResult();
+                ctx.EnsureFtsTablesAsync(CancellationToken.None).GetAwaiter().GetResult();
+                ctx.SetDatabaseVersionAsync(DatabaseExtensions.CurrentDbVersion, CancellationToken.None).GetAwaiter().GetResult();
+
+                Log.Info($"[DB] Schema upgrade complete (Version: {DatabaseExtensions.CurrentDbVersion})");
+            }
+            else
+            {
+                ctx.Database.EnsureCreated();
+                ctx.OptimizeAsync(CancellationToken.None).GetAwaiter().GetResult();
+                ctx.EnsureFtsTablesAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+                Log.Info($"[DB] Database schema is current (Version: {dbVersion})");
             }
         }
         catch (Exception ex)
         {
-            Log.Error($"[DB] Critical database initialization/migration error: {ex.Message}");
-
-            try
-            {
-                // В случае критического сбоя пробуем очистить пулы еще раз и повторить процедуру
-                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-
-                if (File.Exists(dbPath))
-                {
-                    var backupPath = dbPath + $".backup.{DateTime.Now:yyyyMMddHHmmss}";
-                    File.Move(dbPath, backupPath, overwrite: true);
-                    Log.Info($"[DB] Current incompatible database successfully backed up to: {backupPath}");
-
-                    TryInitializeDatabaseInternal();
-                    SaveEmergencyNotification();
-                }
-            }
-            catch (Exception backupEx)
-            {
-                Log.Fatal($"[DB] Failed to recover database with a clean slate: {backupEx.Message}");
-                throw;
-            }
+            Log.Error($"[DB] Incremental migration from v{dbVersion} failed: {ex.Message}");
+            BackupAndRecreateDatabase(dbPath);
         }
     }
 
     /// <summary>
-    /// Выполняет стандартные процедуры развертывания структуры SQLite с проставлением версии.
+    /// Создаёт новую пустую базу данных.
+    /// Используется при первом запуске и после аварийного fallback-recreate.
     /// </summary>
-    private static void TryInitializeDatabaseInternal()
+    private static void CreateFreshDatabase()
     {
-        var dbFactory = Services.GetRequiredService<IDbContextFactory<LibraryDbContext>>();
-        using var ctx = dbFactory.CreateDbContext();
+        try
+        {
+            var dbFactory = Services.GetRequiredService<IDbContextFactory<LibraryDbContext>>();
+            using var ctx = dbFactory.CreateDbContext();
 
-        ctx.Database.EnsureCreated();
-        ctx.OptimizeAsync(CancellationToken.None).GetAwaiter().GetResult();
-        ctx.EnsureFtsTablesAsync(CancellationToken.None).GetAwaiter().GetResult();
-        ctx.SetDatabaseVersionAsync(DatabaseExtensions.CurrentDbVersion, CancellationToken.None).GetAwaiter().GetResult();
+            ctx.Database.EnsureCreated();
+            ctx.MigrateSchemaAsync(CancellationToken.None).GetAwaiter().GetResult();
+            ctx.OptimizeAsync(CancellationToken.None).GetAwaiter().GetResult();
+            ctx.EnsureFtsTablesAsync(CancellationToken.None).GetAwaiter().GetResult();
+            ctx.SetDatabaseVersionAsync(DatabaseExtensions.CurrentDbVersion, CancellationToken.None).GetAwaiter().GetResult();
 
-        Log.Info($"[DB] Database initialization/migration complete (Version: {DatabaseExtensions.CurrentDbVersion})");
+            Log.Info($"[DB] Fresh database created (Version: {DatabaseExtensions.CurrentDbVersion})");
+        }
+        catch (Exception ex)
+        {
+            Log.Fatal($"[DB] Failed to create fresh database: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Выполняет backup текущей БД и пересоздаёт её с нуля.
+    /// Вызывается только при неустранимой ошибке инкрементной миграции.
+    /// </summary>
+    private static void BackupAndRecreateDatabase(string dbPath)
+    {
+        try
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
+            if (File.Exists(dbPath))
+            {
+                var backupPath = dbPath + $".backup.{DateTime.Now:yyyyMMddHHmmss}";
+                File.Move(dbPath, backupPath, overwrite: true);
+                Log.Info($"[DB] Incompatible database backed up to: {backupPath}");
+            }
+
+            var auth = Services.GetRequiredService<CookieAuthService>();
+            auth.Logout();
+            Log.Info("[DB] Authorization cleared after database recreation.");
+        }
+        catch (Exception backupEx)
+        {
+            Log.Error($"[DB] Failed to backup database before recreation: {backupEx.Message}");
+        }
+
+        try
+        {
+            CreateFreshDatabase();
+            SaveEmergencyNotification();
+        }
+        catch (Exception ex)
+        {
+            Log.Fatal($"[DB] Failed to recover database with a clean slate: {ex.Message}");
+            throw;
+        }
     }
 
     /// <summary>

@@ -25,7 +25,6 @@
         <!-- 3. Дополнительные компоненты -->
         <StyleInclude Source="/UI/Theme/LoadingSkeletons.axaml" />
         <StyleInclude Source="/UI/Theme/ChipStyles.axaml" />
-        <StyleInclude Source="UI/Features/Library/PlaylistCardTemplate.axaml" />
     </Application.Styles>
 
 </Application>

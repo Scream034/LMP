@@ -30,15 +30,21 @@ public sealed class MusicItem
 }
 
 /// <summary>
-/// Полный снимок плейлиста из WEB_REMIX за один browse-запрос.
-/// Содержит метаданные и все треки включая недоступные (IsPlayable=false).
+/// Полный снимок плейлиста из YouTube Music (WEB_REMIX browse).
 /// </summary>
 public sealed class FullPlaylistSyncData
 {
-    public string? Title { get; init; }
-    public string? Description { get; init; }
-    public string? ThumbnailUrl { get; init; }
-    public List<RemoteTrackInfo> Tracks { get; init; } = [];
+    public string? Title { get; set; }
+    public string? Description { get; set; }
+    public string? ThumbnailUrl { get; set; }
+    public long? ViewCount { get; set; }
+
+    /// <summary>
+    /// Дата последнего обновления, распарсенная из subtitle runs.
+    /// </summary>
+    public DateOnly? ReleaseDate { get; set; }
+
+    public List<RemoteTrackInfo> Tracks { get; set; } = [];
 }
 
 internal sealed class MusicBrowseResponse
@@ -46,9 +52,6 @@ internal sealed class MusicBrowseResponse
     public List<MusicShelf> Shelves { get; } = [];
     public string? Title { get; private set; }
     public string? ContinuationToken { get; private set; }
-
-    private static readonly string[] DurationFormats =
-        [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"];
 
     public MusicBrowseResponse(JsonElement root)
     {

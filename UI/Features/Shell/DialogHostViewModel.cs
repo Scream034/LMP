@@ -25,14 +25,22 @@ public sealed class DialogHostViewModel : ViewModelBase
     /// Показывает диалог поверх текущего (если есть) и асинхронно ожидает результата.
     /// При наличии активного диалога он уходит в стек и восстанавливается после закрытия нового.
     /// </summary>
+    /// <remarks>
+    /// Диалог стекируется только если его TCS ещё не завершён. Завершённый TCS означает,
+    /// что <see cref="CloseDialog"/> уже был вызван, а асинхронная очистка UI-состояния
+    /// ещё не успела выполниться. Восстановление такого диалога приводило бы
+    /// к показу освобождённого ViewModel, который никто не ожидает.
+    /// </remarks>
     public async Task<T?> ShowAsync<T>(object dialogContent)
     {
         var tcs = new TaskCompletionSource<object?>();
 
         lock (_lock)
         {
-            // Если уже есть активный диалог — кладём его в стек (не закрываем)
-            if (HasActiveDialog && _dialogTcs != null && CurrentDialog != null)
+            // Стекируем текущий диалог только если его TCS ещё активен.
+            // Завершённый TCS = CloseDialog уже вызван, диалог закрыт —
+            // восстанавливать его после нового диалога нельзя.
+            if (HasActiveDialog && _dialogTcs is { Task.IsCompleted: false } && CurrentDialog != null)
             {
                 Log.Debug($"[DialogHost] Stacking dialog. Suspending: {CurrentDialog.GetType().Name}, Showing: {dialogContent.GetType().Name}");
                 _stack.Push((CurrentDialog, _dialogTcs));
@@ -57,6 +65,15 @@ public sealed class DialogHostViewModel : ViewModelBase
             {
                 if (_dialogTcs != tcs)
                     return; // Другой диалог уже взял управление
+
+                // Защитная очистка: отбрасываем записи с завершённым TCS,
+                // которые могли попасть в стек до введения проверки IsCompleted
+                // или из-за иных граничных сценариев (Dispose, повторный CloseDialog).
+                while (_stack.Count > 0 && _stack.Peek().Tcs.Task.IsCompleted)
+                {
+                    var stale = _stack.Pop();
+                    Log.Debug($"[DialogHost] Discarded stale stacked dialog: {stale.Content.GetType().Name}");
+                }
 
                 if (_stack.Count > 0)
                 {

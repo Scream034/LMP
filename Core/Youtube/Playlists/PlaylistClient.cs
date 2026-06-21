@@ -53,7 +53,7 @@ public class PlaylistClient(HttpClient http)
         PlaylistId playlistId,
         CancellationToken cancellationToken = default)
     {
-        PlaylistBrowseResponse? browseResponse = null;
+        PlaylistBrowseResponse? browseResponse;
         try
         {
             browseResponse = await _controller.GetPlaylistBrowseResponseAsync(
@@ -223,7 +223,7 @@ public class PlaylistClient(HttpClient http)
 
     /// <summary>
     /// Строит модель плейлиста из данных API-ответа.
-    /// Поддерживает оба варианта: Browse и Next response через <see cref="IPlaylistData"/>.
+    /// Заполняет owner metadata, cloud count и visibility для дальнейшего сохранения в БД.
     /// </summary>
     private static Playlist BuildPlaylistFromData(PlaylistId playlistId, IPlaylistData data)
     {
@@ -240,7 +240,7 @@ public class PlaylistClient(HttpClient http)
             bestThumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(domainThumbs);
         }
 
-        return new Playlist
+        var playlist = new Playlist
         {
             Id = $"yt_{playlistId.Value}",
             YoutubeId = playlistId.Value,
@@ -248,8 +248,19 @@ public class PlaylistClient(HttpClient http)
             Author = data.Author,
             Description = data.Description,
             ThumbnailUrl = bestThumb,
+            OwnerChannelId = data.ChannelId,
+            CloudTrackCount = data.Count,
             SyncMode = PlaylistSyncMode.CloudPublic
         };
+
+        if (data is PlaylistBrowseResponse browseResponse)
+        {
+            playlist.Visibility = browseResponse.Visibility;
+            playlist.ViewCount = browseResponse.ViewCount;
+            playlist.ReleaseDate = browseResponse.ReleaseDate;
+        }
+
+        return playlist;
     }
 
     /// <summary>

@@ -4,11 +4,25 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Helpers.Extensions;
+using System.Globalization;
 
 namespace LMP.Core.Youtube.Music;
 
 internal sealed class PlaylistSyncController(HttpClient http)
 {
+    private static readonly string[] DateFormats =
+    [
+        "d MMM yyyy 'г.'",
+        "d MMMM yyyy 'г.'",
+        "d MMM yyyy",
+        "d MMMM yyyy",
+        "MMM d, yyyy",
+        "MMMM d, yyyy",
+    ];
+
+    private static readonly CultureInfo RuCulture = CultureInfo.GetCultureInfo("ru-RU");
+    private static readonly CultureInfo EnCulture = CultureInfo.GetCultureInfo("en-US");
+
     private const string WebApiUrl = "https://www.youtube.com/youtubei/v1";
     private const string MusicApiUrl = "https://music.youtube.com/youtubei/v1";
     private const string ConstantParams = "qAIC";
@@ -103,7 +117,7 @@ internal sealed class PlaylistSyncController(HttpClient http)
         Action<Utf8JsonWriter> writeBody,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{WebApiUrl}/{endpoint}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{WebApiUrl}/{endpoint}?prettyPrint=false");
         request.Content = CreateJsonContent(writer =>
         {
             WriteWebContext(writer);
@@ -123,7 +137,7 @@ internal sealed class PlaylistSyncController(HttpClient http)
         Action<Utf8JsonWriter> writeBody,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{MusicApiUrl}/{endpoint}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{MusicApiUrl}/{endpoint}?prettyPrint=false");
 
         var visitorData = YoutubeClientUtils.VisitorData;
         if (!string.IsNullOrEmpty(visitorData))
@@ -161,8 +175,8 @@ internal sealed class PlaylistSyncController(HttpClient http)
     /// Использует WEB_REMIX browse, который возвращает метаданные и треки одновременно.
     /// </summary>
     public async Task<FullPlaylistSyncData> GetFullPlaylistDataAsync(
-        string playlistId,
-        CancellationToken ct = default)
+      string playlistId,
+      CancellationToken ct = default)
     {
         var browseId = playlistId.StartsWith("VL", StringComparison.Ordinal)
             ? playlistId
@@ -176,6 +190,8 @@ internal sealed class PlaylistSyncController(HttpClient http)
         var title = ParsePlaylistTitle(root);
         var description = ParsePlaylistDescription(root);
         var thumbnailUrl = ParsePlaylistThumbnail(root);
+        var viewCount = ParsePlaylistViewCount(root);
+        var releaseDate = ParsePlaylistReleaseDate(root); // Свойство переведено на ReleaseDate
 
         var tracks = new List<RemoteTrackInfo>(64);
         ParseMusicPlaylistTracks(root, tracks);
@@ -202,7 +218,9 @@ internal sealed class PlaylistSyncController(HttpClient http)
             page++;
         }
 
-        Log.Debug($"[PlaylistSync] Parsed header: title='{title ?? ""}', desc='{description?.Length ?? 0} chars', thumb='{thumbnailUrl ?? "null"}'");
+        Log.Debug($"[PlaylistSync] Parsed header: title='{title ?? ""}', " +
+                  $"desc='{description?.Length ?? 0} chars', thumb='{thumbnailUrl ?? "null"}', " +
+                  $"views={viewCount?.ToString() ?? "null"}, date='{releaseDate ?? null}'");
         Log.Debug($"[PlaylistSync] WEB_REMIX: fetched {tracks.Count} tracks for {playlistId}");
 
         return new FullPlaylistSyncData
@@ -210,6 +228,8 @@ internal sealed class PlaylistSyncController(HttpClient http)
             Title = title,
             Description = description,
             ThumbnailUrl = thumbnailUrl,
+            ViewCount = viewCount,
+            ReleaseDate = releaseDate, // Заменено на ReleaseDate
             Tracks = tracks
         };
     }
@@ -217,6 +237,216 @@ internal sealed class PlaylistSyncController(HttpClient http)
     #endregion
 
     #region Header Parsers
+
+    /// <summary>
+    /// Извлекает количество просмотров плейлиста.
+    /// Источник: <c>musicResponsiveHeaderRenderer.secondSubtitle.runs[0].text</c>.
+    /// Парсит локализованные строки вида «1,234,567 просмотров», «5K views».
+    /// </summary>
+    private static long? ParsePlaylistViewCount(JsonElement root)
+    {
+        var headerRenderer = ResolveMusicResponsiveHeader(root);
+        if (headerRenderer is null) return null;
+
+        var text = headerRenderer.Value
+            .GetPropertyOrNull("secondSubtitle")
+            ?.GetPropertyOrNull("runs")
+            ?.GetFirstArrayElementOrNull()
+            ?.GetPropertyOrNull("text")
+            ?.GetStringOrNull();
+
+        return ParseLongFromText(text);
+    }
+
+    /// <summary>
+    /// Извлекает и парсит дату обновления плейлиста из <c>musicResponsiveHeaderRenderer.subtitle.runs</c>.
+    /// </summary>
+    private static DateOnly? ParsePlaylistReleaseDate(JsonElement root)
+    {
+        var headerRenderer = ResolveMusicResponsiveHeader(root);
+        if (headerRenderer is null) return null;
+
+        var runs = headerRenderer.Value
+            .GetPropertyOrNull("subtitle")
+            ?.GetPropertyOrNull("runs");
+
+        if (runs?.ValueKind != JsonValueKind.Array)
+            return null;
+
+        int len = runs.Value.GetArrayLength();
+
+        // Прямой путь: runs[4] обычно хранит дату/год в YouTube Music
+        if (len > 4)
+        {
+            var text = runs.Value[4].GetPropertyOrNull("text")?.GetStringOrNull();
+            var parsed = TryParseDateText(text);
+            if (parsed.HasValue) return parsed;
+        }
+
+        // Fallback: сканируем все runs справа налево в поисках даты
+        for (int i = len - 1; i >= 0; i--)
+        {
+            var text = runs.Value[i].GetPropertyOrNull("text")?.GetStringOrNull();
+            if (text != null && (ParseYearFromText(text).HasValue || IsRelativeDate(text)))
+            {
+                var parsed = TryParseDateText(text);
+                if (parsed.HasValue) return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Парсит строку даты из YouTube Music (обычно год «2024» или полная дата).
+    /// </summary>
+    private static DateOnly? TryParseDateText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
+        var clean = text.Trim();
+
+        // Строгий парсинг
+        if (DateOnly.TryParseExact(clean, DateFormats, RuCulture, DateTimeStyles.AllowWhiteSpaces, out var dateRu))
+            return dateRu;
+        if (DateOnly.TryParseExact(clean, DateFormats, EnCulture, DateTimeStyles.AllowWhiteSpaces, out var dateEn))
+            return dateEn;
+
+        // Гибкий парсинг
+        if (DateOnly.TryParse(clean, RuCulture, DateTimeStyles.AllowWhiteSpaces, out var flexRu))
+            return flexRu;
+        if (DateOnly.TryParse(clean, EnCulture, DateTimeStyles.AllowWhiteSpaces, out var flexEn))
+            return flexEn;
+
+        // Относительные даты
+        if (IsRelativeDate(clean))
+        {
+            var now = DateTime.UtcNow;
+
+            if (clean.Contains("сегодня", StringComparison.OrdinalIgnoreCase) ||
+                clean.Contains("today", StringComparison.OrdinalIgnoreCase))
+                return DateOnly.FromDateTime(now);
+
+            if (clean.Contains("вчера", StringComparison.OrdinalIgnoreCase) ||
+                clean.Contains("yesterday", StringComparison.OrdinalIgnoreCase))
+                return DateOnly.FromDateTime(now.AddDays(-1));
+
+            var val = ParseLongFromText(clean);
+            if (val.HasValue)
+            {
+                int delta = (int)val.Value;
+                if (clean.Contains("недел", StringComparison.OrdinalIgnoreCase) ||
+                    clean.Contains("week", StringComparison.OrdinalIgnoreCase))
+                    return DateOnly.FromDateTime(now.AddDays(-delta * 7));
+                if (clean.Contains("месяц", StringComparison.OrdinalIgnoreCase) ||
+                    clean.Contains("month", StringComparison.OrdinalIgnoreCase))
+                    return DateOnly.FromDateTime(now.AddMonths(-delta));
+                if (clean.Contains("час", StringComparison.OrdinalIgnoreCase) ||
+                    clean.Contains("hour", StringComparison.OrdinalIgnoreCase) ||
+                    clean.Contains("минут", StringComparison.OrdinalIgnoreCase) ||
+                    clean.Contains("minute", StringComparison.OrdinalIgnoreCase))
+                    return DateOnly.FromDateTime(now);
+
+                return DateOnly.FromDateTime(now.AddDays(-delta));
+            }
+        }
+
+        // Год
+        var year = ParseYearFromText(clean);
+        if (year.HasValue)
+            return new DateOnly(year.Value, 1, 1);
+
+        return null;
+    }
+
+    /// <summary>
+    /// Находит <c>musicResponsiveHeaderRenderer</c> в browse-ответе.
+    /// Поддерживает оба варианта: editable header (свои плейлисты)
+    /// и обычный header (чужие плейлисты).
+    /// </summary>
+    private static JsonElement? ResolveMusicResponsiveHeader(JsonElement root)
+    {
+        var header = root.GetPropertyOrNull("header");
+        if (header is null) return null;
+
+        // Path 1: musicEditablePlaylistDetailHeaderRenderer.header.musicResponsiveHeaderRenderer
+        var editable = header.Value
+            .GetPropertyOrNull("musicEditablePlaylistDetailHeaderRenderer")
+            ?.GetPropertyOrNull("header")
+            ?.GetPropertyOrNull("musicResponsiveHeaderRenderer");
+
+        if (editable is not null) return editable;
+
+        // Path 2: musicResponsiveHeaderRenderer напрямую
+        var direct = header.Value.GetPropertyOrNull("musicResponsiveHeaderRenderer");
+        if (direct is not null) return direct;
+
+        // Path 3: descendant search
+        return header.Value.FindFirstDescendantProperty("musicResponsiveHeaderRenderer");
+    }
+
+    /// <summary>
+    /// Парсит число из локализованной строки. Игнорирует разделители
+    /// тысяч (запятая, точка, NBSP) и нечисловой суффикс.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long? ParseLongFromText(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+
+        long result = 0;
+        bool foundDigit = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (char.IsAsciiDigit(c))
+            {
+                result = result * 10 + (c - '0');
+                foundDigit = true;
+            }
+            else if (foundDigit && c != ',' && c != '.' && c != ' ' && c != '\u00A0')
+            {
+                break;
+            }
+        }
+
+        return foundDigit ? result : null;
+    }
+
+    /// <summary>
+    /// Парсит 4-значный год (1900..2100) из произвольной строки.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int? ParseYearFromText(string? text)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length < 4) return null;
+
+        for (int i = 0; i <= text.Length - 4; i++)
+        {
+            if (char.IsAsciiDigit(text[i])
+                && char.IsAsciiDigit(text[i + 1])
+                && char.IsAsciiDigit(text[i + 2])
+                && char.IsAsciiDigit(text[i + 3]))
+            {
+                // Граница: убедиться, что это ровно 4 цифры (не часть большего числа)
+                bool leftOk = i == 0 || !char.IsAsciiDigit(text[i - 1]);
+                bool rightOk = i + 4 == text.Length || !char.IsAsciiDigit(text[i + 4]);
+
+                if (leftOk && rightOk)
+                {
+                    int year = (text[i] - '0') * 1000
+                             + (text[i + 1] - '0') * 100
+                             + (text[i + 2] - '0') * 10
+                             + (text[i + 3] - '0');
+                    if (year >= 1900 && year <= 2100)
+                        return year;
+                }
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Извлекает строковое значение из нескольких форм представления YouTube JSON:
@@ -801,6 +1031,33 @@ internal sealed class PlaylistSyncController(HttpClient http)
             ?.GetStringOrNull();
 
         return new RemotePlaylistInfo(contentId, title, trackCount, thumbUrl);
+    }
+
+    /// <summary>
+    /// Проверяет, является ли строка относительным форматом указания времени.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsRelativeDate(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+
+        var span = text.AsSpan();
+        return span.Contains("сегодня".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("today".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("вчера".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("yesterday".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("назад".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("ago".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("час".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("hour".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("минут".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("minute".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("день".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("day".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("недел".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("week".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("месяц".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || span.Contains("month".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ExtractWebContinuationToken(JsonElement root)

@@ -12,7 +12,7 @@ public static class DatabaseExtensions
     /// Константный номер текущей версии структуры базы данных LMP.
     /// При его изменении старая схема будет пересоздана в чистое состояние с предварительным бэкапом.
     /// </summary>
-    public const int CurrentDbVersion = 2;
+    public const int CurrentDbVersion = 3;
 
     /// <summary>
     /// Извлекает текущую версию схемы базы данных с использованием PRAGMA user_version.
@@ -72,6 +72,7 @@ public static class DatabaseExtensions
     /// </summary>
     public static async Task MigrateSchemaAsync(this LibraryDbContext context, CancellationToken ct = default)
     {
+        // V1 → V2 migrations (existing)
         await AddColumnIfNotExistsAsync(context, "Playlists", "OwnerId", "TEXT NOT NULL DEFAULT ''", ct);
         await AddColumnIfNotExistsAsync(context, "RecentlyPlayed", "OwnerId", "TEXT NOT NULL DEFAULT ''", ct);
 
@@ -82,6 +83,64 @@ public static class DatabaseExtensions
 
         await EnsureLikedTracksTableAsync(context, ct);
         await MigrateLegacyLikesAsync(context, ct);
+
+        // V2 → V3: Playlist ownership, visibility, cloud state
+        await AddColumnIfNotExistsAsync(context, "Playlists", "OwnerChannelId", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(context, "Playlists", "Ownership", "INTEGER NOT NULL DEFAULT 0", ct);
+        await AddColumnIfNotExistsAsync(context, "Playlists", "Visibility", "INTEGER NOT NULL DEFAULT 0", ct);
+        await AddColumnIfNotExistsAsync(context, "Playlists", "CloudTrackCount", "INTEGER", ct);
+        await AddColumnIfNotExistsAsync(context, "Playlists", "LastSyncedAtUtc", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(context, "Playlists", "IsCloudUnavailable", "INTEGER NOT NULL DEFAULT 0", ct);
+        await AddColumnIfNotExistsAsync(context, "Playlists", "ViewCount", "INTEGER", ct);
+        await AddColumnIfNotExistsAsync(context, "Playlists", "ReleaseDate", "TEXT", ct);
+
+        await context.Database.ExecuteSqlRawAsync(
+            "UPDATE Playlists SET ReleaseDate = NULL WHERE ReleaseDate IS NOT NULL AND ReleaseDate NOT GLOB '????-??-??'",
+        ct).ConfigureAwait(false);
+
+        await MigrateCloudPublicOwnershipAsync(context, ct);
+    }
+
+    /// <summary>
+    /// Мигрирует существующие CloudPublic плейлисты: устанавливает
+    /// <see cref="PlaylistOwnership.Foreign"/> и <see cref="PlaylistVisibility.Public"/>.
+    /// Идемпотентна: обновляет только записи с <c>Ownership = 0</c> (Unknown).
+    /// </summary>
+    private static async Task MigrateCloudPublicOwnershipAsync(
+        LibraryDbContext context, CancellationToken ct)
+    {
+        try
+        {
+            var connection = context.Database.GetDbConnection();
+            bool closeOnExit = false;
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                await connection.OpenAsync(ct);
+                closeOnExit = true;
+            }
+
+            try
+            {
+                using var cmd = connection.CreateCommand();
+                // SyncMode=2 (CloudPublic) → Ownership=2 (Foreign), Visibility=3 (Public)
+                // Условие Ownership=0 гарантирует идемпотентность
+                cmd.CommandText =
+                    "UPDATE Playlists SET Ownership = 2, Visibility = 3 WHERE SyncMode = 2 AND Ownership = 0";
+
+                int affected = await cmd.ExecuteNonQueryAsync(ct);
+                if (affected > 0)
+                    Log.Info($"[DB] Migrated {affected} CloudPublic playlist(s) → Foreign + Public");
+            }
+            finally
+            {
+                if (closeOnExit && connection.State == System.Data.ConnectionState.Open)
+                    await connection.CloseAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[DB] CloudPublic ownership migration warning: {ex.Message}");
+        }
     }
 
     /// <summary>

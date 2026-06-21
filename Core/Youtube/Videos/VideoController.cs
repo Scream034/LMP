@@ -155,8 +155,8 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
         }
 
         var playerUrl = clientName == "WEB_REMIX"
-            ? "https://music.youtube.com/youtubei/v1/player"
-            : "https://www.youtube.com/youtubei/v1/player";
+            ? "https://music.youtube.com/youtubei/v1/player?prettyPrint=false"
+            : "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, playerUrl);
         request.Headers.Add("User-Agent", YoutubeClientUtils.GetUserAgentForClient(clientName));

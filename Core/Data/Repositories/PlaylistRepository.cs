@@ -32,6 +32,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
                 Id = LibraryService.LikedPlaylistId,
                 StoredName = "Liked",
                 SyncMode = PlaylistSyncMode.LocalOnly,
+                Ownership = PlaylistOwnership.System,
                 TrackIds = trackIds,
                 TrackCount = trackIds.Count,
                 OwnerId = ownerId
@@ -62,7 +63,8 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
     }
 
     /// <inheritdoc />
-    public async Task<List<(Playlist Playlist, int TrackCount)>> GetAllWithCountsAsync(string ownerId, CancellationToken ct = default)
+    public async Task<List<(Playlist Playlist, int TrackCount)>> GetAllWithCountsAsync(
+        string ownerId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
@@ -82,13 +84,16 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         var list = new List<(Playlist Playlist, int TrackCount)>(playlistsWithCounts.Count + 1);
 
         var likedTrackCount = await ctx.LikedTracks
-            .CountAsync(lt => IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId, ct).ConfigureAwait(false);
+            .CountAsync(lt => IsGuest(ownerId)
+                ? (lt.OwnerId == "" || lt.OwnerId == "guest")
+                : lt.OwnerId == ownerId, ct).ConfigureAwait(false);
 
         var likedPlaylist = new Playlist
         {
             Id = LibraryService.LikedPlaylistId,
             StoredName = "Liked",
             SyncMode = PlaylistSyncMode.LocalOnly,
+            Ownership = PlaylistOwnership.System,
             TrackCount = likedTrackCount,
             OwnerId = ownerId
         };
@@ -187,7 +192,8 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
 
         await using var ctx = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        var existing = await ctx.Playlists.FirstOrDefaultAsync(p => p.Id == playlist.Id, ct).ConfigureAwait(false);
+        var existing = await ctx.Playlists
+            .FirstOrDefaultAsync(p => p.Id == playlist.Id, ct).ConfigureAwait(false);
 
         if (existing != null)
         {
@@ -202,7 +208,15 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             existing.ComputedColor = playlist.ComputedColor;
             existing.Description = playlist.Description;
             existing.SyncMode = (int)playlist.SyncMode;
+            existing.ViewCount = playlist.ViewCount;
+            existing.ReleaseDate = playlist.ReleaseDate;
             existing.OwnerId = playlist.OwnerId;
+            existing.OwnerChannelId = playlist.OwnerChannelId;
+            existing.Ownership = (int)playlist.Ownership;
+            existing.Visibility = (int)playlist.Visibility;
+            existing.CloudTrackCount = playlist.CloudTrackCount;
+            existing.LastSyncedAtUtc = playlist.LastSyncedAtUtc;
+            existing.IsCloudUnavailable = playlist.IsCloudUnavailable;
             existing.UpdatedAt = DateTime.UtcNow;
 
             ctx.Playlists.Update(existing);
@@ -635,7 +649,15 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         ComputedColor = e.ComputedColor,
         Description = e.Description,
         SyncMode = (PlaylistSyncMode)e.SyncMode,
+        ViewCount = e.ViewCount,
+        ReleaseDate = e.ReleaseDate,
         OwnerId = e.OwnerId,
+        OwnerChannelId = e.OwnerChannelId,
+        Ownership = (PlaylistOwnership)e.Ownership,
+        Visibility = (PlaylistVisibility)e.Visibility,
+        CloudTrackCount = e.CloudTrackCount,
+        LastSyncedAtUtc = e.LastSyncedAtUtc,
+        IsCloudUnavailable = e.IsCloudUnavailable,
         UpdatedAt = e.UpdatedAt
     };
 
@@ -650,7 +672,15 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         ComputedColor = m.ComputedColor,
         Description = m.Description,
         SyncMode = (int)m.SyncMode,
+        ViewCount = m.ViewCount,
+        ReleaseDate = m.ReleaseDate,
         OwnerId = m.OwnerId,
+        OwnerChannelId = m.OwnerChannelId,
+        Ownership = (int)m.Ownership,
+        Visibility = (int)m.Visibility,
+        CloudTrackCount = m.CloudTrackCount,
+        LastSyncedAtUtc = m.LastSyncedAtUtc,
+        IsCloudUnavailable = m.IsCloudUnavailable,
         UpdatedAt = DateTime.UtcNow
     };
 

@@ -254,10 +254,18 @@ public class MusicLibraryManager : ReactiveObject
     }
 
     public async Task AddTrackToPlaylistAsync(
-        string playlistId, TrackInfo track, CancellationToken ct = default)
+    string playlistId, TrackInfo track, CancellationToken ct = default)
     {
         var playlist = await _library.GetPlaylistAsync(playlistId, ct);
         if (playlist == null) return;
+
+        // Mutation guard
+        if (!playlist.CanEditTracks)
+        {
+            Log.Warn($"[Manager] Cannot add track to read-only playlist '{playlistId}' " +
+                     $"(Ownership={playlist.Ownership})");
+            return;
+        }
 
         await _library.AddOrUpdateTrackAsync(track, ct);
 
@@ -265,7 +273,6 @@ public class MusicLibraryManager : ReactiveObject
         if (!alreadyInPlaylist)
             await _library.AddTrackToPlaylistAsync(track, playlistId, ct);
 
-        // Синхронизируем с YouTube
         if (playlist.SyncMode == PlaylistSyncMode.TwoWaySync
             && !string.IsNullOrEmpty(playlist.YoutubeId)
             && _auth.IsAuthenticated)
@@ -273,11 +280,8 @@ public class MusicLibraryManager : ReactiveObject
             try
             {
                 var setVideoId = await _youtube.AddToPlaylistAsync(playlist.YoutubeId, track.Id);
-
                 if (!string.IsNullOrEmpty(setVideoId))
-                {
                     await _library.UpdateSetVideoIdAsync(playlistId, track.Id, setVideoId, ct);
-                }
             }
             catch (Exception ex)
             {
@@ -291,9 +295,17 @@ public class MusicLibraryManager : ReactiveObject
     {
         var playlist = await _library.GetPlaylistAsync(playlistId, ct);
 
+        // Mutation guard
+        if (playlist is { CanEditTracks: false })
+        {
+            Log.Warn($"[Manager] Cannot remove track from read-only playlist '{playlistId}' " +
+                     $"(Ownership={playlist.Ownership})");
+            return;
+        }
+
         string? setVideoId = null;
         bool needsYoutubeSync = playlist != null
-            && playlist.SyncMode == PlaylistSyncMode.TwoWaySync
+            && playlist.CanSyncToCloud
             && !string.IsNullOrEmpty(playlist.YoutubeId)
             && _auth.IsAuthenticated;
 

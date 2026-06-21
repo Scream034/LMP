@@ -14,7 +14,7 @@ internal class PlaylistController(HttpClient http)
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "https://www.youtube.com/youtubei/v1/browse"
+            "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
         );
 
         string browseId = playlistId.Value;
@@ -71,7 +71,7 @@ internal class PlaylistController(HttpClient http)
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "https://www.youtube.com/youtubei/v1/browse"
+            "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
         );
 
         var hl = YoutubeHttpHandler.GetHl();
@@ -124,7 +124,7 @@ internal class PlaylistController(HttpClient http)
         {
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
-                "https://www.youtube.com/youtubei/v1/next"
+                "https://www.youtube.com/youtubei/v1/next?prettyPrint=false"
             );
 
             if (!string.IsNullOrEmpty(visitorData))

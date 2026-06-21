@@ -7,114 +7,350 @@
     x:DataType="vm:LibraryViewModel"
     x:Name="LibraryRoot">
 
-    <Grid RowDefinitions="Auto, Auto, *">
+    <UserControl.Styles>
 
-        <!-- Row 0: Stats + Actions -->
-        <Grid Grid.Row="0" ColumnDefinitions="*, Auto" Margin="24,20,24,4">
+        <!-- ========================================== -->
+        <!--             HEADER STRIP STYLES            -->
+        <!-- ========================================== -->
 
-            <!-- Stats -->
-            <Border IsVisible="{Binding !IsSyncing}"
-                Opacity="{Binding IsStatsVisible, Converter={StaticResource BoolToOpacity}}">
-                <Border.Transitions>
-                    <Transitions>
-                        <DoubleTransition Property="Opacity" Duration="0:0:0.4"
-                            Easing="CubicEaseOut" />
-                    </Transitions>
-                </Border.Transitions>
-                <StackPanel Spacing="6" VerticalAlignment="Center">
-                    <StackPanel Orientation="Horizontal" Spacing="20">
-                        <StackPanel Orientation="Horizontal" Spacing="6"
-                            ToolTip.Tip="{Binding L[Library_Tip_PlaylistCount], FallbackValue=''}">
+        <!-- Тонкая линия разделения шапки без внутренних отступов и заливок -->
+        <Style Selector="Border.header-strip">
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+
+        <!-- Интерактивная ячейка статистики (имитирует вкладку с нижним подчеркиванием) -->
+        <Style Selector="Border.stat-block">
+            <Setter Property="Padding" Value="16,12" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <!-- Специализированный прозрачный акцентный цвет для чистой анимации без мерцания -->
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentTransparentBrush}" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- Подсветка нижней границы ячейки при наведении -->
+        <Style Selector="Border.stat-block:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Border.stat-block:pointerover PathIcon">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Border.stat-block:pointerover TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Border.stat-block PathIcon">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <Style Selector="Border.stat-block TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- Кнопки действий в правой части шапки (всегда полностью прозрачный фон) -->
+        <Style Selector="Button.header-action-btn">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Width" Value="34" />
+            <Setter Property="Height" Value="34" />
+        </Style>
+
+        <!-- Блокировка фонового изменения кнопок действий при ховере/клике -->
+        <Style Selector="Button.header-action-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+
+        <Style Selector="Button.header-action-btn:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+
+        <Style Selector="Button.header-action-btn PathIcon">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Width" Value="18" />
+            <Setter Property="Height" Value="18" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <Style Selector="Button.header-action-btn:pointerover PathIcon">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- ========================================== -->
+        <!--            PLAYLIST CARD STYLES            -->
+        <!-- ========================================== -->
+
+        <!-- Карточка-кнопка плейлиста (размер оптимизирован до 220px для 6 колонок на FHD) -->
+        <Style Selector="Button.playlist-card-inner">
+            <Setter Property="Width" Value="220" />
+            <Setter Property="Height" Value="320" /> <!-- Идеальное распределение пропорций для обложек 1:1 -->
+            <Setter Property="Margin" Value="10" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="ClipToBounds" Value="True" />
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <Style Selector="Button.playlist-card-inner.visible">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <!-- Полный запрет на фоновое окрашивание карточки при любых состояниях наведения/клика -->
+        <Style Selector="Button.playlist-card-inner:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.playlist-card-inner.is-active /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.playlist-card-inner.menu-open /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Button.playlist-card-inner:pointerover,
+                         Button.playlist-card-inner.is-active,
+                         Button.playlist-card-inner.menu-open">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- Информационный разделитель внутри карточки -->
+        <Style Selector="Border.card-info">
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+            <Setter Property="BorderThickness" Value="0,1,0,0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- Окрашивание разделительной линии во всех трех активных состояниях -->
+        <Style Selector="Button.playlist-card-inner:pointerover Border.card-info,
+                         Button.playlist-card-inner.is-active Border.card-info,
+                         Button.playlist-card-inner.menu-open Border.card-info">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- Тексты карточки -->
+        <Style Selector="TextBlock.card-title">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- Подсветка текста заголовка во всех трех активных состояниях -->
+        <Style Selector="Button.playlist-card-inner:pointerover TextBlock.card-title,
+                         Button.playlist-card-inner.is-active TextBlock.card-title,
+                         Button.playlist-card-inner.menu-open TextBlock.card-title">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Button.playlist-card-inner.is-liked TextBlock.card-title">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- ========================================== -->
+        <!--             REALISTIC SKELETON             -->
+        <!-- ========================================== -->
+
+        <!-- Правдивое повторение геометрии и границ реальных карточек при загрузке (220x320px) -->
+        <Style Selector="Border.playlist-skeleton">
+            <Setter Property="Width" Value="220" />
+            <Setter Property="Height" Value="320" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="ClipToBounds" Value="True" />
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+
+    </UserControl.Styles>
+
+    <Grid RowDefinitions="Auto,Auto,*">
+
+        <!-- 
+             ROW 0: HEADER STRIP (Прозрачный контейнер, нулевой Padding)
+             -->
+        <Border Grid.Row="0"
+            Classes="header-strip">
+            <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Stretch">
+
+                <!-- LEFT: Блоки статистики с однородным цветом текста/иконок -->
+                <StackPanel Grid.Column="0"
+                    Orientation="Horizontal"
+                    Spacing="0"
+                    VerticalAlignment="Stretch"
+                    IsVisible="{Binding !IsSyncing}"
+                    Opacity="{Binding IsStatsVisible, Converter={StaticResource BoolToOpacity}}">
+                    <StackPanel.Transitions>
+                        <Transitions>
+                            <DoubleTransition Property="Opacity"
+                                Duration="0:0:0.4"
+                                Easing="CubicEaseOut" />
+                        </Transitions>
+                    </StackPanel.Transitions>
+
+                    <Border Classes="stat-block"
+                        ToolTip.Tip="{Binding L[Library_Tip_PlaylistCount], FallbackValue=''}">
+                        <!-- Hit-testing отключен на внутреннем контенте для оптимизации производительности -->
+                        <StackPanel Orientation="Horizontal"
+                            Spacing="8"
+                            VerticalAlignment="Center"
+                            IsHitTestVisible="False">
                             <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
-                                Width="16" Height="16"
-                                Foreground="{DynamicResource AccentBrush}" />
+                                Width="16"
+                                Height="16" />
                             <TextBlock Text="{Binding PlaylistCountText}"
-                                FontSize="13" FontWeight="SemiBold"
-                                Foreground="{DynamicResource TextPrimaryBrush}" />
+                                FontSize="13"
+                                FontWeight="SemiBold" />
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Spacing="6"
-                            ToolTip.Tip="{Binding L[Library_Tip_TrackCount], FallbackValue=''}">
+                    </Border>
+
+                    <Border Classes="stat-block"
+                        ToolTip.Tip="{Binding L[Library_Tip_TrackCount], FallbackValue=''}">
+                        <StackPanel Orientation="Horizontal"
+                            Spacing="8"
+                            VerticalAlignment="Center"
+                            IsHitTestVisible="False">
                             <PathIcon Data="{StaticResource Icon.MusicNote}"
-                                Width="16" Height="16"
-                                Foreground="{DynamicResource TextMutedBrush}" />
+                                Width="16"
+                                Height="16" />
                             <TextBlock Text="{Binding TotalTracksText}"
                                 FontSize="13"
-                                Foreground="{DynamicResource TextSecondaryBrush}" />
+                                FontWeight="SemiBold" />
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Spacing="6"
-                            ToolTip.Tip="{Binding L[Library_Tip_TotalDuration], FallbackValue=''}">
+                    </Border>
+
+                    <Border Classes="stat-block"
+                        ToolTip.Tip="{Binding L[Library_Tip_TotalDuration], FallbackValue=''}">
+                        <StackPanel Orientation="Horizontal"
+                            Spacing="8"
+                            VerticalAlignment="Center"
+                            IsHitTestVisible="False">
                             <PathIcon Data="{StaticResource Icon.ClockOutline}"
-                                Width="16" Height="16"
-                                Foreground="{DynamicResource TextMutedBrush}" />
+                                Width="16"
+                                Height="16" />
                             <TextBlock Text="{Binding TotalDurationText}"
-                                FontSize="13"
-                                Foreground="{DynamicResource TextSecondaryBrush}" />
+                                FontSize="13" />
                         </StackPanel>
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="20">
+                    </Border>
+
+                    <Border Classes="stat-block"
+                        IsVisible="{Binding AvgTrackDurationText,
+                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                        ToolTip.Tip="{Binding L[Library_Tip_AvgTrack], FallbackValue=''}">
                         <TextBlock Text="{Binding AvgTrackDurationText}"
-                            FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
-                            ToolTip.Tip="{Binding L[Library_Tip_AvgTrack], FallbackValue=''}" />
+                            FontSize="12"
+                            VerticalAlignment="Center"
+                            IsHitTestVisible="False" />
+                    </Border>
+
+                    <Border Classes="stat-block"
+                        IsVisible="{Binding AvgPlaylistDurationText,
+                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                        ToolTip.Tip="{Binding L[Library_Tip_AvgPlaylist], FallbackValue=''}">
                         <TextBlock Text="{Binding AvgPlaylistDurationText}"
-                            FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
-                            ToolTip.Tip="{Binding L[Library_Tip_AvgPlaylist], FallbackValue=''}" />
-                    </StackPanel>
+                            FontSize="12"
+                            VerticalAlignment="Center"
+                            IsHitTestVisible="False" />
+                    </Border>
                 </StackPanel>
-            </Border>
 
-            <!-- Sync status text -->
-            <TextBlock Text="{Binding SyncStatus}"
-                FontSize="12" Foreground="{DynamicResource TextMutedBrush}"
-                IsVisible="{Binding IsSyncing}" VerticalAlignment="Center" />
+                <!-- CENTER: Анимированная синхронизация со статус-баром -->
+                <StackPanel Grid.Column="1"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    IsVisible="{Binding IsSyncing}">
+                    <PathIcon Data="{StaticResource Icon.Sync}"
+                        Classes="spinning"
+                        Width="14"
+                        Height="14"
+                        Foreground="{DynamicResource AccentBrush}"
+                        VerticalAlignment="Center"
+                        IsHitTestVisible="False" />
+                    <TextBlock Text="{Binding SyncStatus}"
+                        FontSize="12"
+                        Foreground="{DynamicResource TextMutedBrush}"
+                        VerticalAlignment="Center"
+                        IsHitTestVisible="False" />
+                </StackPanel>
 
-            <!-- Actions -->
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
-                VerticalAlignment="Center">
-                <Button Command="{Binding SyncAccountPlaylistsCommand}"
-                    Classes="icon-btn"
-                    ToolTip.Tip="{Binding L[Library_SyncYoutube], FallbackValue=''}"
-                    Width="36" Height="36">
-                    <Panel Width="22" Height="22">
-                        <!-- Idle: CloudSync -->
-                        <PathIcon Data="{StaticResource Icon.CloudSync}"
-                            Width="22" Height="22"
-                            IsVisible="{Binding !IsSyncing}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        <!-- Syncing: пульсирующий Cloud -->
-                        <Panel IsVisible="{Binding IsSyncing}" Width="22" Height="22">
-                            <Panel>
-                                <Border Width="22" Height="22" CornerRadius="11"
-                                    Background="{DynamicResource AccentBrush}" />
-                                <PathIcon Data="{StaticResource Icon.Cloud}"
-                                    Width="14" Height="14"
-                                    Foreground="{DynamicResource TextDarkBrush}"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Panel>
-                            <Panel Classes="cloud-crossfade-overlay">
-                                <Border Width="22" Height="22" CornerRadius="11"
-                                    Background="{DynamicResource BgSecondaryBrush}" />
-                                <PathIcon Data="{StaticResource Icon.Cloud}"
-                                    Width="14" Height="14"
-                                    Foreground="{DynamicResource AccentBrush}"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Panel>
+                <!-- RIGHT: Действия (Полностью прозрачные кнопки управления) -->
+                <StackPanel Grid.Column="2"
+                    Orientation="Horizontal"
+                    Spacing="6"
+                    VerticalAlignment="Center"
+                    Margin="0,0,12,0">
+
+                    <Button Command="{Binding SyncAccountPlaylistsCommand}"
+                        Classes="header-action-btn"
+                        ToolTip.Tip="{Binding L[Library_SyncYoutube], FallbackValue=''}">
+                        <Panel Width="20" Height="20" IsHitTestVisible="False">
+                            <PathIcon Data="{StaticResource Icon.CloudSync}" IsVisible="{Binding !IsSyncing}" />
+                            <PathIcon Data="{StaticResource Icon.Cloud}" Foreground="{DynamicResource AccentBrush}" IsVisible="{Binding IsSyncing}" />
                         </Panel>
-                    </Panel>
-                </Button>
+                    </Button>
 
-                <Button Command="{Binding OpenCreateCommand}"
-                    Classes="icon-btn"
-                    ToolTip.Tip="{Binding L[Library_CreatePlaylist], FallbackValue=''}"
-                    IsEnabled="{Binding !IsSyncing}">
-                    <PathIcon Data="{StaticResource Icon.Plus}" Width="20" Height="20" />
-                </Button>
-            </StackPanel>
-        </Grid>
+                    <Button Command="{Binding OpenCreateCommand}"
+                        Classes="header-action-btn"
+                        IsEnabled="{Binding !IsSyncing}"
+                        ToolTip.Tip="{Binding L[Library_CreatePlaylist], FallbackValue=''}">
+                        <PathIcon Data="{StaticResource Icon.Plus}" IsHitTestVisible="False" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
 
-        <!-- Row 1: Sync Progress -->
-        <Grid Grid.Row="1" Height="3" Margin="24,0" IsVisible="{Binding IsSyncing}">
-            <Border Background="{DynamicResource BgHighlightBrush}" CornerRadius="1.5" />
-            <Border Background="{DynamicResource AccentBrush}" CornerRadius="1.5"
+        <!-- 
+             ROW 1: SYNC PROGRESS (Ровная горизонтальная линия от края до края)
+             -->
+        <Grid Grid.Row="1"
+            Height="2"
+            Margin="0"
+            IsHitTestVisible="False"
+            IsVisible="{Binding IsSyncing}">
+            <Border Background="{DynamicResource BgHighlightBrush}" />
+            <Border Background="{DynamicResource AccentBrush}"
                 HorizontalAlignment="Left">
                 <Border.Width>
                     <MultiBinding>
@@ -127,219 +363,329 @@
                 </Border.Width>
                 <Border.Transitions>
                     <Transitions>
-                        <DoubleTransition Property="Width" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                        <DoubleTransition Property="Width"
+                            Duration="0:0:0.2"
+                            Easing="CubicEaseOut" />
                     </Transitions>
                 </Border.Transitions>
             </Border>
         </Grid>
 
-        <!-- Row 2: Content -->
-        <Panel Grid.Row="2" Margin="0,8,0,0">
+        <!-- 
+             ROW 2: CONTENT
+             -->
+        <Grid Grid.Row="2"
+            Margin="0,8,0,0">
 
-            <!-- Skeleton -->
-            <ScrollViewer>
+            <!-- TRUTHFUL SKELETON (Со скруглением картинок, пропорции 220x220, хит-тестинг отключен) -->
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled">
                 <ScrollViewer.IsVisible>
                     <MultiBinding Converter="{x:Static BoolConverters.Or}">
                         <Binding Path="!IsContentReady" />
                         <Binding Path="IsSyncing" />
                     </MultiBinding>
                 </ScrollViewer.IsVisible>
-                <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                    Margin="24,16,24,100">
-                    <Border Classes="playlist-skeleton skeleton" Margin="10" />
-                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.7" />
-                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.5" />
-                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.3" />
-                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.2" />
+
+                <WrapPanel Orientation="Horizontal"
+                    HorizontalAlignment="Center"
+                    Margin="24,4,24,100"
+                    IsHitTestVisible="False">
+                    
+                    <Border Classes="playlist-skeleton" Margin="10">
+                        <Grid RowDefinitions="220, *">
+                            <Border Grid.Row="0" Background="{DynamicResource BgSkeletonBrush}" CornerRadius="7,7,0,0" ClipToBounds="True" />
+                            <Border Grid.Row="1" Classes="card-info" Padding="12,10,12,14">
+                                <StackPanel Spacing="8" VerticalAlignment="Center">
+                                    <Border Height="12" Width="150" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                    <Border Height="10" Width="90" HorizontalAlignment="Left" CornerRadius="3" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <Border Classes="playlist-skeleton" Margin="10" Opacity="0.7">
+                        <Grid RowDefinitions="220, *">
+                            <Border Grid.Row="0" Background="{DynamicResource BgSkeletonBrush}" CornerRadius="7,7,0,0" ClipToBounds="True" />
+                            <Border Grid.Row="1" Classes="card-info" Padding="12,10,12,14">
+                                <StackPanel Spacing="8" VerticalAlignment="Center">
+                                    <Border Height="12" Width="130" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                    <Border Height="10" Width="100" HorizontalAlignment="Left" CornerRadius="3" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <Border Classes="playlist-skeleton" Margin="10" Opacity="0.5">
+                        <Grid RowDefinitions="220, *">
+                            <Border Grid.Row="0" Background="{DynamicResource BgSkeletonBrush}" CornerRadius="7,7,0,0" ClipToBounds="True" />
+                            <Border Grid.Row="1" Classes="card-info" Padding="12,10,12,14">
+                                <StackPanel Spacing="8" VerticalAlignment="Center">
+                                    <Border Height="12" Width="160" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                    <Border Height="10" Width="80" HorizontalAlignment="Left" CornerRadius="3" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <Border Classes="playlist-skeleton" Margin="10" Opacity="0.3">
+                        <Grid RowDefinitions="220, *">
+                            <Border Grid.Row="0" Background="{DynamicResource BgSkeletonBrush}" CornerRadius="7,7,0,0" ClipToBounds="True" />
+                            <Border Grid.Row="1" Classes="card-info" Padding="12,10,12,14">
+                                <StackPanel Spacing="8" VerticalAlignment="Center">
+                                    <Border Height="12" Width="120" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                    <Border Height="10" Width="95" HorizontalAlignment="Left" CornerRadius="3" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <Border Classes="playlist-skeleton" Margin="10" Opacity="0.15">
+                        <Grid RowDefinitions="220, *">
+                            <Border Grid.Row="0" Background="{DynamicResource BgSkeletonBrush}" CornerRadius="7,7,0,0" ClipToBounds="True" />
+                            <Border Grid.Row="1" Classes="card-info" Padding="12,10,12,14">
+                                <StackPanel Spacing="8" VerticalAlignment="Center">
+                                    <Border Height="12" Width="140" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                    <Border Height="10" Width="85" HorizontalAlignment="Left" CornerRadius="3" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <Border Classes="playlist-skeleton" Margin="10" Opacity="0.08">
+                        <Grid RowDefinitions="220, *">
+                            <Border Grid.Row="0" Background="{DynamicResource BgSkeletonBrush}" CornerRadius="7,7,0,0" ClipToBounds="True" />
+                            <Border Grid.Row="1" Classes="card-info" Padding="12,10,12,14">
+                                <StackPanel Spacing="8" VerticalAlignment="Center">
+                                    <Border Height="12" Width="130" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                    <Border Height="10" Width="75" HorizontalAlignment="Left" CornerRadius="3" Background="{DynamicResource BgSkeletonDeepBrush}" Classes="skeleton" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
                 </WrapPanel>
             </ScrollViewer>
 
-            <!-- Main Content -->
-            <ScrollViewer>
+            <!-- MAIN CONTENT (6 колонок в линию, обложки строго 1:1, размеры увеличены до 220px) -->
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled">
                 <ScrollViewer.IsVisible>
                     <MultiBinding Converter="{x:Static BoolConverters.And}">
                         <Binding Path="IsContentReady" />
                         <Binding Path="!IsSyncing" />
                     </MultiBinding>
                 </ScrollViewer.IsVisible>
+
                 <StackPanel Margin="24,0,24,100">
 
                     <ItemsControl ItemsSource="{Binding Playlists}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center" />
+                                <WrapPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Center" />
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
+
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:PlaylistCardViewModel">
-                                <Border Classes="playlist-card-inner"
+                                
+                                <!-- Сплющенная карточка-кнопка (ширина 220px, высота 320px) -->
+                                <Button Classes="playlist-card-inner"
                                     Classes.visible="{Binding IsVisible}"
                                     Classes.is-active="{Binding IsActive}"
-                                    Width="220" Margin="10"
-                                    Tag="{Binding DataContext, ElementName=LibraryRoot}">
+                                    Classes.is-liked="{Binding IsLikedPlaylist}"
+                                    Command="{Binding OpenCommand}">
 
-                                    <Border.ContextMenu>
+                                    <Button.ContextMenu>
                                         <ContextMenu Opened="OnPlaylistContextMenuOpened"
                                             Closed="OnPlaylistContextMenuClosed">
-                                            <MenuItem
-                                                Header="{Binding PlayMenuHeader}"
+                                            <MenuItem Header="{Binding PlayMenuHeader}"
                                                 Command="{Binding PlayCommand}">
                                                 <MenuItem.Icon>
                                                     <PathIcon Data="{Binding PlayMenuIcon}"
-                                                        Width="16" Height="16" />
+                                                        Width="16"
+                                                        Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
-                                            <MenuItem
-                                                Header="{Binding L[Playlist_Open],
-                                                    FallbackValue='Open'}"
+
+                                            <MenuItem Header="{Binding L[Playlist_Open], FallbackValue='Open'}"
                                                 Command="{Binding OpenCommand}">
                                                 <MenuItem.Icon>
-                                                    <PathIcon
-                                                        Data="{StaticResource Icon.FolderOpen}"
-                                                        Width="16" Height="16" />
+                                                    <PathIcon Data="{StaticResource Icon.FolderOpen}"
+                                                        Width="16"
+                                                        Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
-                                            <MenuItem
-                                                Header="{Binding L[EditPlaylist_Title],
-                                                    FallbackValue='Edit'}"
+
+                                            <MenuItem Header="{Binding L[EditPlaylist_Title], FallbackValue='Edit'}"
                                                 Command="{Binding EditCommand}"
                                                 IsVisible="{Binding CanEdit}">
                                                 <MenuItem.Icon>
                                                     <PathIcon Data="{StaticResource Icon.Pencil}"
-                                                        Width="16" Height="16" />
+                                                        Width="16"
+                                                        Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
-                                            <MenuItem
-                                                Header="{Binding L[Queue_AddAll],
-                                                    FallbackValue='Add to queue'}"
+
+                                            <MenuItem Header="{Binding L[Queue_AddAll], FallbackValue='Add to queue'}"
                                                 Command="{Binding AddToQueueCommand}">
                                                 <MenuItem.Icon>
-                                                    <PathIcon
-                                                        Data="{StaticResource Icon.PlaylistPlus}"
-                                                        Width="16" Height="16" />
+                                                    <PathIcon Data="{StaticResource Icon.PlaylistPlus}"
+                                                        Width="16"
+                                                        Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
-                                            <MenuItem
-                                                Header="{Binding L[Track_CopyLink],
-                                                    FallbackValue='Copy link'}"
+
+                                            <MenuItem Header="{Binding L[Track_CopyLink], FallbackValue='Copy link'}"
                                                 Command="{Binding CopyLinkCommand}">
                                                 <MenuItem.Icon>
-                                                    <PathIcon
-                                                        Data="{StaticResource Icon.LinkVariant}"
-                                                        Width="16" Height="16" />
+                                                    <PathIcon Data="{StaticResource Icon.LinkVariant}"
+                                                        Width="16"
+                                                        Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
+
                                             <Separator Classes="menu-separator" />
-                                            <MenuItem
-                                                Header="{Binding L[Button_Delete],
-                                                    FallbackValue='Delete'}"
+
+                                            <MenuItem Header="{Binding L[Button_Delete], FallbackValue='Delete'}"
                                                 Command="{Binding DeleteCommand}"
                                                 IsVisible="{Binding CanDelete}"
                                                 Classes="danger">
                                                 <MenuItem.Icon>
                                                     <PathIcon Data="{StaticResource Icon.Delete}"
-                                                        Width="16" Height="16" />
+                                                        Width="16"
+                                                        Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
                                         </ContextMenu>
-                                    </Border.ContextMenu>
+                                    </Button.ContextMenu>
 
-                                    <Grid RowDefinitions="220, Auto">
-                                        <!-- Cover -->
-                                        <Button Grid.Row="0"
-                                            Command="{Binding OpenCommand}"
-                                            Background="Transparent" BorderThickness="0"
-                                            Padding="0" Cursor="Hand"
-                                            CornerRadius="8,8,0,0" ClipToBounds="True">
-                                            <Panel Width="220" Height="220">
-                                                <Border IsVisible="{Binding IsLikedPlaylist}"
-                                                    Width="220" Height="220">
-                                                    <Border.Background>
-                                                        <LinearGradientBrush StartPoint="50%,0%"
-                                                            EndPoint="50%,100%">
-                                                            <GradientStop
-                                                                Color="{DynamicResource Accent}"
-                                                                Offset="0.0" />
-                                                            <GradientStop
-                                                                Color="{DynamicResource BgElevated}"
-                                                                Offset="1.0" />
-                                                        </LinearGradientBrush>
-                                                    </Border.Background>
-                                                    <PathIcon Data="{StaticResource Icon.Heart}"
-                                                        Width="72" Height="72"
-                                                        Foreground="{DynamicResource AccentButtonTextBrush}"
-                                                        HorizontalAlignment="Center"
-                                                        VerticalAlignment="Center"
-                                                        Opacity="0.9" />
-                                                </Border>
-                                                <Border
-                                                    Background="{DynamicResource BgSkeletonBrush}"
+                                    <Grid RowDefinitions="220,*">
+
+                                        <!-- COVER AREA (Скругление углов через Border, хит-тестинг отключен для оптимизации) -->
+                                        <Border Grid.Row="0"
+                                            CornerRadius="7,7,0,0"
+                                            ClipToBounds="True"
+                                            IsHitTestVisible="False"
+                                            Margin="0">
+                                            <Grid>
+                                                <!-- 1. Изображение -->
+                                                <Image controls:SmartImage.Source="{Binding ThumbnailUrl}"
+                                                    controls:SmartImage.Quality="High"
+                                                    Stretch="UniformToFill"
+                                                    HorizontalAlignment="Stretch"
+                                                    VerticalAlignment="Top"
+                                                    StretchDirection="DownOnly"
+                                                    IsVisible="{Binding HasThumbnail}" />
+
+                                                <!-- 2. Плейсхолдер -->
+                                                <Border Background="{DynamicResource BgSkeletonBrush}"
                                                     IsVisible="{Binding ShowPlaceholder}"
-                                                    Width="220" Height="220">
-                                                    <PathIcon
-                                                        Data="{StaticResource Icon.PlaylistMusic}"
-                                                        Width="72" Height="72"
+                                                    HorizontalAlignment="Stretch"
+                                                    VerticalAlignment="Stretch">
+                                                    <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
+                                                        Width="72"
+                                                        Height="72"
                                                         Foreground="{DynamicResource TextMutedBrush}"
                                                         HorizontalAlignment="Center"
                                                         VerticalAlignment="Center" />
                                                 </Border>
-                                                <Image
-                                                    controls:SmartImage.Source="{Binding ThumbnailUrl}"
-                                                    controls:SmartImage.Quality="High"
-                                                    Stretch="UniformToFill"
-                                                    Width="220" Height="220"
-                                                    IsVisible="{Binding HasThumbnail}" />
-                                            </Panel>
-                                        </Button>
 
-                                        <!-- Info -->
-                                        <Button Grid.Row="1"
-                                            Command="{Binding OpenCommand}"
-                                            Background="Transparent" BorderThickness="0"
-                                            Padding="14,12"
-                                            HorizontalContentAlignment="Left"
-                                            Cursor="Hand">
-                                            <StackPanel MaxWidth="192">
-                                                <TextBlock Text="{Binding Name}"
-                                                    FontWeight="SemiBold" FontSize="14"
-                                                    TextWrapping="Wrap" MaxLines="2"
-                                                    TextTrimming="CharacterEllipsis" />
-                                                <StackPanel Orientation="Horizontal" Spacing="6"
+                                                <!-- 3. Карточка любимых треков (Солидный фон, без градиента, 220x220px) -->
+                                                <Border IsVisible="{Binding IsLikedPlaylist}"
+                                                    Background="{DynamicResource BgSkeletonBrush}"
+                                                    HorizontalAlignment="Stretch"
+                                                    VerticalAlignment="Stretch">
+                                                    <PathIcon Data="{StaticResource Icon.Heart}"
+                                                        Width="64"
+                                                        Height="64"
+                                                        Foreground="{DynamicResource AccentBrush}"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center"
+                                                        Opacity="0.95" />
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+
+                                        <!-- INFO AREA (Высота 100px, нижний отступ Padding 14px обеспечивает свободу тексту) -->
+                                        <Border Grid.Row="1"
+                                            Classes="card-info"
+                                            Padding="12,10,12,14">
+                                            <StackPanel>
+                                                <TextBlock Classes="card-title"
+                                                    Text="{Binding Name}"
+                                                    FontSize="13"
+                                                    TextWrapping="NoWrap"
+                                                    TextTrimming="CharacterEllipsis"
+                                                    IsHitTestVisible="False" />
+
+                                                <!-- Элементы с ToolTip.Tip сохраняют IsHitTestVisible="True" для работы подсказок -->
+                                                <TextBlock Text="{Binding AuthorDisplayText}"
+                                                    FontSize="11"
+                                                    Foreground="{DynamicResource TextMutedBrush}"
+                                                    TextTrimming="CharacterEllipsis"
+                                                    MaxLines="1"
+                                                    IsVisible="{Binding ShowAuthor}"
+                                                    Margin="0,2,0,0"
+                                                    ToolTip.Tip="{Binding AuthorTooltip}" />
+
+                                                <StackPanel Orientation="Horizontal"
+                                                    Spacing="6"
                                                     Margin="0,4,0,0">
                                                     <TextBlock Text="{Binding FormattedTrackCount}"
-                                                        FontSize="12"
-                                                        Foreground="{DynamicResource TextMutedBrush}" />
-                                                    <PathIcon
-                                                        Data="{StaticResource Icon.CloudCheck}"
-                                                        Width="13" Height="13"
+                                                        FontSize="11"
+                                                        Foreground="{DynamicResource TextSecondaryBrush}"
+                                                        IsHitTestVisible="False" />
+
+                                                    <PathIcon Data="{StaticResource Icon.Lock}"
+                                                        Width="12"
+                                                        Height="12"
                                                         Foreground="{DynamicResource TextMutedBrush}"
-                                                        IsVisible="{Binding IsSynced}"
-                                                        ToolTip.Tip="{Binding L[Library_CloudSyncTooltip],
-                                                            FallbackValue='',
-                                                            TargetNullValue=''}" />
+                                                        IsVisible="{Binding IsPrivate}"
+                                                        ToolTip.Tip="{Binding L[Playlist_Private_Tooltip],
+                                                                                    FallbackValue='',
+                                                                                    TargetNullValue=''}" />
+
+                                                    <PathIcon Data="{StaticResource Icon.Link}"
+                                                        Width="12"
+                                                        Height="12"
+                                                        Foreground="{DynamicResource TextMutedBrush}"
+                                                        IsVisible="{Binding IsUnlisted}"
+                                                        ToolTip.Tip="{Binding L[Playlist_Unlisted_Tooltip],
+                                                                                    FallbackValue='',
+                                                                                    TargetNullValue=''}" />
+
+                                                    <PathIcon Data="{StaticResource Icon.CloudCheck}"
+                                                        Width="12"
+                                                        Height="12"
+                                                        Foreground="{DynamicResource TextMutedBrush}"
+                                                        IsVisible="{Binding HasCloudSource}"
+                                                        ToolTip.Tip="{Binding L[Playlist_Synced_Tooltip],
+                                                                                    FallbackValue='',
+                                                                                    TargetNullValue=''}" />
                                                 </StackPanel>
                                             </StackPanel>
-                                        </Button>
+                                        </Border>
                                     </Grid>
-                                </Border>
+                                </Button>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- Empty state -->
-                    <StackPanel IsVisible="{Binding !Playlists.Count}"
-                        HorizontalAlignment="Center" Margin="0,60">
+                    <StackPanel IsVisible="{Binding !HasPlaylists}"
+                        HorizontalAlignment="Center"
+                        Margin="0,60,0,0">
                         <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
-                            Width="64" Height="64"
+                            Width="64"
+                            Height="64"
                             Foreground="{DynamicResource TextMutedBrush}"
                             HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding L[Library_Empty], FallbackValue=''}"
                             FontSize="16"
                             Foreground="{DynamicResource TextSecondaryBrush}"
-                            HorizontalAlignment="Center" Margin="0,16,0,0" />
+                            HorizontalAlignment="Center"
+                            Margin="0,16,0,0" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
-        </Panel>
+        </Grid>
     </Grid>
 </UserControl>

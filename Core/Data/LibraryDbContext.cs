@@ -1,3 +1,4 @@
+using System.Globalization;
 using LMP.Core.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -55,6 +56,13 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.Property(e => e.ComputedColor).HasMaxLength(16);
             entity.Property(e => e.Description).HasMaxLength(2000);
             entity.Property(e => e.OwnerId).HasMaxLength(128).HasDefaultValue("");
+
+            // EF Core 8 хранит DateOnly как TEXT "yyyy-MM-dd" в SQLite.
+            // Явный конвертер гарантирует корректное чтение после миграции с legacy-строк.
+            entity.Property(e => e.ReleaseDate)
+                .HasConversion(
+                    v => v.HasValue ? v.Value.ToString("yyyy-MM-dd") : null,
+                    v => v != null ? DateOnly.ParseExact(v, "yyyy-MM-dd", CultureInfo.InvariantCulture) : null);
 
             entity.HasIndex(e => e.OwnerId);
         });

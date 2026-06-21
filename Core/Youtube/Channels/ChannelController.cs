@@ -62,7 +62,7 @@ internal class ChannelController(HttpClient http)
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "https://www.youtube.com/youtubei/v1/browse"
+            "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
         );
 
         string payload;

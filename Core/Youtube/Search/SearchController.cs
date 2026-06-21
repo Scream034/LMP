@@ -61,8 +61,8 @@ internal class SearchController(HttpClient http)
             : null;
 
         var url = isMusicContext
-            ? "https://music.youtube.com/youtubei/v1/search"
-            : "https://www.youtube.com/youtubei/v1/search";
+            ? "https://music.youtube.com/youtubei/v1/search?prettyPrint=false"
+            : "https://www.youtube.com/youtubei/v1/search?prettyPrint=false";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
 

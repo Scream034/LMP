@@ -67,7 +67,7 @@ internal sealed class PlaylistMutationController(HttpClient http)
         Action<Utf8JsonWriter> writeBody,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}?prettyPrint=false");
         request.Content = CreateJsonContent(writeBody);
 
         using var response = await http.SendAsync(
@@ -83,7 +83,7 @@ internal sealed class PlaylistMutationController(HttpClient http)
         Action<Utf8JsonWriter> writeBody,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}?prettyPrint=false");
         request.Content = CreateJsonContent(writeBody);
 
         using var response = await http.SendAsync(
@@ -201,7 +201,7 @@ internal sealed class PlaylistMutationController(HttpClient http)
     {
         if (videoIds.Count == 0) return [];
 
-        var root = await PostAsync("browse/edit_playlist", writer =>
+        var root = await PostAsync("browse/edit_playlist?prettyPrint=false", writer =>
         {
             writer.WriteString("playlistId", SanitizePlaylistId(playlistId));
             writer.WriteString("params", "ICE%3D");
@@ -252,7 +252,7 @@ internal sealed class PlaylistMutationController(HttpClient http)
     {
         if (setVideoIds.Count == 0) return;
 
-        var root = await PostAsync("browse/edit_playlist", writer =>
+        var root = await PostAsync("browse/edit_playlist?prettyPrint=false", writer =>
         {
             writer.WriteString("playlistId", SanitizePlaylistId(playlistId));
             writer.WriteString("params", "ICE%3D");
@@ -279,7 +279,7 @@ internal sealed class PlaylistMutationController(HttpClient http)
         string newTitle,
         CancellationToken ct = default)
     {
-        var root = await PostAsync("browse/edit_playlist", writer =>
+        var root = await PostAsync("browse/edit_playlist?prettyPrint=false", writer =>
         {
             writer.WriteString("playlistId", SanitizePlaylistId(playlistId));
             writer.WriteString("params", "ICE%3D");
@@ -303,7 +303,7 @@ internal sealed class PlaylistMutationController(HttpClient http)
         string description,
         CancellationToken ct = default)
     {
-        var root = await PostAsync("browse/edit_playlist", writer =>
+        var root = await PostAsync("browse/edit_playlist?prettyPrint=false", writer =>
         {
             writer.WriteString("playlistId", SanitizePlaylistId(playlistId));
             writer.WriteString("params", "ICE%3D");
@@ -421,7 +421,7 @@ internal sealed class PlaylistMutationController(HttpClient http)
             Log.Debug($"[Scotty] Got blobId: {blobId[..Math.Min(50, blobId.Length)]}...");
 
             // ═══ STEP 3: Apply thumbnail via edit_playlist API ═══
-            var applyRoot = await PostAsync("browse/edit_playlist", writer =>
+            var applyRoot = await PostAsync("browse/edit_playlist?prettyPrint=false", writer =>
             {
                 writer.WriteString("playlistId", SanitizePlaylistId(playlistId));
                 writer.WriteString("params", "ICE%3D");

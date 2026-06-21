@@ -1,3 +1,4 @@
+using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Music;
 
 namespace LMP.UI.Services;
@@ -31,7 +32,6 @@ public sealed class PlaylistSyncService
 {
     private readonly LibraryService _library;
     private readonly YoutubeProvider _youtube;
-    private readonly MusicLibraryManager _manager;
     private readonly CookieAuthService _auth;
     private readonly DialogService _dialog;
 
@@ -46,13 +46,11 @@ public sealed class PlaylistSyncService
     public PlaylistSyncService(
         LibraryService library,
         YoutubeProvider youtube,
-        MusicLibraryManager manager,
         CookieAuthService auth,
         DialogService dialog)
     {
         _library = library;
         _youtube = youtube;
-        _manager = manager;
         _auth = auth;
         _dialog = dialog;
     }
@@ -134,7 +132,7 @@ public sealed class PlaylistSyncService
 
     /// <summary>
     /// Строит снимок различий между локальным и облачным состоянием плейлиста.
-    /// Кэширует FullPlaylistSyncData в _cachedSyncData для переиспользования в ApplyAsync.
+    /// При недоступности облака помечает плейлист как <see cref="Playlist.IsCloudUnavailable"/>.
     /// </summary>
     private async Task<PlaylistSyncPreview?> BuildPreviewAsync(
         Playlist playlist,
@@ -153,10 +151,20 @@ public sealed class PlaylistSyncService
             var localTrackIds = await localTrackIdsTask;
 
             if (fullData == null)
+            {
+                playlist.IsCloudUnavailable = true;
+                await _library.AddOrUpdatePlaylistAsync(playlist, ct);
                 return null;
+            }
 
-            // Кэшируем для ApplyAsync
             _cachedSyncData = fullData;
+
+            // Успешный доступ — облако доступно
+            if (playlist.IsCloudUnavailable)
+            {
+                playlist.IsCloudUnavailable = false;
+                await _library.AddOrUpdatePlaylistAsync(playlist, ct);
+            }
 
             var cloudVideoIds = new HashSet<string>(fullData.Tracks.Count, StringComparer.Ordinal);
             for (int i = 0; i < fullData.Tracks.Count; i++)
@@ -199,6 +207,14 @@ public sealed class PlaylistSyncService
         catch (Exception ex)
         {
             Log.Error($"[PlaylistSync] Preview failed: {ex.Message}");
+
+            // Помечаем как недоступный при сетевых/API ошибках
+            if (ex is PlaylistUnavailableException or HttpRequestException)
+            {
+                playlist.IsCloudUnavailable = true;
+                try { await _library.AddOrUpdatePlaylistAsync(playlist, ct); } catch { }
+            }
+
             return null;
         }
     }
@@ -226,12 +242,14 @@ public sealed class PlaylistSyncService
 
     /// <summary>
     /// Применяет выбранную стратегию синхронизации.
+    /// После успешного завершения обновляет <see cref="Playlist.LastSyncedAtUtc"/>
+    /// и сбрасывает <see cref="Playlist.IsCloudUnavailable"/>.
     /// </summary>
     private async Task<PlaylistSyncResult> ApplyAsync(
-     Playlist playlist,
-     PlaylistSyncPreview preview,
-     PlaylistSyncOptions options,
-     CancellationToken ct)
+        Playlist playlist,
+        PlaylistSyncPreview preview,
+        PlaylistSyncOptions options,
+        CancellationToken ct)
     {
         try
         {
@@ -258,14 +276,25 @@ public sealed class PlaylistSyncService
                     };
             }
 
-            // Очищаем кэш после использования
+            // Захватываем кэш до его обнуления (исправление бага с пустыми датами/просмотрами при merge)
+            var cloudData = _cachedSyncData;
             _cachedSyncData = null;
 
-            if (metadataChanged || tracksAddedLocally > 0 || tracksRemovedLocally > 0)
+            // Cloud-only stats (views, date) — pull-only из YouTube
+            if (cloudData != null)
             {
-                playlist.UpdatedAt = DateTime.Now;
-                await _library.AddOrUpdatePlaylistAsync(playlist, ct);
+                if (cloudData.ViewCount.HasValue && playlist.ViewCount != cloudData.ViewCount)
+                    playlist.ViewCount = cloudData.ViewCount;
+
+                if (playlist.ReleaseDate != cloudData.ReleaseDate)
+                    playlist.ReleaseDate = cloudData.ReleaseDate;
             }
+
+            // Sync state: всегда обновляем после успешного завершения
+            playlist.LastSyncedAtUtc = DateTime.UtcNow;
+            playlist.IsCloudUnavailable = false;
+            playlist.UpdatedAt = DateTime.Now;
+            await _library.AddOrUpdatePlaylistAsync(playlist, ct);
 
             var result = new PlaylistSyncResult
             {

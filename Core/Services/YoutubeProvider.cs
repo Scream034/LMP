@@ -602,7 +602,7 @@ public partial class YoutubeProvider : IDisposable
 
         var sw = Stopwatch.StartNew();
 
-        // АВАРИЙНОЕ САМОВОССТАНОВЛЕНИЕ ПРИ 403 ═══
+        // АВАРИЙНОЕ САМОВОССТАНОВЛЕНИЕ ПРИ 403
         if (forceRefresh)
         {
             Log.Warn($"[YouTube] [{videoId}] Force refresh requested (playback 403 recovery). Resetting bypass caches...");
@@ -612,7 +612,7 @@ public partial class YoutubeProvider : IDisposable
                 _sigCipherDecryptor.InvalidateCache();
                 _nTokenDecryptor.PlayerManager.Invalidate();
 
-                // Сброс stale STS при 403-recovery ═══
+                // Сброс stale STS при 403-recovery
                 // _signatureTimestamp в VideoController и _cipherManifest в StreamClient
                 // кэшируются на уровне экземпляра и НЕ инвалидировались ранее.
                 // После PlayerManager.Invalidate() контекст будет загружен заново,
@@ -1575,8 +1575,12 @@ public partial class YoutubeProvider : IDisposable
         return await _userDataService.GetMyPlaylistsAsync();
     }
 
+    /// <summary>
+    /// Импортирует плейлист: загружает метаданные и все треки единым запросом,
+    /// определяет ownership и visibility, сохраняет треки в БД.
+    /// </summary>
     public async Task<Playlist?> ImportPlaylistAsync(
-    string playlistId, bool isAccountSync = false, CancellationToken ct = default)
+        string playlistId, bool isAccountSync = false, CancellationToken ct = default)
     {
         try
         {
@@ -1592,7 +1596,6 @@ public partial class YoutubeProvider : IDisposable
         {
             var plId = new PlaylistId(playlistId);
 
-            // Единый HTTP-запрос: метаданные + треки без дублирующего browse
             var result = await _youtube.Playlists.ImportAsync(plId, ct).ConfigureAwait(false);
 
             var playlist = result.Playlist;
@@ -1600,18 +1603,27 @@ public partial class YoutubeProvider : IDisposable
                 ? PlaylistSyncMode.TwoWaySync
                 : PlaylistSyncMode.CloudPublic;
 
+            // Ownership & Visibility
+            ResolveOwnershipAndVisibility(playlist, isAccountSync);
+
             var tracks = result.Tracks;
-            for (int i = 0; i < tracks.Count; i++)
+            if (_libraryService != null)
             {
-                ct.ThrowIfCancellationRequested();
-                var track = tracks[i];
-                if (_libraryService != null)
-                    await _libraryService.AddOrUpdateTrackAsync(track, ct).ConfigureAwait(false);
-                playlist.TrackIds.Add(track.Id);
+                for (int i = 0; i < tracks.Count; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await _libraryService.AddOrUpdateTrackAsync(tracks[i], ct).ConfigureAwait(false);
+                    playlist.TrackIds.Add(tracks[i].Id);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < tracks.Count; i++)
+                    playlist.TrackIds.Add(tracks[i].Id);
             }
 
             Log.Info($"[YouTube] ImportPlaylist '{playlistId}': {tracks.Count} tracks, " +
-                     $"SyncMode={playlist.SyncMode}");
+                     $"Ownership={playlist.Ownership}, Visibility={playlist.Visibility}");
             return playlist;
         }
         catch (BotDetectionException) { return null; }
@@ -1626,6 +1638,47 @@ public partial class YoutubeProvider : IDisposable
             NotifyError($"[YouTube] Error importing playlist '{playlistId}': {ex.Message}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Определяет ownership и задаёт fallback-visibility, если YouTube не отдал privacy явно.
+    /// </summary>
+    private void ResolveOwnershipAndVisibility(Playlist playlist, bool isAccountSync)
+    {
+        if (!isAccountSync)
+        {
+            playlist.Ownership = PlaylistOwnership.Foreign;
+
+            // URL-импорт: если privacy не удалось получить из API, считаем минимум Public
+            if (playlist.Visibility == PlaylistVisibility.Unknown)
+                playlist.Visibility = PlaylistVisibility.Public;
+
+            return;
+        }
+
+        // Account sync: определяем ownership сравнением Author с UserName
+        if (AuthService?.IsAuthenticated != true)
+        {
+            playlist.Ownership = PlaylistOwnership.Unknown;
+            return;
+        }
+
+        var userName = AuthService.State.UserName;
+        var playlistAuthor = playlist.Author;
+
+        if (string.IsNullOrEmpty(userName) || string.IsNullOrEmpty(playlistAuthor))
+        {
+            playlist.Ownership = PlaylistOwnership.Unknown;
+            return;
+        }
+
+        playlist.Ownership = playlistAuthor.Equals(userName, StringComparison.OrdinalIgnoreCase)
+            ? PlaylistOwnership.Mine
+            : PlaylistOwnership.Foreign;
+
+        // Для чужих плейлистов из библиотеки fallback на Public только если privacy не распознали
+        if (playlist.IsForeign && playlist.Visibility == PlaylistVisibility.Unknown)
+            playlist.Visibility = PlaylistVisibility.Public;
     }
 
     public async Task<(string Name, string AvatarUrl)?> GetChannelInfoAsync(

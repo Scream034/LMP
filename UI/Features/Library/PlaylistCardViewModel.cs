@@ -12,7 +12,7 @@ namespace LMP.UI.Features.Library;
 /// </summary>
 public sealed class PlaylistCardViewModel : ViewModelBase
 {
-    #region Приватные поля
+    #region Fields
 
     private readonly CookieAuthService _auth;
     private readonly PlayerControlService _playerControl;
@@ -30,126 +30,246 @@ public sealed class PlaylistCardViewModel : ViewModelBase
 
     #endregion
 
-    #region Свойства
+    #region Properties — Identity
 
-    /// <summary>Исходный объект плейлиста (мутабельный, обновляется через <see cref="UpdateFrom"/>).</summary>
+    /// <summary>
+    /// Исходный объект плейлиста.
+    /// Мутабельный — обновляется через <see cref="UpdateFrom"/>.
+    /// </summary>
     public Core.Models.Playlist Playlist { get; }
 
-    /// <summary>Уникальный идентификатор плейлиста.</summary>
+    /// <summary>
+    /// Уникальный идентификатор плейлиста.
+    /// </summary>
     public string Id => Playlist.Id;
 
-    /// <summary>Название плейлиста (реактивное).</summary>
+    /// <summary>
+    /// Это системный плейлист «Понравившиеся» (специальный UI: обложка-сердце, без удаления).
+    /// </summary>
+    public bool IsLikedPlaylist => Playlist.Id == LibraryService.LikedPlaylistId;
+
+    #endregion
+
+    #region Properties — Display
+
+    /// <summary>
+    /// Название плейлиста. Реактивное — обновляется при переименовании.
+    /// </summary>
     [Reactive] public string Name { get; private set; }
 
-    /// <summary>URL обложки (реактивное, с upscale для YouTube-превью).</summary>
+    /// <summary>
+    /// URL обложки с upscale для YouTube-превью. Реактивное — обновляется при смене обложки.
+    /// </summary>
     [Reactive] public string? ThumbnailUrl { get; private set; }
 
-    /// <summary>YouTube URL плейлиста для CopyLinkButton. Null если не привязан.</summary>
+    /// <summary>
+    /// Количество треков в плейлисте. Реактивное — обновляется при add/remove треков.
+    /// </summary>
+    [Reactive] public int TrackCount { get; set; }
+
+    /// <summary>
+    /// Видимость карточки. Управляется stagger-анимацией в <see cref="LibraryViewModel"/>.
+    /// </summary>
+    [Reactive] public bool IsVisible { get; set; }
+
+    /// <summary>
+    /// Форматированное количество треков с правильным склонением.
+    /// Пересчитывается через PropertyChanged при изменении TrackCount.
+    /// </summary>
+    public string FormattedTrackCount => FormatTrackCount(TrackCount);
+
+    /// <summary>
+    /// Есть обложка для отображения (не пустая и не Liked).
+    /// Пересчитывается через PropertyChanged при изменении ThumbnailUrl.
+    /// </summary>
+    public bool HasThumbnail => !string.IsNullOrEmpty(ThumbnailUrl) && !IsLikedPlaylist;
+
+    /// <summary>
+    /// Показывать placeholder вместо обложки.
+    /// Пересчитывается через PropertyChanged при изменении ThumbnailUrl.
+    /// </summary>
+    public bool ShowPlaceholder => string.IsNullOrEmpty(ThumbnailUrl) && !IsLikedPlaylist;
+
+    /// <summary>
+    /// YouTube URL плейлиста для CopyLinkButton.
+    /// Null если плейлист не привязан к YouTube.
+    /// </summary>
     public string? YoutubeUrl
     {
         get
         {
             if (IsLikedPlaylist && _auth.IsAuthenticated)
                 return "https://www.youtube.com/playlist?list=LM";
-
             return string.IsNullOrEmpty(Playlist.YoutubeId)
                 ? null
                 : $"https://www.youtube.com/playlist?list={Playlist.YoutubeId}";
         }
     }
 
-    /// <summary>Количество треков в плейлисте.</summary>
-    [Reactive] public int TrackCount { get; set; }
-
-    /// <summary>Плейлист синхронизирован с YouTube Music (реактивное).</summary>
-    [Reactive] public bool IsSynced { get; private set; }
-
-    /// <summary>Плейлист хранится локально (включая TwoWaySync).</summary>
-    public bool IsLocal => Playlist.IsLocal;
-
-    /// <summary>Плейлист только для чтения (CloudPublic).</summary>
-    public bool IsReadOnly => !Playlist.IsEditable;
-
-    /// <summary>Можно ли удалить (всё кроме Liked).</summary>
-    public bool CanDelete => Playlist.Id != LibraryService.LikedPlaylistId;
-
+    /// <summary>
+    /// Можно ли скопировать ссылку на YouTube-плейлист.
+    /// </summary>
     public bool CanCopyLink => !string.IsNullOrEmpty(YoutubeUrl);
 
-    /// <summary>Можно ли открыть диалог редактирования.</summary>
+    #endregion
+
+    #region Properties — Author & Ownership
+
+    /// <summary>
+    /// Имя автора/владельца плейлиста. Реактивное.
+    /// </summary>
+    [Reactive] public string? Author { get; private set; }
+
+    /// <summary>
+    /// Показывать строку автора на карточке.
+    /// True только для чужих плейлистов с известным автором.
+    /// Реактивное — обновляется при смене ownership.
+    /// </summary>
+    [Reactive] public bool ShowAuthor { get; private set; }
+
+    /// <summary>
+    /// Отображаемая строка автора с предлогом «от X».
+    /// Локализованная, реактивная.
+    /// </summary>
+    [Reactive] public string? AuthorDisplayText { get; private set; }
+
+    /// <summary>
+    /// Tooltip для строки автора: «Плейлист от X».
+    /// Локализованный, реактивный.
+    /// </summary>
+    [Reactive] public string? AuthorTooltip { get; private set; }
+
+    /// <summary>
+    /// Плейлист приватный (🔒). Реактивное.
+    /// </summary>
+    [Reactive] public bool IsPrivate { get; private set; }
+
+    /// <summary>
+    /// Плейлист по ссылке (🔗). Реактивное.
+    /// </summary>
+    [Reactive] public bool IsUnlisted { get; private set; }
+
+    /// <summary>
+    /// Плейлист хранится локально (LocalOnly или TwoWaySync).
+    /// </summary>
+    public bool IsLocal => Playlist.IsLocal;
+
+    /// <summary>
+    /// Плейлист только для чтения (Foreign или CloudPublic).
+    /// </summary>
+    public bool IsReadOnly => !Playlist.IsEditable;
+
+    /// <summary>
+    /// Можно ли удалить плейлист (всё кроме Liked).
+    /// </summary>
+    public bool CanDelete => !IsLikedPlaylist;
+
+    /// <summary>
+    /// Можно ли открыть диалог редактирования плейлиста.
+    /// </summary>
     public bool CanEdit => Playlist.IsEditable;
 
-    /// <summary>Это плейлист «Понравившиеся» (специальный UI).</summary>
-    public bool IsLikedPlaylist => Playlist.Id == LibraryService.LikedPlaylistId;
+    #endregion
 
-    /// <summary>Форматированное количество треков с правильным склонением.</summary>
-    public string FormattedTrackCount => FormatTrackCount(TrackCount);
+    #region Properties — Cloud & Sync
 
-    /// <summary>Есть обложка для отображения (не пустая и не Liked).</summary>
-    public bool HasThumbnail => !string.IsNullOrEmpty(ThumbnailUrl) && !IsLikedPlaylist;
+    /// <summary>
+    /// Плейлист связан с YouTube: есть YoutubeId и он доступен,
+    /// или это Liked при аутентифицированном пользователе.
+    /// Используется для отображения иконки облака (☁).
+    /// Реактивное.
+    /// </summary>
+    [Reactive] public bool HasCloudSource { get; private set; }
 
-    /// <summary>Показывать placeholder вместо обложки.</summary>
-    public bool ShowPlaceholder => string.IsNullOrEmpty(ThumbnailUrl) && !IsLikedPlaylist;
+    /// <summary>
+    /// Двусторонняя синхронизация активна (TwoWaySync или Liked + auth).
+    /// Реактивное.
+    /// </summary>
+    [Reactive] public bool IsTwoWaySynced { get; private set; }
 
-    /// <summary>Активен ли данный плейлист в плеере прямо сейчас.</summary>
+    #endregion
+
+    #region Properties — Playback State
+
+    /// <summary>
+    /// Данный плейлист активен в плеере и очередь «чистая».
+    /// Используется для анимации пульсации рамки карточки.
+    /// </summary>
     [Reactive] public bool IsActive { get; private set; }
 
-    /// <summary>Очередь чистая — полностью совпадает с треками этого плейлиста.</summary>
+    /// <summary>
+    /// Очередь полностью совпадает с треками этого плейлиста.
+    /// </summary>
     [Reactive] public bool IsQueuePure { get; private set; }
 
-    /// <summary>Плейлист сейчас активно играет (эквивалент IsPlayingPure в PlaylistViewModel).</summary>
+    /// <summary>
+    /// Очередь чистая и прямо сейчас активно играет.
+    /// Используется для иконки Play/Pause в контекстном меню.
+    /// </summary>
     [Reactive] public bool IsPlayingPure { get; private set; }
 
-    /// <summary>Текст для пункта контекстного меню "Воспроизвести / Пауза" с локализацией.</summary>
+    /// <summary>
+    /// Текст для пункта контекстного меню «Воспроизвести / Пауза».
+    /// Пересчитывается через PropertyChanged при изменении IsPlayingPure.
+    /// </summary>
     public string PlayMenuHeader => IsPlayingPure
         ? (LocalizationService.Instance["Player_Pause"] ?? "Pause")
         : (LocalizationService.Instance["Player_Play"] ?? "Play");
 
-    /// <summary>Геометрия иконки воспроизведения (Play/Pause) для контекстного меню.</summary>
+    /// <summary>
+    /// Геометрия иконки Play/Pause для контекстного меню.
+    /// Пересчитывается через PropertyChanged при изменении IsPlayingPure.
+    /// </summary>
     public Geometry? PlayMenuIcon
     {
         get
         {
             var key = IsPlayingPure ? "Icon.Pause" : "Icon.Play";
-            if (Avalonia.Application.Current != null &&
-                Avalonia.Application.Current.TryGetResource(key, null, out var res) &&
-                res is Geometry geo)
-            {
+            if (Avalonia.Application.Current?.TryGetResource(key, null, out var res) == true
+                && res is Geometry geo)
                 return geo;
-            }
             return null;
         }
     }
 
-    /// <summary>Видимость карточки (для stagger-анимации появления).</summary>
-    [Reactive] public bool IsVisible { get; set; }
-
     #endregion
 
-    #region Команды
+    #region Commands
 
+    /// <summary>Открыть плейлист (навигация).</summary>
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
+
+    /// <summary>Удалить плейлист.</summary>
     public ReactiveCommand<Unit, Unit> DeleteCommand { get; }
+
+    /// <summary>Добавить все треки в очередь.</summary>
     public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
+
+    /// <summary>Воспроизвести плейлист (smart play/pause).</summary>
     public ReactiveCommand<Unit, Unit> PlayCommand { get; }
+
+    /// <summary>Открыть диалог редактирования.</summary>
     public ReactiveCommand<Unit, Unit> EditCommand { get; }
+
+    /// <summary>Скопировать ссылку на YouTube-плейлист.</summary>
     public ReactiveCommand<Unit, Unit> CopyLinkCommand { get; }
 
     #endregion
 
-    #region Конструктор
+    #region Constructor
 
     public PlaylistCardViewModel(
-      CookieAuthService auth,
-      PlayerControlService playerControl,
-      LibraryService library,
-      AudioEngine audio,
-      Core.Models.Playlist playlist,
-      int trackCount,
-      Action<string> onOpen,
-      Func<Core.Models.Playlist, Task> addToQueueAction,
-      Func<Core.Models.Playlist, Task> playAction,
-      Func<string, Task>? onDelete = null,
-      Func<Core.Models.Playlist, Task>? onEdit = null)
+        CookieAuthService auth,
+        PlayerControlService playerControl,
+        LibraryService library,
+        AudioEngine audio,
+        Core.Models.Playlist playlist,
+        int trackCount,
+        Action<string> onOpen,
+        Func<Core.Models.Playlist, Task> addToQueueAction,
+        Func<Core.Models.Playlist, Task> playAction,
+        Func<string, Task>? onDelete = null,
+        Func<Core.Models.Playlist, Task>? onEdit = null)
     {
         Playlist = playlist;
         _auth = auth;
@@ -162,23 +282,29 @@ public sealed class PlaylistCardViewModel : ViewModelBase
         _onDelete = onDelete;
         _onEdit = onEdit;
 
+        // ═══ Initial state from model ═══
         Name = playlist.Name;
         TrackCount = trackCount;
         ThumbnailUrl = UpscaleThumbnailUrl(playlist.ThumbnailUrl);
-        IsSynced = playlist.IsFromAccount || (IsLikedPlaylist && _auth.IsAuthenticated);
+        Author = playlist.Author;
 
+        ApplyOwnershipState(playlist);
+        ApplyCloudState(playlist);
+
+        // ═══ Commands ═══
         OpenCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             if (!_isDisposed) _onOpen(Playlist.Id);
         }));
 
-        var canDelete = this.WhenAnyValue(x => x.CanDelete)
-            .ObserveOn(RxSchedulers.MainThreadScheduler);
-
-        DeleteCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
+        DeleteCommand = CreateCommand(ReactiveCommand.CreateFromTask(
+            async () =>
             {
-                if (!_isDisposed && _onDelete != null) await _onDelete(Playlist.Id);
-            }, canDelete));
+                if (!_isDisposed && _onDelete != null)
+                    await _onDelete(Playlist.Id);
+            },
+            this.WhenAnyValue(x => x.CanDelete)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)));
 
         AddToQueueCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
@@ -199,9 +325,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             async () =>
             {
                 if (_isDisposed || string.IsNullOrEmpty(YoutubeUrl)) return;
-
                 await Clipboard.SetTextAsync(YoutubeUrl);
-
                 CopyHintService.Instance.Show(
                     LocalizationService.Instance["Playlist_LinkCopied"] ?? "Copied!",
                     CopyHintKind.Success);
@@ -209,73 +333,60 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             this.WhenAnyValue(x => x.YoutubeUrl, url => !string.IsNullOrEmpty(url))
                 .ObserveOn(RxSchedulers.MainThreadScheduler)));
 
-        // Реактивный трекинг состояния активности и чистоты очереди
+        // ═══ Playback state tracking ═══
         Observable.CombineLatest(
-            _playerControl.ActivePlaylistIdObservable,
-            _playerControl.PlaybackStateObservable,
-            _playerControl.QueueCountObservable,
-            (activeId, state, qCount) => new { activeId, state.IsPlaying, qCount })
-        .Throttle(TimeSpan.FromMilliseconds(50)) // Дебаунс против спама при быстрой смене треков
-        .ObserveOn(RxSchedulers.MainThreadScheduler)
-        .Subscribe(async data =>
-        {
-            if (_isDisposed) return;
-
-            bool isActive = data.activeId == Id;
-
-            // Если играет другой плейлист — сбрасываем все состояния активности
-            if (!isActive)
+                _playerControl.ActivePlaylistIdObservable,
+                _playerControl.PlaybackStateObservable,
+                _playerControl.QueueCountObservable,
+                (activeId, state, qCount) => new { activeId, state.IsPlaying, qCount })
+            .Throttle(TimeSpan.FromMilliseconds(50))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(async data =>
             {
-                IsActive = false;
-                IsQueuePure = false;
-                IsPlayingPure = false;
-                return;
-            }
+                if (_isDisposed) return;
 
-            // Быстрый отсев: если размеры не совпадают, очередь заведомо "грязная"
-            if (data.qCount != TrackCount)
-            {
-                IsActive = false;
-                IsQueuePure = false;
-                IsPlayingPure = false;
-                return;
-            }
-
-            // Асинхронная проверка чистоты очереди в бэкграунде
-            try
-            {
-                var trackIds = await _library.GetPlaylistTrackIdsAsync(Id);
-                var trackIdSet = new HashSet<string>(trackIds, StringComparer.Ordinal);
-
-                var queue = _audio.Queue;
-                bool isPure = queue.Count == trackIds.Count;
-                if (isPure)
+                if (data.activeId != Id || data.qCount != TrackCount)
                 {
-                    for (int i = 0; i < queue.Count; i++)
-                    {
-                        if (!trackIdSet.Contains(queue[i].Id))
-                        {
-                            isPure = false;
-                            break;
-                        }
-                    }
+                    IsActive = false;
+                    IsQueuePure = false;
+                    IsPlayingPure = false;
+                    return;
                 }
 
-                IsActive = isPure; // Рамка светится и пульсирует только если очередь чистая
-                IsQueuePure = isPure;
-                IsPlayingPure = isPure && data.IsPlaying;
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[PlaylistCard] Error checking queue purity: {ex.Message}");
-                IsActive = false;
-                IsQueuePure = false;
-                IsPlayingPure = false;
-            }
-        })
-        .DisposeWith(Disposables);
+                try
+                {
+                    var trackIds = await _library.GetPlaylistTrackIdsAsync(Id);
+                    var trackIdSet = new HashSet<string>(trackIds, StringComparer.Ordinal);
+                    var queue = _audio.Queue;
 
-        // Инвалидация свойств при изменении активности
+                    bool isPure = queue.Count == trackIds.Count;
+                    if (isPure)
+                    {
+                        for (int i = 0; i < queue.Count; i++)
+                        {
+                            if (!trackIdSet.Contains(queue[i].Id))
+                            {
+                                isPure = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    IsActive = isPure;
+                    IsQueuePure = isPure;
+                    IsPlayingPure = isPure && data.IsPlaying;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"[PlaylistCard] Queue purity check error: {ex.Message}");
+                    IsActive = false;
+                    IsQueuePure = false;
+                    IsPlayingPure = false;
+                }
+            })
+            .DisposeWith(Disposables);
+
+        // ═══ Derived property invalidation ═══
         this.WhenAnyValue(x => x.IsPlayingPure)
             .Subscribe(_ =>
             {
@@ -300,18 +411,24 @@ public sealed class PlaylistCardViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
             this.RaisePropertyChanged(nameof(PlayMenuHeader));
+            RefreshAuthorTexts();
         };
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
     }
 
     #endregion
 
-    #region Обновление данных
+    #region Update
 
+    /// <summary>
+    /// Обновляет карточку из свежих данных плейлиста.
+    /// Вызывается при инкрементальном обновлении библиотеки.
+    /// </summary>
     public void UpdateFrom(Core.Models.Playlist playlist, int trackCount)
     {
         if (_isDisposed) return;
 
+        // ═══ Display ═══
         if (Name != playlist.Name)
         {
             Playlist.StoredName = playlist.StoredName;
@@ -328,19 +445,91 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             ThumbnailUrl = newUrl;
         }
 
-        bool newSynced = playlist.IsFromAccount || (IsLikedPlaylist && _auth.IsAuthenticated);
-        if (IsSynced != newSynced)
+        // ═══ Author ═══
+        if (!string.Equals(Author, playlist.Author, StringComparison.Ordinal))
+        {
+            Playlist.Author = playlist.Author;
+            Author = playlist.Author;
+        }
+
+        // ═══ Ownership & Visibility ═══
+        bool ownershipChanged = Playlist.Ownership != playlist.Ownership
+                                || Playlist.Visibility != playlist.Visibility;
+        if (ownershipChanged)
+        {
+            Playlist.Ownership = playlist.Ownership;
+            Playlist.Visibility = playlist.Visibility;
+            ApplyOwnershipState(playlist);
+        }
+
+        // ═══ Cloud & Sync ═══
+        bool cloudChanged = Playlist.SyncMode != playlist.SyncMode
+                            || !string.Equals(Playlist.YoutubeId, playlist.YoutubeId, StringComparison.Ordinal)
+                            || Playlist.IsCloudUnavailable != playlist.IsCloudUnavailable;
+        if (cloudChanged)
         {
             Playlist.SyncMode = playlist.SyncMode;
             Playlist.YoutubeId = playlist.YoutubeId;
-            IsSynced = newSynced;
+            Playlist.IsCloudUnavailable = playlist.IsCloudUnavailable;
+            ApplyCloudState(playlist);
         }
     }
 
     #endregion
 
-    #region Вспомогательные методы
+    #region Helpers
 
+    /// <summary>
+    /// Выставляет все reactive-свойства ownership/visibility/author из модели.
+    /// Вызывается из конструктора и <see cref="UpdateFrom"/>.
+    /// </summary>
+    private void ApplyOwnershipState(Core.Models.Playlist playlist)
+    {
+        ShowAuthor = !string.IsNullOrEmpty(playlist.Author);
+        IsPrivate = playlist.Visibility == PlaylistVisibility.Private;
+        IsUnlisted = playlist.Visibility == PlaylistVisibility.Unlisted;
+
+        RefreshAuthorTexts();
+    }
+
+    /// <summary>
+    /// Выставляет все reactive-свойства cloud/sync из модели.
+    /// Вызывается из конструктора и <see cref="UpdateFrom"/>.
+    /// </summary>
+    private void ApplyCloudState(Core.Models.Playlist playlist)
+    {
+        HasCloudSource = playlist.HasCloudLink
+                         || (IsLikedPlaylist && _auth.IsAuthenticated);
+
+        IsTwoWaySynced = playlist.SyncMode == PlaylistSyncMode.TwoWaySync
+                         || (IsLikedPlaylist && _auth.IsAuthenticated);
+    }
+
+    /// <summary>
+    /// Пересчитывает локализованные строки автора.
+    /// Вызывается при смене автора, ownership или языка.
+    /// </summary>
+    private void RefreshAuthorTexts()
+    {
+        var author = Author;
+        bool hasAuthor = !string.IsNullOrEmpty(author);
+
+        AuthorDisplayText = hasAuthor
+            ? string.Format(
+                LocalizationService.Instance["Playlist_ByAuthor"] ?? "от {0}",
+                author)
+            : null;
+
+        AuthorTooltip = hasAuthor
+            ? string.Format(
+                LocalizationService.Instance["Playlist_Foreign_Tooltip"] ?? "Плейлист от {0}",
+                author)
+            : null;
+    }
+
+    /// <summary>
+    /// Повышает разрешение YouTube-превью обложки.
+    /// </summary>
     private static string? UpscaleThumbnailUrl(string? url)
     {
         if (string.IsNullOrEmpty(url)) return url;
@@ -354,16 +543,21 @@ public sealed class PlaylistCardViewModel : ViewModelBase
         return url;
     }
 
+    /// <summary>
+    /// Форматирует количество треков с правильным склонением через локализацию.
+    /// </summary>
     private static string FormatTrackCount(int count)
     {
         if (count == 0) return LocalizationService.Instance["Playlist_Empty"];
         return LocalizationService.Instance.GetPlural("Playlist_TracksCount", count);
     }
 
+    /// <summary>
+    /// Переводит карточку в видимое состояние (stagger-анимация появления).
+    /// </summary>
     public void Show()
     {
-        if (!_isDisposed)
-            IsVisible = true;
+        if (!_isDisposed) IsVisible = true;
     }
 
     #endregion

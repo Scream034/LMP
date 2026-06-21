@@ -8,6 +8,7 @@ using LMP.Core.Youtube.Search;
 using LMP.UI.Dialogs;
 using Avalonia.Threading;
 using LMP.Core.Helpers.Extensions;
+using System.Collections.Specialized;
 
 namespace LMP.UI.Features.Library;
 
@@ -72,6 +73,7 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
     [Reactive] public double SyncProgress { get; private set; }
     [Reactive] public string SyncStatus { get; private set; } = "";
     [Reactive] public bool IsAuthenticated { get; private set; }
+    [Reactive] public bool HasPlaylists { get; private set; }
 
     #endregion
 
@@ -142,9 +144,9 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
         RefreshCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoadPlaylistsAsync));
 
-        // ═══ подписки ТОЛЬКО в конструкторе ═══
-        // Раньше подписывались в OnNavigatedToAsync при каждом переходе
         SubscribeToLibraryEvents();
+        Playlists.CollectionChanged += OnPlaylistsCollectionChanged;
+        HasPlaylists = Playlists.Count > 0;
     }
 
     #endregion
@@ -571,20 +573,23 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
                 if (decision.Action == MergeAction.Merge && existing != null)
                 {
-                    var existingTrackSet = new HashSet<string>(
-                        await _library.GetPlaylistTrackIdsAsync(existing.Id, ct),
-                        StringComparer.Ordinal);
+                    var existingTrackIds = await _library.GetPlaylistTrackIdsAsync(existing.Id, ct);
+                    var existingTrackSet = new HashSet<string>(existingTrackIds, StringComparer.Ordinal);
 
-                    bool changed = false;
+                    bool tracksChanged = false;
+
+                    // Cloud metadata / ownership / visibility / link-state
+                    bool metadataChanged = ApplyMergedCloudMetadata(existing, fullPlaylist);
 
                     for (int i = 0; i < fullPlaylist.TrackIds.Count; i++)
                     {
                         var trackId = fullPlaylist.TrackIds[i];
-                        if (!existingTrackSet.Add(trackId))
-                            continue;
 
-                        existing.TrackIds.Add(trackId);
-                        changed = true;
+                        if (existingTrackSet.Add(trackId))
+                        {
+                            existing.TrackIds.Add(trackId);
+                            tracksChanged = true;
+                        }
 
                         var t = await _library.GetTrackAsync(trackId, ct);
                         if (t != null && !t.InPlaylists.Contains(existing.Id))
@@ -594,9 +599,10 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
                         }
                     }
 
-                    if (changed)
+                    // Важно: сохраняем не только при track delta, но и при metadata/link delta.
+                    // Иначе новые поля модели так и не попадут в БД.
+                    if (tracksChanged || metadataChanged)
                     {
-                        existing.UpdatedAt = DateTime.Now;
                         await _library.AddOrUpdatePlaylistAsync(existing, ct);
                     }
 
@@ -686,6 +692,113 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Применяет к существующему локальному плейлисту облачные метаданные,
+    /// полученные при импорте/синхронизации из YouTube.
+    /// Возвращает <c>true</c>, если были изменены хотя бы какие-либо поля.
+    /// </summary>
+    /// <param name="existing">Локальный плейлист из базы данных.</param>
+    /// <param name="incoming">Импортированный/облачный плейлист со свежими метаданными.</param>
+    /// <returns><c>true</c>, если метаданные были обновлены; иначе <c>false</c>.</returns>
+    private bool ApplyMergedCloudMetadata(
+        Core.Models.Playlist existing,
+        Core.Models.Playlist incoming)
+    {
+        bool changed = false;
+
+        // 1. Автор плейлиста
+        if (!string.Equals(existing.Author, incoming.Author, StringComparison.Ordinal))
+        {
+            existing.Author = incoming.Author;
+            changed = true;
+        }
+
+        // 2. Ссылка на YouTube-канал владельца
+        if (!string.Equals(existing.OwnerChannelId, incoming.OwnerChannelId, StringComparison.Ordinal))
+        {
+            existing.OwnerChannelId = incoming.OwnerChannelId;
+            changed = true;
+        }
+
+        // 3. Статус владения (Mine, Foreign, System)
+        if (existing.Ownership != incoming.Ownership)
+        {
+            existing.Ownership = incoming.Ownership;
+            changed = true;
+        }
+
+        // 4. Статус приватности (Public, Private, Unlisted)
+        if (existing.Visibility != incoming.Visibility)
+        {
+            existing.Visibility = incoming.Visibility;
+            changed = true;
+        }
+
+        // 5. Ожидаемое количество треков в облаке
+        if (existing.CloudTrackCount != incoming.CloudTrackCount)
+        {
+            existing.CloudTrackCount = incoming.CloudTrackCount;
+            changed = true;
+        }
+
+        // 6. Количество просмотров на YouTube / YouTube Music
+        if (existing.ViewCount != incoming.ViewCount)
+        {
+            existing.ViewCount = incoming.ViewCount;
+            changed = true;
+        }
+
+        // 7. Дата последнего обновления плейлиста
+        if (existing.ReleaseDate != incoming.ReleaseDate)
+        {
+            existing.ReleaseDate = incoming.ReleaseDate;
+            changed = true;
+        }
+
+        // 8. Обложка плейлиста (YouTube меняет query-параметры обложек, но базовые URL совпадают)
+        if (!string.Equals(existing.ThumbnailUrl, incoming.ThumbnailUrl, StringComparison.Ordinal))
+        {
+            existing.ThumbnailUrl = incoming.ThumbnailUrl;
+            changed = true;
+        }
+
+        // 9. Описание плейлиста
+        if (!string.Equals(existing.Description, incoming.Description, StringComparison.Ordinal))
+        {
+            existing.Description = incoming.Description;
+            changed = true;
+        }
+
+        // 10. Облачная привязка и режим синхронизации при наличии авторизации
+        if (_auth.IsAuthenticated)
+        {
+            if (!string.Equals(existing.YoutubeId, incoming.YoutubeId, StringComparison.Ordinal))
+            {
+                existing.YoutubeId = incoming.YoutubeId;
+                changed = true;
+            }
+
+            if (existing.SyncMode != PlaylistSyncMode.TwoWaySync)
+            {
+                existing.SyncMode = PlaylistSyncMode.TwoWaySync;
+                changed = true;
+            }
+        }
+
+        // 11. Сброс флага недоступности облака
+        if (existing.IsCloudUnavailable)
+        {
+            existing.IsCloudUnavailable = false;
+            changed = true;
+        }
+
+        // Временные метки обновляются при каждом факте сверки/синхронизации
+        existing.LastSyncedAtUtc = DateTime.UtcNow;
+        existing.UpdatedAt = DateTime.Now;
+
+        return changed;
     }
 
     #endregion
@@ -1015,6 +1128,12 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
         finally { _mainWindow.UnlockNavigation(); }
     }
 
+    private void OnPlaylistsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (_isDisposed) return;
+        HasPlaylists = Playlists.Count > 0;
+    }
+
     #endregion
 
     #region Dispose
@@ -1025,13 +1144,22 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
         if (disposing)
         {
             _isDisposed = true;
+
+            Playlists.CollectionChanged -= OnPlaylistsCollectionChanged;
+
             _staggerCts?.Cancel();
             _staggerCts?.Dispose();
+
             _statsAnimCts?.Cancel();
             _statsAnimCts?.Dispose();
-            foreach (var vm in Playlists) vm.Dispose();
+
+            foreach (var vm in Playlists)
+                vm.Dispose();
+
             Playlists.Clear();
+
             _auth.OnAuthStateChanged -= OnAuthChanged;
+
             _syncCts?.Cancel();
             _syncCts?.Dispose();
         }

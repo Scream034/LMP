@@ -101,10 +101,26 @@ public sealed class PlaylistEditService
         var playlist = await _library.GetPlaylistAsync(playlistId);
         if (playlist == null) return null;
 
+        // Mutation guard: read-only плейлисты не редактируются
+        if (!playlist.IsEditable)
+        {
+            var message = !string.IsNullOrEmpty(playlist.Author)
+                ? string.Format(
+                    SL["Playlist_ReadOnly_ByAuthor"] ?? "Playlist by {0} is read-only",
+                    playlist.Author)
+                : SL["Playlist_ReadOnly"] ?? "This playlist is read-only";
+
+            await _dialog.ShowInfoAsync(
+                SL["Dialog_Warning_Title"] ?? "Warning",
+                message);
+
+            return null;
+        }
+
         var result = await _dialog.ShowEditPlaylistDialogAsync(playlist);
         if (result == null) return null;
 
-        // ═══ CREATE COPY: обрабатываем до всех остальных шагов ═══
+        // CREATE COPY: обрабатываем до всех остальных шагов
         // Создаём новый локальный плейлист с данными из редактора и копируем треки.
         // Оригинальный плейлист остаётся нетронутым.
         if (result.ShouldCreateCopy)
@@ -112,7 +128,7 @@ public sealed class PlaylistEditService
 
         bool changed = false;
 
-        // ═══ STEP 1: Sync toggle ═══
+        // STEP 1: Sync toggle
         if (result.SyncToCloud.HasValue && result.SyncToCloud.Value != playlist.IsFromAccount)
         {
             bool wantsSync = result.SyncToCloud.Value;
@@ -128,7 +144,7 @@ public sealed class PlaylistEditService
             }
         }
 
-        // ═══ STEP 2: Rename ═══
+        // STEP 2: Rename
         if (!LibraryService.IsSystemPlaylist(playlistId))
         {
             var newName = result.Name?.Trim();
@@ -141,7 +157,7 @@ public sealed class PlaylistEditService
             }
         }
 
-        // ═══ STEP 3: Thumbnail ═══
+        // STEP 3: Thumbnail
         if (!string.Equals(result.ThumbnailUrl, playlist.ThumbnailUrl, StringComparison.Ordinal))
         {
             if (!string.IsNullOrWhiteSpace(result.ThumbnailUrl))
@@ -171,7 +187,7 @@ public sealed class PlaylistEditService
             }
         }
 
-        // ═══ STEP 3.5: Description ═══
+        // STEP 3.5: Description
         if (!string.Equals(result.Description?.Trim(), playlist.Description?.Trim(), StringComparison.Ordinal))
         {
             // Убрана автоматическая отправка на YouTube
@@ -179,14 +195,14 @@ public sealed class PlaylistEditService
             changed = true;
         }
 
-        // ═══ STEP 4: Custom Color ═══
+        // STEP 4: Custom Color
         if (!string.Equals(result.CustomColor, playlist.CustomColor, StringComparison.Ordinal))
         {
             playlist.CustomColor = result.CustomColor;
             changed = true;
         }
 
-        // ═══ STEP 4.5: Computed Color ═══
+        // STEP 4.5: Computed Color
         if (result.ComputedColor != null &&
             !string.Equals(result.ComputedColor, playlist.ComputedColor, StringComparison.OrdinalIgnoreCase))
         {
@@ -194,7 +210,7 @@ public sealed class PlaylistEditService
             changed = true;
         }
 
-        // ═══ STEP 5: Save ═══
+        // STEP 5: Save
         if (changed)
         {
             playlist.UpdatedAt = DateTime.Now;

@@ -92,7 +92,7 @@ internal class MusicController(HttpClient http)
         Action<Utf8JsonWriter> writeBody,
         CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}?prettyPrint=false");
         AttachVisitorDataToRequest(request);
         request.Content = CreateJsonContent(writeBody);
 
@@ -112,7 +112,7 @@ internal class MusicController(HttpClient http)
         Action<Utf8JsonWriter> writeBody,
         CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}?prettyPrint=false");
         AttachVisitorDataToRequest(request);
         request.Content = CreateJsonContent(writeBody);
 

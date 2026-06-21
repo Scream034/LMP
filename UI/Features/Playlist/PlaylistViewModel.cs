@@ -9,11 +9,14 @@ using System.Reactive.Linq;
 using LMP.UI.Dialogs;
 using Microsoft.Extensions.DependencyInjection;
 using Avalonia.Threading;
+using System.Globalization;
 
 namespace LMP.UI.Features.Playlist;
 
 /// <summary>
 /// ViewModel экрана плейлиста.
+/// Управляет метаданными, отображением ownership/visibility,
+/// воспроизведением и двусторонней синхронизацией с YouTube.
 /// </summary>
 public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTransitionViewModel
 {
@@ -32,7 +35,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
     private readonly IDisposable? _librarySubscription;
 
     private CancellationTokenSource? _playlistLoadCts;
-
     private string _currentPlaylistId = "";
     private Core.Models.Playlist? _currentPlaylist;
 
@@ -44,31 +46,29 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
     private volatile bool _isSuspended;
     private int _syncInProgressGate;
-
     private HashSet<string>? _playlistTrackIds;
 
     #endregion
 
-    #region Properties
+    #region Properties — Metadata
 
     [Reactive] public string PlaylistName { get; private set; } = string.Empty;
     [Reactive] public string? ThumbnailUrl { get; private set; }
-
     [Reactive] public string? Description { get; private set; }
-
     [Reactive] public int TrackCount { get; private set; }
     [Reactive] public TimeSpan TotalDuration { get; private set; }
     [Reactive] public string FormattedDuration { get; set; } = "";
     [Reactive] public IBrush? HeaderBackground { get; private set; }
     [Reactive] public bool IsLikedPlaylist { get; private set; }
-    [Reactive] public bool CanEdit { get; private set; }
-    [Reactive] public bool IsCloud { get; private set; }
-    [Reactive] public bool IsReadOnly { get; private set; }
-    [Reactive] public bool IsPlayingThisPlaylist { get; private set; }
-    [Reactive] public bool IsShuffleActive { get; private set; }
-    [Reactive] public bool IsDownloadingActive { get; private set; }
-    [Reactive] public bool IsSyncing { get; private set; }
-    [Reactive] public bool CanReorderItems { get; private set; }
+
+    /// <summary>Отформатированное количество просмотров (компактный вид: 1.2K, 3.5M).</summary>
+    [Reactive] public string? FormattedViewCount { get; private set; }
+
+    /// <summary>Отформатированная дата обновления плейлиста.</summary>
+    [Reactive] public string? FormattedReleaseDate { get; private set; }
+
+    public string FormattedTrackCount =>
+        LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
 
     public string? PlaylistYoutubeUrl =>
         IsLikedPlaylist && _auth.IsAuthenticated
@@ -79,8 +79,79 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
     [Reactive] public bool HasYoutubeLink { get; private set; }
 
-    public string FormattedTrackCount =>
-        LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
+    #endregion
+
+    #region Properties — Author & Ownership
+
+    /// <summary>Имя автора/владельца плейлиста.</summary>
+    [Reactive] public string? AuthorName { get; private set; }
+
+    /// <summary>Показывать строку автора (любой плейлист с известным автором).</summary>
+    [Reactive] public bool ShowAuthor { get; private set; }
+
+    /// <summary>Плейлист доступен только для прослушивания (Foreign / CloudPublic).</summary>
+    [Reactive] public bool IsReadOnly { get; private set; }
+
+    /// <summary>Плейлист можно редактировать (не read-only, не system).</summary>
+    [Reactive] public bool CanEdit { get; private set; }
+
+    /// <summary>Плейлист приватный (🔒).</summary>
+    [Reactive] public bool IsPrivate { get; private set; }
+
+    /// <summary>Плейлист доступен по ссылке (🔗).</summary>
+    [Reactive] public bool IsUnlisted { get; private set; }
+
+    #endregion
+
+    #region Properties — Cloud & Sync
+
+    /// <summary>Плейлист связан с YouTube (есть YoutubeId и он доступен).</summary>
+    [Reactive] public bool HasCloudSource { get; private set; }
+
+    /// <summary>Можно запустить refresh/sync из облака (TwoWaySync или Liked).</summary>
+    [Reactive] public bool CanRefreshFromCloud { get; private set; }
+
+    /// <summary>Двусторонняя синхронизация активна.</summary>
+    [Reactive] public bool IsTwoWaySynced { get; private set; }
+
+    /// <summary>Синхронизация в процессе прямо сейчас.</summary>
+    [Reactive] public bool IsSyncing { get; private set; }
+
+    /// <summary>Есть хотя бы один статусный чип для отображения рядом с action-кнопками.</summary>
+    [Reactive] public bool HasStatusChips { get; private set; }
+
+    /// <summary>Локализованная строка последней синхронизации (null если не синхронизировался).</summary>
+    [Reactive] public string? LastSyncedText { get; private set; }
+
+    #endregion
+
+    #region Properties — Playback State
+
+    [Reactive] public bool IsPlayingThisPlaylist { get; private set; }
+    [Reactive] public bool IsShuffleActive { get; private set; }
+    [Reactive] public bool IsDownloadingActive { get; private set; }
+    [Reactive] public bool CanReorderItems { get; private set; }
+
+    /// <summary>Очередь «чистая» — запущена из этого плейлиста без сторонних треков.</summary>
+    [Reactive] public bool IsQueuePure { get; private set; }
+
+    /// <summary>Очередь чистая и сейчас активно играет (для анимации эквалайзера).</summary>
+    [Reactive] public bool IsPlayingPure { get; private set; }
+
+    /// <summary>Динамическая подсказка для кнопки-трансформера Play/Pause/Replace.</summary>
+    public string PlayButtonTooltip
+    {
+        get
+        {
+            if (IsQueuePure)
+                return IsPlayingPure ? (SL["Player_Pause"] ?? "Pause") : (SL["Player_Play"] ?? "Play");
+            return SL["Playlist_PlayAll"] ?? "Play (replace queue)";
+        }
+    }
+
+    #endregion
+
+    #region Properties — Header UI
 
     public GridLength HeaderHeight
     {
@@ -99,25 +170,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
     private const double HeaderHeightMin = 280;
     private const double HeaderHeightMax = 400;
 
-    /// <summary>Очередь "чистая" — запущена из этого плейлиста и не изменялась сторонними треками.</summary>
-    [Reactive] public bool IsQueuePure { get; private set; }
-
-    /// <summary>Очередь "чистая" и прямо сейчас активно проигрывается (для анимации эквалайзера).</summary>
-    [Reactive] public bool IsPlayingPure { get; private set; }
-
-    /// <summary>Динамическая подсказка для кнопки-трансформера.</summary>
-    public string PlayButtonTooltip
-    {
-        get
-        {
-            if (IsQueuePure)
-            {
-                return IsPlayingPure ? (SL["Player_Pause"] ?? "Pause") : (SL["Player_Play"] ?? "Play");
-            }
-            return SL["Playlist_PlayAll"] ?? "Play (replace queue)";
-        }
-    }
-
     #endregion
 
     #region Commands
@@ -134,24 +186,25 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
     public ReactiveCommand<(int oldIndex, int newIndex), Unit> MoveItemCommand { get; }
     public ReactiveCommand<Unit, Unit> EditPlaylistCommand { get; }
     public ReactiveCommand<Unit, Unit> CopyPlaylistLinkCommand { get; }
+    public ReactiveCommand<Unit, Unit> OpenAuthorCommand { get; }
 
     #endregion
 
     #region Constructor
 
     public PlaylistViewModel(
-      AudioEngine audio,
-      DownloadService downloads,
-      MusicLibraryManager manager,
-      DialogService dialog,
-      TrackViewModelFactory vmFactory,
-      DominantColorService dominantColor,
-      MainWindowViewModel mainWindow,
-      PlaylistSyncService syncService,
-      PlaylistEditService editService,
-      PlayerControlService playerControl,
-      CookieAuthService auth)
-      : base(audio, downloads, vmFactory)
+        AudioEngine audio,
+        DownloadService downloads,
+        MusicLibraryManager manager,
+        DialogService dialog,
+        TrackViewModelFactory vmFactory,
+        DominantColorService dominantColor,
+        MainWindowViewModel mainWindow,
+        PlaylistSyncService syncService,
+        PlaylistEditService editService,
+        PlayerControlService playerControl,
+        CookieAuthService auth)
+        : base(audio, downloads, vmFactory)
     {
         _manager = manager;
         _dialog = dialog;
@@ -166,12 +219,11 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
 
-        var savedHeight = Math.Clamp(
+        _headerHeight = new GridLength(Math.Clamp(
             LibService.Settings.PlaylistHeaderHeight,
-            HeaderHeightMin,
-            HeaderHeightMax);
-        _headerHeight = new GridLength(savedHeight);
+            HeaderHeightMin, HeaderHeightMax));
 
+        // ═══ CanExecute observables ═══
         var hasTracks = this.WhenAnyValue(x => x.TrackCount, static c => c > 0)
             .ObserveOn(RxSchedulers.MainThreadScheduler);
 
@@ -179,10 +231,11 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             .ObserveOn(RxSchedulers.MainThreadScheduler);
 
         var canRefresh = this.WhenAnyValue(
-                x => x.IsCloud, x => x.IsSyncing,
-                static (isCloud, isSyncing) => isCloud && !isSyncing)
+                x => x.CanRefreshFromCloud, x => x.IsSyncing,
+                static (canRefresh, isSyncing) => canRefresh && !isSyncing)
             .ObserveOn(RxSchedulers.MainThreadScheduler);
 
+        // ═══ Commands ═══
         PlayAllCommand = CreateCommand(
             ReactiveCommand.CreateFromTask(PlayAllAsync, hasTracks));
 
@@ -240,33 +293,52 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             this.WhenAnyValue(x => x.HasYoutubeLink)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)));
 
+        OpenAuthorCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            var url = _currentPlaylist?.AuthorUrl;
+            if (string.IsNullOrEmpty(url)) return;
+
+            try
+            {
+                System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = url,
+                        UseShellExecute = true
+                    });
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[Playlist] Failed to open author URL: {ex.Message}");
+            }
+        }));
+
+        // ═══ Reactive subscriptions ═══
         this.WhenAnyValue(x => x.CanEdit, x => x.FilterQuery)
             .Subscribe(_ => CanReorderItems = CanEdit && CanReorder)
             .DisposeWith(Disposables);
 
         _librarySubscription = Observable.FromEvent(
-         h => LibService.OnDataChanged += h,
-         h => LibService.OnDataChanged -= h)
-        .Throttle(TimeSpan.FromMilliseconds(600))
-        .ObserveOn(RxSchedulers.MainThreadScheduler)
-        .Subscribe(_ =>
-        {
-            if (_isSuspended) return;
-
-            if ((DateTime.Now - _lastLocalMutationTime).TotalMilliseconds < LocalMutationDebounceMs)
+                h => LibService.OnDataChanged += h,
+                h => LibService.OnDataChanged -= h)
+            .Throttle(TimeSpan.FromMilliseconds(600))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ =>
             {
-                Log.Debug("[Playlist] Ignoring OnDataChanged (recent local mutation)");
-                return;
-            }
+                if (_isSuspended) return;
+                if ((DateTime.Now - _lastLocalMutationTime).TotalMilliseconds < LocalMutationDebounceMs)
+                {
+                    Log.Debug("[Playlist] Ignoring OnDataChanged (recent local mutation)");
+                    return;
+                }
 
-            InvalidateAllTracksCache();
+                InvalidateAllTracksCache();
+                if (string.IsNullOrEmpty(_currentPlaylistId)) return;
 
-            if (string.IsNullOrEmpty(_currentPlaylistId)) return;
-
-            Dispatcher.UIThread.InvokeAsync(
-                () => LoadPlaylistAsync(_currentPlaylistId, showLoader: false, CancellationToken.None),
-                DispatcherPriority.Background);
-        });
+                Dispatcher.UIThread.InvokeAsync(
+                    () => LoadPlaylistAsync(_currentPlaylistId, showLoader: false, CancellationToken.None),
+                    DispatcherPriority.Background);
+            });
 
         SubscribeToPlaybackSource();
     }
@@ -285,22 +357,19 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
     #region Lifecycle
 
-    protected override void OnSuspend()
-    {
-        _isSuspended = true;
-    }
+    protected override void OnSuspend() => _isSuspended = true;
 
     protected override void OnResume()
     {
         _isSuspended = false;
         InvalidateAllTracksCache();
-        UpdateIsPlayingThisPlaylist();
+        UpdatePlaybackState();
         this.RaisePropertyChanged(nameof(FormattedTrackCount));
     }
 
     #endregion
 
-    #region TrackListReorderableViewModel Implementation
+    #region TrackListReorderableViewModel
 
     protected override TrackItemViewModel CreateViewModel(TrackInfo item)
     {
@@ -315,8 +384,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
             _lastLocalMutationTime = DateTime.Now;
             InvalidateAllTracksCache();
-            _playlistTrackIds?.Remove(t.Id); // Синхронно поддерживаем чистоту кэша
-
+            _playlistTrackIds?.Remove(t.Id);
             RemoveItemLocally(t.Id);
 
             TrackCount = Math.Max(0, TrackCount - 1);
@@ -334,15 +402,12 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
         };
 
         vm.StartRadioAction = t => Log.Info($"[Playlist] Start radio requested for {t.Title}");
-
         return vm;
     }
 
     protected override async Task<List<TrackInfo>> LoadTracksAsync(
-        IEnumerable<string> ids, CancellationToken ct)
-    {
-        return await LibService.GetPlaylistTracksAsync(_currentPlaylistId, ct);
-    }
+        IEnumerable<string> ids, CancellationToken ct) =>
+        await LibService.GetPlaylistTracksAsync(_currentPlaylistId, ct);
 
     protected override async Task SaveMoveAsync(
         int fromMasterIndex, int toMasterIndex, CancellationToken ct)
@@ -352,52 +417,37 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
         Log.Info("[Playlist] Move saved");
     }
 
-    protected override void OnPlay(TrackInfo track)
-    {
+    protected override void OnPlay(TrackInfo track) =>
         _ = PlayFromPlaylistAsync(track);
-    }
 
     #endregion
 
     #region Public API
 
     /// <summary>
-    /// Загружает плейлист с отображением loader/skeleton состояния.
+    /// Загружает плейлист с отображением loader/skeleton.
     /// </summary>
-    /// <param name="playlistId">Идентификатор плейлиста.</param>
     public Task LoadPlaylistAsync(string playlistId) =>
         LoadPlaylistAsync(playlistId, showLoader: true, CancellationToken.None);
 
-
     #endregion
 
-    #region Private Helpers
+    #region Loading
 
-    /// <summary>
-    /// Отменяет предыдущую загрузку плейлиста и создаёт новый токен для текущего запроса.
-    /// </summary>
-    /// <param name="externalCt">Внешний токен отмены.</param>
-    /// <returns>Источник отмены активной загрузки.</returns>
     private CancellationTokenSource ReplacePlaylistLoadCts(CancellationToken externalCt)
     {
         _playlistLoadCts?.Cancel();
         _playlistLoadCts?.Dispose();
-
         _playlistLoadCts = externalCt.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(externalCt)
             : new CancellationTokenSource();
-
         return _playlistLoadCts;
     }
 
     /// <summary>
     /// Загружает либо мягко обновляет плейлист.
-    /// При <paramref name="showLoader"/> = <c>false</c> не поднимает loading-state,
-    /// что устраняет мигание экрана при фоновых изменениях библиотеки.
+    /// При <paramref name="showLoader"/> = false не поднимает loading-state.
     /// </summary>
-    /// <param name="playlistId">Идентификатор плейлиста.</param>
-    /// <param name="showLoader">Показывать ли loader/skeleton на время загрузки.</param>
-    /// <param name="ct">Внешний токен отмены.</param>
     private async Task LoadPlaylistAsync(string playlistId, bool showLoader, CancellationToken ct)
     {
         var loadCts = ReplacePlaylistLoadCts(ct);
@@ -405,7 +455,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
         _currentPlaylistId = playlistId;
         InvalidateAllTracksCache();
-
         IsLoading = showLoader;
 
         try
@@ -414,34 +463,53 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
             var playlist = await LibService.GetPlaylistAsync(playlistId);
             loadCt.ThrowIfCancellationRequested();
-
-            if (playlist is null)
-                return;
+            if (playlist is null) return;
 
             _currentPlaylist = playlist;
 
+            // ═══ Metadata ═══
             PlaylistName = playlist.Name;
             ThumbnailUrl = playlist.ThumbnailUrl;
             Description = playlist.Description;
-            CanEdit = playlist.IsEditable;
             IsLikedPlaylist = playlistId == LibraryService.LikedPlaylistId;
-            IsCloud = playlist.IsFromAccount || (IsLikedPlaylist && _auth.IsAuthenticated);
+
+            // ═══ Author & Ownership ═══
+            AuthorName = playlist.Author;
+            ShowAuthor = !string.IsNullOrEmpty(playlist.Author);
+            IsReadOnly = playlist.IsReadOnly;
+            CanEdit = playlist.IsEditable;
+            IsPrivate = playlist.Visibility == PlaylistVisibility.Private;
+            IsUnlisted = playlist.Visibility == PlaylistVisibility.Unlisted;
+
+            // ═══ Cloud & Sync ═══
+            IsTwoWaySynced = playlist.SyncMode == PlaylistSyncMode.TwoWaySync;
+            HasCloudSource = playlist.HasCloudLink
+                             || (IsLikedPlaylist && _auth.IsAuthenticated);
+            CanRefreshFromCloud = IsTwoWaySynced
+                                  || (IsLikedPlaylist && _auth.IsAuthenticated);
+            HasStatusChips = IsReadOnly || IsPrivate || IsUnlisted || HasCloudSource;
+            LastSyncedText = FormatRelativeTime(playlist.LastSyncedAtUtc);
+
+            // ═══ Stats: views & date ═══
+            FormattedViewCount = FormatViewCount(playlist.ViewCount);
+            FormattedReleaseDate = FormatReleaseDate(playlist.ReleaseDate);
+
+            // ═══ Derived (одним блоком в конце) ═══
             this.RaisePropertyChanged(nameof(PlaylistYoutubeUrl));
             HasYoutubeLink = PlaylistYoutubeUrl is not null;
-            IsReadOnly = !playlist.IsEditable;
 
-            var allIds = await LibService.GetPlaylistTrackIdsAsync(playlistId);
+            // ═══ Tracks ═══
+            var allIds = await LibService.GetPlaylistTrackIdsAsync(playlistId, ct);
             loadCt.ThrowIfCancellationRequested();
 
             _playlistTrackIds = new HashSet<string>(allIds, StringComparer.Ordinal);
             TrackCount = allIds.Count;
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
 
-            TotalDuration = await LibService.GetPlaylistTotalDurationAsync(playlistId);
+            TotalDuration = await LibService.GetPlaylistTotalDurationAsync(playlistId, ct);
             loadCt.ThrowIfCancellationRequested();
 
             FormatDuration();
-            this.RaisePropertyChanged(nameof(PlaylistYoutubeUrl));
 
             await InitializeAsync(allIds, loadCt);
             loadCt.ThrowIfCancellationRequested();
@@ -449,7 +517,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             _ = LoadHeaderGradientAsync();
             _ = HydrateCacheStatusAsync(loadCt);
 
-            UpdateIsPlayingThisPlaylist();
+            UpdatePlaybackState();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -463,139 +531,116 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
         }
     }
 
-    /// <summary>
-    /// Настраивает реактивную подписку на состояние аудио-движка для умного морфинга кнопки.
-    /// </summary>
-    private void SubscribeToPlaybackSource()
+    private async Task LoadHeaderGradientAsync()
     {
-        Observable.CombineLatest(
-            _playerControl.ActivePlaylistIdObservable,
-            _playerControl.PlaybackStateObservable,
-            _playerControl.QueueCountObservable,
-            (activeId, state, qCount) => new { activeId, state.IsPlaying, qCount })
-        .ObserveOn(RxSchedulers.MainThreadScheduler)
-        .Subscribe(data =>
+        try
         {
-            bool isActivePlaylist = data.activeId == _currentPlaylistId;
-            IsPlayingThisPlaylist = isActivePlaylist;
-
-            if (isActivePlaylist)
+            if (_currentPlaylist?.EffectiveColor is { } colorStr)
             {
-                IsQueuePure = CheckQueuePurity();
+                try
+                {
+                    var color = Color.Parse(colorStr);
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                        HeaderBackground = DominantColorService.CreateHeaderGradient(color));
+                    return;
+                }
+                catch (FormatException)
+                {
+                    Log.Warn($"[Playlist] Invalid EffectiveColor: {colorStr}");
+                }
+            }
+
+            if (string.IsNullOrEmpty(ThumbnailUrl)
+                || !PlaylistEditorViewModel.IsValidUri(ThumbnailUrl))
+            {
+                await SetHeaderBackgroundAsync(null);
+                return;
+            }
+
+            var dominantColor = await _dominantColor.GetDominantColorAsync(ThumbnailUrl);
+            if (dominantColor is not null)
+            {
+                _ = SaveComputedColorAsync(dominantColor.Value);
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                    HeaderBackground = DominantColorService.CreateHeaderGradient(dominantColor.Value));
             }
             else
             {
-                IsQueuePure = false;
+                await SetHeaderBackgroundAsync(null);
             }
-
-            IsPlayingPure = IsQueuePure && data.IsPlaying;
-            this.RaisePropertyChanged(nameof(PlayButtonTooltip));
-        })
-        .DisposeWith(Disposables);
-    }
-
-    /// <summary>
-    /// Сверяет текущую очередь плеера с эталоном плейлиста за O(N).
-    /// </summary>
-    private bool CheckQueuePurity()
-    {
-        if (_playlistTrackIds == null) return false;
-
-        var queue = Audio.Queue;
-
-        // Быстрый отсев: если кто-то удалил/добавил трек, количество не совпадет
-        if (queue.Count != TrackCount) return false;
-
-        // Если количества совпадают, проверяем, нет ли "чужих" треков
-        for (int i = 0; i < queue.Count; i++)
-        {
-            if (!_playlistTrackIds.Contains(queue[i].Id))
-                return false;
         }
-
-        return true;
-    }
-
-    private void UpdateIsPlayingThisPlaylist()
-    {
-        IsPlayingThisPlaylist = _playerControl.ActivePlaylistId == _currentPlaylistId;
-
-        if (IsPlayingThisPlaylist)
+        catch (HttpRequestException ex)
         {
-            IsQueuePure = CheckQueuePurity();
-            IsPlayingPure = IsQueuePure && _playerControl.IsPlaying;
+            Log.Warn($"[Playlist] Thumbnail load failed (network): {ex.Message}");
+            await SetHeaderBackgroundAsync(null);
+            await _dialog.ShowInfoAsync(
+                SL["Dialog_Warning_Title"] ?? "Warning",
+                string.Format(SL["Playlist_ThumbnailLoadFailed"] ?? "Could not load cover: {0}", ex.Message));
         }
-        else
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
         {
-            IsQueuePure = false;
-            IsPlayingPure = false;
+            Log.Warn($"[Playlist] Invalid image: {ex.Message}");
+            await SetHeaderBackgroundAsync(null);
+            await _dialog.ShowInfoAsync(
+                SL["Dialog_Warning_Title"] ?? "Warning",
+                SL["Playlist_ThumbnailInvalidFormat"] ?? "Invalid cover format.");
         }
-        this.RaisePropertyChanged(nameof(PlayButtonTooltip));
+        catch (Exception ex)
+        {
+            Log.Warn($"[Playlist] Gradient error: {ex.Message}");
+            await SetHeaderBackgroundAsync(null);
+        }
     }
 
-    private async Task<List<TrackInfo>> GetAllTracksAsync()
+    private async Task SaveComputedColorAsync(Color color)
     {
-        if (_allTracksCacheValid && _allTracksCache is not null)
-            return _allTracksCache;
+        if (_currentPlaylist is null) return;
 
-        _allTracksCache = await LibService.GetPlaylistTracksAsync(_currentPlaylistId);
-        _allTracksCacheValid = true;
-        return _allTracksCache;
+        var colorHex = $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+        if (string.Equals(_currentPlaylist.ComputedColor, colorHex, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        try
+        {
+            _currentPlaylist.ComputedColor = colorHex;
+            await LibService.AddOrUpdatePlaylistAsync(_currentPlaylist);
+            Log.Debug($"[Playlist] ComputedColor saved: {colorHex}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Playlist] Failed to save ComputedColor: {ex.Message}");
+        }
     }
 
-    private void InvalidateAllTracksCache()
-    {
-        _allTracksCacheValid = false;
-        _allTracksCache = null;
-    }
-
-    private void FormatDuration()
-    {
-        int totalHours = (int)TotalDuration.TotalHours;
-        int minutes = TotalDuration.Minutes;
-        int seconds = TotalDuration.Seconds;
-
-        FormattedDuration = totalHours > 0
-            ? $"{totalHours}{SL["Duration_Hours"]} {minutes}{SL["Duration_Minutes"]}"
-            : minutes > 0
-                ? $"{minutes}{SL["Duration_Minutes"]} {seconds}{SL["Duration_Seconds"]}"
-                : $"{seconds}{SL["Duration_Seconds"]}";
-    }
+    private async Task SetHeaderBackgroundAsync(IBrush? brush) =>
+        await Dispatcher.UIThread.InvokeAsync(() => HeaderBackground = brush);
 
     #endregion
 
-    #region Command Implementations
+    #region Playback
 
-    /// <summary>
-    /// Обрабатывает нажатие умной кнопки (Трансформера).
-    /// <para>Чистая очередь -> мягкий Play/Pause.</para>
-    /// <para>Измененная очередь / Другой источник -> Полный сброс и перезапуск плейлиста.</para>
-    /// </summary>
     private async Task PlayAllAsync()
     {
         if (TrackCount == 0) return;
 
         if (IsQueuePure)
         {
-            // Очередь чистая: работаем как стандартная кнопка Play/Pause
-            await _playerControl.PlayPauseAsync().ConfigureAwait(false);
+            await _playerControl.PlayPauseAsync();
             return;
         }
 
-        // Очередь грязная (или активен другой плейлист): полностью стираем очередь и начинаем заново
-        var allTracks = await GetAllTracksAsync().ConfigureAwait(false);
+        var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
         _playerControl.SetShuffleEnabled(false);
         _playerControl.SetActivePlaylistId(_currentPlaylistId);
         IsShuffleActive = false;
-        await Audio.StartQueueAsync(allTracks, allTracks[0]).ConfigureAwait(false);
+        await Audio.StartQueueAsync(allTracks, allTracks[0]);
     }
 
     private async Task ShufflePlayAsync()
     {
         if (TrackCount == 0) return;
-
         var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
@@ -617,20 +662,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             .DisposeWith(Disposables);
     }
 
-    private async Task DownloadAllAsync()
-    {
-        IsDownloadingActive = true;
-
-        var allTracks = await GetAllTracksAsync();
-        foreach (var track in allTracks.Where(static t => !t.IsDownloaded))
-            Downloads.StartDownload(track);
-
-        Observable.Timer(TimeSpan.FromSeconds(2))
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => IsDownloadingActive = false)
-            .DisposeWith(Disposables);
-    }
-
     private async Task PlayFromPlaylistAsync(TrackInfo track)
     {
         try
@@ -648,21 +679,77 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
         }
     }
 
-    private async Task EditPlaylistAsync()
+    private async Task DownloadAllAsync()
     {
-        var result = await _editService.EditPlaylistAsync(
-            _currentPlaylistId,
-            _mainWindow.LockNavigation,
-            _mainWindow.UnlockNavigation);
+        IsDownloadingActive = true;
+        var allTracks = await GetAllTracksAsync();
+        foreach (var track in allTracks.Where(static t => !t.IsDownloaded))
+            Downloads.StartDownload(track);
 
-        if (result is { Changed: true })
-            await LoadPlaylistAsync(_currentPlaylistId);
+        Observable.Timer(TimeSpan.FromSeconds(2))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => IsDownloadingActive = false)
+            .DisposeWith(Disposables);
     }
+
+    private void EnqueueUniquePlaylistTracks()
+    {
+        var tracks = GetLoadedItemsSnapshot();
+        if (tracks.Count == 0) return;
+        Audio.EnqueuePlaylistWithNotification(tracks, PlaylistName);
+    }
+
+    /// <summary>
+    /// Подписка на аудио-движок для smart Play/Pause/Equalizer button.
+    /// </summary>
+    private void SubscribeToPlaybackSource()
+    {
+        Observable.CombineLatest(
+                _playerControl.ActivePlaylistIdObservable,
+                _playerControl.PlaybackStateObservable,
+                _playerControl.QueueCountObservable,
+                (activeId, state, qCount) => new { activeId, state.IsPlaying, qCount })
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(data =>
+            {
+                bool isActive = data.activeId == _currentPlaylistId;
+                IsPlayingThisPlaylist = isActive;
+                IsQueuePure = isActive && CheckQueuePurity();
+                IsPlayingPure = IsQueuePure && data.IsPlaying;
+                this.RaisePropertyChanged(nameof(PlayButtonTooltip));
+            })
+            .DisposeWith(Disposables);
+    }
+
+    private bool CheckQueuePurity()
+    {
+        if (_playlistTrackIds == null) return false;
+        var queue = Audio.Queue;
+        if (queue.Count != TrackCount) return false;
+
+        for (int i = 0; i < queue.Count; i++)
+        {
+            if (!_playlistTrackIds.Contains(queue[i].Id))
+                return false;
+        }
+        return true;
+    }
+
+    private void UpdatePlaybackState()
+    {
+        IsPlayingThisPlaylist = _playerControl.ActivePlaylistId == _currentPlaylistId;
+        IsQueuePure = IsPlayingThisPlaylist && CheckQueuePurity();
+        IsPlayingPure = IsQueuePure && _playerControl.IsPlaying;
+        this.RaisePropertyChanged(nameof(PlayButtonTooltip));
+    }
+
+    #endregion
+
+    #region Sync & Edit
 
     private async Task RefreshPlaylistAsync()
     {
-        if (!IsCloud) return;
-
+        if (!CanRefreshFromCloud) return;
         if (Interlocked.Exchange(ref _syncInProgressGate, 1) != 0)
         {
             Log.Debug("[Playlist] Sync ignored: already in progress");
@@ -674,8 +761,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
         try
         {
-            var notifications = AppEntry.Services
-                .GetRequiredService<NotificationService>();
+            var notifications = AppEntry.Services.GetRequiredService<NotificationService>();
 
             if (IsLikedPlaylist)
             {
@@ -688,7 +774,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
                     messageKey: "Sync_Success_Msg_LikedOnly",
                     severity: NotificationSeverity.Success,
                     durationMs: 4000);
-
                 NotificationService.PlaySuccessSound();
             }
             else
@@ -710,14 +795,11 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
                             messageKey: "Playlist_SyncSuccess_Details",
                             messageArgs:
                             [
-                                result.TracksAddedLocally,
-                                result.TracksAddedToCloud,
-                                result.TracksRemovedLocally,
-                                result.TracksRemovedFromCloud
+                                result.TracksAddedLocally, result.TracksAddedToCloud,
+                                result.TracksRemovedLocally, result.TracksRemovedFromCloud
                             ],
                             severity: NotificationSeverity.Success,
                             durationMs: 4000);
-
                         NotificationService.PlaySuccessSound();
                     }
                 }
@@ -742,6 +824,17 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
         }
     }
 
+    private async Task EditPlaylistAsync()
+    {
+        var result = await _editService.EditPlaylistAsync(
+            _currentPlaylistId,
+            _mainWindow.LockNavigation,
+            _mainWindow.UnlockNavigation);
+
+        if (result is { Changed: true })
+            await LoadPlaylistAsync(_currentPlaylistId);
+    }
+
     private async Task CopyPlaylistLinkAsync()
     {
         if (_currentPlaylist?.YoutubeId is not { Length: > 0 } ytId)
@@ -753,98 +846,8 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
         }
 
         await Clipboard.SetTextAsync($"https://www.youtube.com/playlist?list={ytId}");
-        CopyHintService.Instance.Show(
-            SL["Playlist_LinkCopied"] ?? "Copied!",
-            CopyHintKind.Success);
+        CopyHintService.Instance.Show(SL["Playlist_LinkCopied"] ?? "Copied!", CopyHintKind.Success);
     }
-
-    private async Task LoadHeaderGradientAsync()
-    {
-        try
-        {
-            if (_currentPlaylist?.EffectiveColor is { } effectiveColorStr)
-            {
-                try
-                {
-                    var effectiveColor = Color.Parse(effectiveColorStr);
-                    await Dispatcher.UIThread.InvokeAsync(() =>
-                        HeaderBackground = DominantColorService.CreateHeaderGradient(effectiveColor));
-                    return;
-                }
-                catch (FormatException)
-                {
-                    Log.Warn($"[Playlist] Invalid EffectiveColor: {effectiveColorStr}");
-                }
-            }
-
-            if (string.IsNullOrEmpty(ThumbnailUrl)
-                || !PlaylistEditorViewModel.IsValidUri(ThumbnailUrl))
-            {
-                await SetHeaderBackgroundAsync(null);
-                return;
-            }
-
-            var dominantColor = await _dominantColor.GetDominantColorAsync(ThumbnailUrl);
-
-            if (dominantColor is not null)
-            {
-                _ = SaveComputedColorAsync(dominantColor.Value);
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                    HeaderBackground = DominantColorService.CreateHeaderGradient(dominantColor.Value));
-            }
-            else
-            {
-                await SetHeaderBackgroundAsync(null);
-            }
-        }
-        catch (HttpRequestException ex)
-        {
-            Log.Warn($"[Playlist] Thumbnail load failed (network): {ex.Message}");
-            await SetHeaderBackgroundAsync(null);
-            await _dialog.ShowInfoAsync(
-                SL["Dialog_Warning_Title"] ?? "Warning",
-                string.Format(SL["Playlist_ThumbnailLoadFailed"] ?? "Could not load cover: {0}",
-                    ex.Message));
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
-        {
-            Log.Warn($"[Playlist] Invalid image: {ex.Message}");
-            await SetHeaderBackgroundAsync(null);
-            await _dialog.ShowInfoAsync(
-                SL["Dialog_Warning_Title"] ?? "Warning",
-                SL["Playlist_ThumbnailInvalidFormat"] ?? "Invalid cover format.");
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[Playlist] Gradient error: {ex.Message}");
-            await SetHeaderBackgroundAsync(null);
-        }
-    }
-
-    private async Task SaveComputedColorAsync(Color color)
-    {
-        if (_currentPlaylist is null) return;
-
-        var colorHex = $"#{color.R:X2}{color.G:X2}{color.B:X2}";
-
-        if (string.Equals(_currentPlaylist.ComputedColor, colorHex, StringComparison.OrdinalIgnoreCase))
-            return;
-
-        try
-        {
-            _currentPlaylist.ComputedColor = colorHex;
-            await LibService.AddOrUpdatePlaylistAsync(_currentPlaylist);
-            Log.Debug($"[Playlist] ComputedColor saved: {colorHex}");
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[Playlist] Failed to save ComputedColor: {ex.Message}");
-        }
-    }
-
-    private async Task SetHeaderBackgroundAsync(IBrush? brush) =>
-        await Dispatcher.UIThread.InvokeAsync(
-            () => HeaderBackground = brush);
 
     private async Task MergePlaylistAsync()
     {
@@ -870,21 +873,100 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
         }
     }
 
-    /// <summary>
-    /// Добавляет в очередь воспроизведения только уникальные треки из текущего плейлиста.
-    /// Делегирует выполнение общему расширению AudioEngine.
-    /// </summary>
-    private void EnqueueUniquePlaylistTracks()
-    {
-        var tracks = GetLoadedItemsSnapshot();
-        if (tracks.Count == 0) return;
+    #endregion
 
-        Audio.EnqueuePlaylistWithNotification(tracks, PlaylistName);
+    #region Cache & Helpers
+
+    private async Task<List<TrackInfo>> GetAllTracksAsync()
+    {
+        if (_allTracksCacheValid && _allTracksCache is not null)
+            return _allTracksCache;
+
+        _allTracksCache = await LibService.GetPlaylistTracksAsync(_currentPlaylistId);
+        _allTracksCacheValid = true;
+        return _allTracksCache;
+    }
+
+    private void InvalidateAllTracksCache()
+    {
+        _allTracksCacheValid = false;
+        _allTracksCache = null;
     }
 
     #endregion
 
-    #region IDisposable
+    #region Formatting
+
+    /// <summary>
+    /// Форматирует количество просмотров в компактный вид с локализованным суффиксом.
+    /// </summary>
+    private static string? FormatViewCount(long? views)
+    {
+        if (views is null or <= 0) return null;
+
+        long v = views.Value;
+        string number = v switch
+        {
+            >= 1_000_000_000 => string.Create(CultureInfo.CurrentCulture, $"{v / 1_000_000_000.0:0.#}B"),
+            >= 1_000_000 => string.Create(CultureInfo.CurrentCulture, $"{v / 1_000_000.0:0.#}M"),
+            >= 10_000 => string.Create(CultureInfo.CurrentCulture, $"{v / 1_000.0:0.#}K"),
+            _ => v.ToString("N0", CultureInfo.CurrentCulture)
+        };
+
+        return $"{number} {SL["Playlist_Views"] ?? "views"}";
+    }
+
+    /// <summary>
+    /// Форматирует дату обновления плейлиста с учётом текущей локали.
+    /// </summary>
+    private static string? FormatReleaseDate(DateOnly? date)
+    {
+        if (date is null) return null;
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        int daysDiff = today.DayNumber - date.Value.DayNumber;
+
+        if (daysDiff == 0) return SL["Playlist_Updated_JustNow"] ?? "обновлено сегодня";
+        if (daysDiff == 1) return SL["Playlist_Updated_Yesterday"] ?? "обновлено вчера";
+        if (daysDiff is > 1 and < 7)
+            return string.Format(SL["Playlist_Updated_DaysAgo"] ?? "обновлено {0} дн. назад", daysDiff);
+
+        return date.Value.ToString("d MMM yyyy", CultureInfo.CurrentCulture);
+    }
+
+    private void FormatDuration()
+    {
+        int totalHours = (int)TotalDuration.TotalHours;
+        int minutes = TotalDuration.Minutes;
+        int seconds = TotalDuration.Seconds;
+
+        FormattedDuration = totalHours > 0
+            ? $"{totalHours}{SL["Duration_Hours"]} {minutes}{SL["Duration_Minutes"]}"
+            : minutes > 0
+                ? $"{minutes}{SL["Duration_Minutes"]} {seconds}{SL["Duration_Seconds"]}"
+                : $"{seconds}{SL["Duration_Seconds"]}";
+    }
+
+    /// <summary>
+    /// Форматирует UTC-время в локализованную относительную строку.
+    /// </summary>
+    private static string? FormatRelativeTime(DateTime? utcTime)
+    {
+        if (utcTime is null) return null;
+
+        var diff = DateTime.UtcNow - utcTime.Value;
+
+        if (diff.TotalMinutes < 1) return SL["Playlist_Synced_JustNow"];
+        if (diff.TotalHours < 1) return string.Format(SL["Playlist_Synced_MinutesAgo"], (int)diff.TotalMinutes);
+        if (diff.TotalDays < 1) return string.Format(SL["Playlist_Synced_HoursAgo"], (int)diff.TotalHours);
+        if (diff.TotalDays < 7) return string.Format(SL["Playlist_Synced_DaysAgo"], (int)diff.TotalDays);
+        if (diff.TotalDays < 30) return string.Format(SL["Playlist_Synced_WeeksAgo"], (int)(diff.TotalDays / 7));
+        return string.Format(SL["Playlist_Synced_MonthsAgo"], (int)(diff.TotalDays / 30));
+    }
+
+    #endregion
+
+    #region Dispose
 
     protected override void Dispose(bool disposing)
     {
@@ -899,7 +981,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             InvalidateAllTracksCache();
             _currentPlaylist = null;
         }
-
         base.Dispose(disposing);
     }
 
