@@ -205,6 +205,14 @@ public sealed partial class CachingStreamSource : IAudioSource
     private double _latency2;
     private double _estimatedBandwidthBytesPerSec;
 
+    /// <summary>
+    /// Счётчик накопленных замеров bandwidth.
+    /// Используется для определения bootstrap-фазы EMA:
+    /// первые <see cref="StreamingConfig.BandwidthBootstrapSampleCount"/> замеров
+    /// получают повышенный вес для быстрой начальной сходимости.
+    /// </summary>
+    private int _bandwidthSampleCount;
+
     //  State flags 
     private volatile bool _initialized;
     private volatile bool _disposed;
@@ -341,8 +349,27 @@ public sealed partial class CachingStreamSource : IAudioSource
     #region Network Assessment
 
     /// <summary>
-    /// Оценивает деградацию сети по средней задержке (RTT) и отношению
-    /// реальной пропускной способности к битрейту аудиопотока.
+    /// Оценивает деградацию сети по совокупности трёх независимых сигналов:
+    /// <list type="number">
+    ///   <item>
+    ///     <b>Абсолютный bandwidth</b> — сравнение с профильными порогами
+    ///     (<see cref="StreamingConfig.AbsoluteCriticalBandwidthBytesPerSec"/>,
+    ///     <see cref="StreamingConfig.AbsoluteDegradedBandwidthBytesPerSec"/>).
+    ///     Защищает от ложного <c>Normal</c> на узком канале с низкобитрейтным аудио,
+    ///     где relative ratio может быть велик (10 Мбит/с + 128 kbps → ratio ≈ 78).
+    ///   </item>
+    ///   <item>
+    ///     <b>Жизнеспособность канала</b> — bandwidth должен превышать битрейт аудио
+    ///     как минимум в <see cref="StreamingConfig.MinViableBandwidthMultiplier"/>×,
+    ///     иначе буферизация невозможна в принципе.
+    ///   </item>
+    ///   <item>
+    ///     <b>Relative ratio и RTT</b> — классическая оценка по отношению
+    ///     bandwidth/bitrate и средней задержке.
+    ///   </item>
+    /// </list>
+    /// Сигналы проверяются в порядке убывания жёсткости: первый сработавший
+    /// определяет итоговый уровень.
     /// </summary>
     private NetworkDegradationLevel GetNetworkDegradationLevel()
     {
@@ -355,7 +382,27 @@ public sealed partial class CachingStreamSource : IAudioSource
             bw = _estimatedBandwidthBytesPerSec;
         }
 
+        // Сигнал 1: абсолютный потолок канала
+        // Relative ratio вводит в заблуждение на узких каналах с низким битрейтом.
+        // Проверяем абсолютные пороги первыми, чтобы не пропустить критическое состояние.
+        if (bw > 0)
+        {
+            if (bw < _config.AbsoluteCriticalBandwidthBytesPerSec)
+                return NetworkDegradationLevel.Critical;
+
+            if (bw < _config.AbsoluteDegradedBandwidthBytesPerSec)
+                return NetworkDegradationLevel.Degraded;
+        }
+
         double bitrateBps = Math.Max(1, _bitrate) * 1000.0 / 8.0;
+
+        // Сигнал 2: жизнеспособность канала
+        // Если bandwidth не обеспечивает даже MinViableBandwidthMultiplier×bitrate,
+        // буфер будет истощаться быстрее, чем пополняться.
+        if (bw > 0 && bw < bitrateBps * _config.MinViableBandwidthMultiplier)
+            return NetworkDegradationLevel.Critical;
+
+        // Сигнал 3: relative ratio и RTT
         double widthRatio = bw > 0 ? bw / bitrateBps : double.PositiveInfinity;
 
         if (avgLatencyMs > 2500 || widthRatio < 3.0)
@@ -454,27 +501,27 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         var deg = GetNetworkDegradationLevel();
 
-        // На high-latency сети нужен больший contiguous startup prefix,
-        // иначе decoder/parse path получает один маленький кусок, но не может
-        // стабильно пройти дальше до следующего cluster/block.
+        // Снижены требования к startup prefix на слабых сетях.
+        // Ожидание 8 секунд данных на канале 10 Мбит/с блокировало UI.
+        // 2-3 секунды достаточно для запуска декодера, остальное дотянет фоновый поток.
         int desiredMs = deg switch
         {
-            NetworkDegradationLevel.Critical => 8000,
-            NetworkDegradationLevel.Degraded => 5000,
+            NetworkDegradationLevel.Critical => 2500,
+            NetworkDegradationLevel.Degraded => 3000,
             _ => 3000
         };
 
         int minClamp = deg switch
         {
-            NetworkDegradationLevel.Critical => 96 * 1024,
-            NetworkDegradationLevel.Degraded => 64 * 1024,
+            NetworkDegradationLevel.Critical => 32 * 1024,
+            NetworkDegradationLevel.Degraded => 48 * 1024,
             _ => 32 * 1024
         };
 
         int maxClamp = deg switch
         {
-            NetworkDegradationLevel.Critical => 256 * 1024,
-            NetworkDegradationLevel.Degraded => 192 * 1024,
+            NetworkDegradationLevel.Critical => 96 * 1024,
+            NetworkDegradationLevel.Degraded => 128 * 1024,
             _ => 128 * 1024
         };
 
@@ -621,16 +668,10 @@ public sealed partial class CachingStreamSource : IAudioSource
                 _config.InitialPrebufferBytes,
                 (int)Math.Min(_contentLength, int.MaxValue));
 
-            // Partial Cache Fast Start:
-            // если у нас уже есть достаточный contiguous local prefix от начала файла,
-            // НЕ делаем обязательный сетевой bootstrap.
-            // Это позволяет стартовать parser/decoder немедленно, а continuation URL
-            // получать параллельно в фоне.
             bool hasLocalBootstrap = HasLocalInitialBootstrapData(initialBytes);
 
             if (!hasLocalBootstrap)
             {
-                // Если URL ещё не готов (partial fast start path), сначала лениво получаем continuation URL.
                 if (string.IsNullOrWhiteSpace(_currentUrl))
                 {
                     bool urlReady = await EnsureUrlAvailableAsync(_lifetimeCts.Token).ConfigureAwait(false);
@@ -658,6 +699,13 @@ public sealed partial class CachingStreamSource : IAudioSource
             _cacheEntry.Bitrate = _bitrate;
             _initialized = true;
 
+            // ── Startup Prefetch: заливаем warmup-буфер параллельно с decoder init ──
+            // Перекрывает задержку первой итерации preload loop (PreloadIntervalMs)
+            // и обеспечивает данные для warmup-проверки в AudioPlayer.
+            // Overlap protection в RegisterOrGetActiveDownload гарантирует,
+            // что preload loop не продублирует этот запрос.
+            FireStartupPrefetchIfNeeded(initialBytes);
+
             _preloadTask = Task.Run(
                 () => PreloadLoopAsync(_lifetimeCts.Token), _lifetimeCts.Token);
 
@@ -669,6 +717,58 @@ public sealed partial class CachingStreamSource : IAudioSource
         {
             Log.Error($"[CachingSource] Init failed: {ex.Message}", ex);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Запускает немедленный fire-and-forget prefetch после успешного parser init.
+    /// <para>
+    /// Перекрывает мёртвое время между завершением <see cref="InitializeAsync"/>
+    /// и первой итерацией preload loop (<see cref="StreamingConfig.PreloadIntervalMs"/>).
+    /// Без этого на канале с TTFB 1–2.5 с warmup ждёт 500 мс + N round-trips,
+    /// задерживая playback на 1–1.5 с.
+    /// </para>
+    /// </summary>
+    /// <param name="alreadyFetchedBytes">
+    /// Объём данных, уже полученных initial fetch. Prefetch начинается встык после них.
+    /// </param>
+    private void FireStartupPrefetchIfNeeded(int alreadyFetchedBytes)
+    {
+        if (_cacheEntry is { IsComplete: true })
+            return;
+
+        long prefetchStart = alreadyFetchedBytes;
+        long remaining = _contentLength - prefetchStart;
+        if (remaining <= 0)
+            return;
+
+        int prefetchLength = (int)Math.Min(_config.StartupPrefetchBytes, remaining);
+        if (prefetchLength <= 0)
+            return;
+
+        Log.Debug(
+            $"[CachingSource] Startup prefetch: {prefetchLength / 1024}KB " +
+            $"at offset {prefetchStart} (initial={alreadyFetchedBytes / 1024}KB)");
+
+        _ = SafeStartupPrefetchAsync(prefetchStart, prefetchLength, _lifetimeCts!.Token);
+    }
+
+    /// <summary>
+    /// Best-effort фоновый prefetch для заполнения warmup-буфера.
+    /// Ошибки не прерывают инициализацию — preload loop подхватит недокачанное.
+    /// </summary>
+    private async Task SafeStartupPrefetchAsync(long start, int length, CancellationToken ct)
+    {
+        try
+        {
+            var token = CurrentDownloadToken;
+            await EnsureRangeAsync(start, length, token, isCritical: false)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Debug($"[CachingSource] Startup prefetch failed (non-fatal): {ex.Message}");
         }
     }
 

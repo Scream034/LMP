@@ -111,6 +111,12 @@ public static class AudioSourceFactory
 
     /// <summary>
     /// Создаёт аудио источник.
+    /// <para>
+    /// Для YouTube CDN URL автоматически запускает спекулятивный прогрев TCP+TLS-соединения
+    /// через <see cref="CdnConnectionPreWarmer.PreWarmHost"/> перед созданием
+    /// <see cref="CachingStreamSource"/>. Это позволяет перекрыть часть TLS-рукопожатия
+    /// с setup-логикой фабрики.
+    /// </para>
     /// </summary>
     public static async Task<IAudioSource> CreateAsync(
           string url,
@@ -167,13 +173,19 @@ public static class AudioSourceFactory
                     bitrate: startupEntry.Bitrate > 0 ? startupEntry.Bitrate : bitrateHint,
                     httpClient: httpClient,
                     cacheManager: _globalCacheManager,
-                    config: config,
+                    config: config, 
                     urlAcquirer: urlAcquirer,
                     urlRefresher: urlRefresher);
             }
 
             throw new ArgumentException("No URL provided and no cache available", nameof(url));
         }
+
+        // CDN Connection Pre-Warming
+        // Запускаем TCP+TLS-рукопожатие к CDN-ноде НЕМЕДЛЕННО после получения URL,
+        // не дожидаясь завершения format detection, cache check и создания source.
+        // К моменту первого GET в InitializeAsync соединение уже будет в pool.
+        CdnConnectionPreWarmer.PreWarmHost(httpClient, url, ct);
 
         var format = await DetectFormatAsync(url, httpClient, ct).ConfigureAwait(false);
         if (format == AudioFormat.Unknown)
@@ -216,6 +228,26 @@ public static class AudioSourceFactory
             config,
             urlAcquirer,
             urlRefresher);
+    }
+
+    /// <summary>
+    /// Запускает спекулятивный прогрев TCP+TLS-соединений к последним известным CDN-хостам.
+    /// <para>
+    /// Вызывается из <c>AudioEngine</c> <b>перед</b> YouTube API call при подготовке
+    /// к воспроизведению нового трека. Пока API call выполняется (~500 мс),
+    /// TCP+TLS-рукопожатие завершается в фоне.
+    /// </para>
+    /// <para>
+    /// Best-effort: если CDN-хост нового трека совпадёт с одним из недавних —
+    /// TTFB первого GET упадёт с ~3 с до ~100 мс.
+    /// Если не совпадёт — ресурсы потрачены, но playback не затронут.
+    /// </para>
+    /// </summary>
+    /// <param name="httpClient">HTTP-клиент с общим connection pool.</param>
+    /// <param name="ct">Токен отмены (lifetime плеера).</param>
+    public static void PreWarmCdnConnections(HttpClient httpClient, CancellationToken ct)
+    {
+        CdnConnectionPreWarmer.PreWarmRecentHosts(httpClient, ct);
     }
 
     /// <summary>

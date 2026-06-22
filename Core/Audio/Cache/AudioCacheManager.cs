@@ -1387,7 +1387,11 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                 Entries = entries
             };
 
-            string json = JsonSerializer.Serialize(envelope, G.Json.Beautiful);
+            // Используем тот же source-generated контекст (camelCase),
+            // что и LoadIndex, чтобы JSON корректно десериализовался при следующем старте.
+            string json = JsonSerializer.Serialize(
+                envelope, AppJsonContext.Default.AudioCacheIndexEnvelope);
+
             await File.WriteAllTextAsync(indexPath, json).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -1424,7 +1428,10 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                 Entries = entries
             };
 
-            string json = JsonSerializer.Serialize(envelope, G.Json.Beautiful);
+            // Тот же source-generated контекст (camelCase), что и LoadIndex.
+            string json = JsonSerializer.Serialize(
+                envelope, AppJsonContext.Default.AudioCacheIndexEnvelope);
+
             File.WriteAllText(indexPath, json);
         }
         catch (Exception ex)

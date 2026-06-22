@@ -126,6 +126,89 @@ public sealed record StreamingConfig
 
     #endregion
 
+    #region Network Assessment
+
+    /// <summary>
+    /// Safety factor для throughput-based планирования размера запроса (0.0–1.0).
+    /// <para>
+    /// По модели THROUGHPUT (dash.js): запрашиваем не более этой доли оценённой
+    /// пропускной способности. Значение 0.9 означает: использовать 90% от EMA-оценки,
+    /// оставляя 10% запаса, чтобы не упираться в потолок канала и не конкурировать
+    /// за bandwidth с параллельными запросами.
+    /// </para>
+    /// </summary>
+    public double ThroughputSafetyFactor { get; init; } = Defaults.ThroughputSafetyFactor;
+
+    /// <summary>
+    /// Абсолютный нижний порог bandwidth (байт/сек), ниже которого сеть считается
+    /// критически деградированной вне зависимости от relative ratio к битрейту.
+    /// <para>
+    /// Решает проблему: на узком канале (10 Мбит/с) с низкобитрейтным аудио (128 kbps)
+    /// relative ratio ≈ 78 — система считает сеть «нормальной», хотя канал абсолютно узкий.
+    /// </para>
+    /// </summary>
+    public int AbsoluteCriticalBandwidthBytesPerSec { get; init; } = Defaults.AbsoluteCriticalBandwidthBytesPerSec;
+
+    /// <summary>
+    /// Абсолютный нижний порог bandwidth (байт/сек), ниже которого сеть считается
+    /// деградированной вне зависимости от relative ratio к битрейту.
+    /// </summary>
+    public int AbsoluteDegradedBandwidthBytesPerSec { get; init; } = Defaults.AbsoluteDegradedBandwidthBytesPerSec;
+
+    /// <summary>
+    /// Минимально жизнеспособный множитель bandwidth к битрейту аудио.
+    /// Если <c>bandwidth &lt; bitrate × multiplier</c> — канал считается критическим
+    /// (не обеспечивает даже минимального запаса над стримингом).
+    /// </summary>
+    public double MinViableBandwidthMultiplier { get; init; } = Defaults.MinViableBandwidthMultiplier;
+
+    /// <summary>
+    /// Максимальный уровень буфера вперёд (мс), при котором активируется BDP floor.
+    /// <para>
+    /// По BBA-принципу (Netflix/dash.js): BDP floor нужен только при пустом буфере
+    /// (startup/seek фаза). В steady state (буфер выше этого порога) оценка
+    /// пропускной способности не нужна — достаточно demand-based sizing.
+    /// </para>
+    /// </summary>
+    public int BdpFloorMaxBufferMs { get; init; } = Defaults.BdpFloorMaxBufferMs;
+
+    /// <summary>
+    /// Количество первых замеров bandwidth, к которым применяется повышенный bootstrap weight.
+    /// <para>
+    /// Устраняет проблему медленной сходимости EMA на startup: первые N замеров
+    /// используют <see cref="BandwidthBootstrapWeight"/> вместо size-based веса,
+    /// что позволяет системе быстро выйти на реальную оценку канала.
+    /// </para>
+    /// </summary>
+    public int BandwidthBootstrapSampleCount { get; init; } = Defaults.BandwidthBootstrapSampleCount;
+
+    /// <summary>
+    /// Вес EMA для bootstrap-замеров (первые <see cref="BandwidthBootstrapSampleCount"/> измерений).
+    /// Должен быть выше steady-state веса для быстрой начальной сходимости.
+    /// </summary>
+    public double BandwidthBootstrapWeight { get; init; } = Defaults.BandwidthBootstrapWeight;
+
+    #endregion
+
+    #region Startup Pipeline
+
+    /// <summary>
+    /// Объём данных (байт) для немедленного фонового prefetch после инициализации parser.
+    /// <para>
+    /// Запускается параллельно с созданием decoder и warmup-проверкой,
+    /// чтобы к моменту принятия решения о старте воспроизведения буфер уже был
+    /// частично заполнен. Перекрывает задержку <see cref="PreloadIntervalMs"/>
+    /// первой итерации preload loop.
+    /// </para>
+    /// <para>
+    /// Рекомендуемое значение: достаточно для покрытия warmup-порога
+    /// <c>(TargetBufferMs / 2)</c> секунд аудио при целевом битрейте.
+    /// </para>
+    /// </summary>
+    public int StartupPrefetchBytes { get; init; } = Defaults.StartupPrefetchBytes;
+
+    #endregion
+
     /// <summary>
     /// Значения по умолчанию.
     /// </summary>
@@ -160,5 +243,54 @@ public sealed record StreamingConfig
         public const int PreloadIntervalMs = 500;
 
         public const double ThrottleMultiplier = 3.0;
+
+        // Network Assessment
+
+        /// <summary>
+        /// 90% от оценённой пропускной способности (модель THROUGHPUT, dash.js).
+        /// Оставляем 10% запаса, чтобы не упираться в потолок канала.
+        /// </summary>
+        public const double ThroughputSafetyFactor = 0.90;
+
+        /// <summary>
+        /// 128 KB/s ≈ 1 Мбит/с — абсолютный минимум для стабильного аудиостриминга.
+        /// Ниже этого порога любой relative ratio будет вводить в заблуждение.
+        /// </summary>
+        public const int AbsoluteCriticalBandwidthBytesPerSec = 128 * 1024;
+
+        /// <summary>
+        /// 512 KB/s ≈ 4 Мбит/с — нижняя граница комфортного стриминга с буферизацией.
+        /// </summary>
+        public const int AbsoluteDegradedBandwidthBytesPerSec = 512 * 1024;
+
+        /// <summary>
+        /// Канал должен быть как минимум в 1.5× быстрее битрейта аудио, иначе
+        /// воспроизведение без буферизации невозможно.
+        /// </summary>
+        public const double MinViableBandwidthMultiplier = 1.5;
+
+        /// <summary>
+        /// BDP floor активен только пока буфер меньше 4 секунд (startup/seek фаза).
+        /// В steady state достаточно demand-based sizing без BDP-коррекции.
+        /// </summary>
+        public const int BdpFloorMaxBufferMs = 4_000;
+
+        /// <summary>
+        /// Первые 3 замера используют повышенный bootstrap weight для быстрой
+        /// начальной сходимости EMA.
+        /// </summary>
+        public const int BandwidthBootstrapSampleCount = 3;
+
+        /// <summary>
+        /// 30% вес для bootstrap-замеров — в 6× выше минимального steady-state веса (5%),
+        /// что обеспечивает быстрое приближение к реальной скорости канала.
+        /// </summary>
+        public const double BandwidthBootstrapWeight = 0.30;
+
+        /// <summary>
+        /// 128 KB — перекрывает ~5–7 секунд аудио на 128–192 kbps,
+        /// что достаточно для warmup-порога на Medium профиле.
+        /// </summary>
+        public const int StartupPrefetchBytes = 128 * 1024;
     }
 }

@@ -18,7 +18,13 @@ public static class StreamingProfiles
     };
 
     /// <summary>
-    /// Экономия трафика и высокая отзывчивость.
+    /// Экономия трафика и высокая отзывчивость на слабых и нестабильных каналах.
+    /// <para>
+    /// Начальный fetch минимален (24 KB) — достаточно для WebM/MP4 заголовков.
+    /// Startup prefetch (48 KB) перекрывает warmup-ожидание на узком канале.
+    /// Абсолютные пороги bandwidth снижены, чтобы не форсировать одиночный поток
+    /// раньше времени.
+    /// </para>
     /// </summary>
     public static StreamingConfig Low { get; } = new()
     {
@@ -40,7 +46,8 @@ public static class StreamingProfiles
         PostRefreshDelayMs = 800,
 
         TargetBufferMs = 10_000,
-        InitialPrebufferBytes = 64 * 1024,
+        InitialPrebufferBytes = 24 * 1024,
+        StartupPrefetchBytes = 48 * 1024,
         SeekPreloadBytes = 96 * 1024,
         MinBufferAheadForBackgroundFillMs = 3000,
 
@@ -49,11 +56,21 @@ public static class StreamingProfiles
         MaxBackgroundRequestsPerSession = 60,
 
         PreloadIntervalMs = 800,
-        ThrottleMultiplier = 2.0
+        ThrottleMultiplier = 2.0,
+
+        ThroughputSafetyFactor = 0.85,
+        AbsoluteCriticalBandwidthBytesPerSec = 64 * 1024,
+        AbsoluteDegradedBandwidthBytesPerSec = 256 * 1024,
+        BdpFloorMaxBufferMs = 3_000
     };
 
     /// <summary>
-    /// Сбалансированный профиль.
+    /// Сбалансированный профиль для типичного домашнего соединения (5–30 Мбит/с).
+    /// <para>
+    /// Начальный fetch (48 KB) — 3 alignment-блока, достаточно для всех контейнеров.
+    /// Startup prefetch (128 KB) перекрывает ~5–7 секунд аудио, что покрывает
+    /// warmup-порог без ожидания preload loop.
+    /// </para>
     /// </summary>
     public static StreamingConfig Medium { get; } = new()
     {
@@ -75,7 +92,8 @@ public static class StreamingProfiles
         PostRefreshDelayMs = 500,
 
         TargetBufferMs = 12_000,
-        InitialPrebufferBytes = 128 * 1024,
+        InitialPrebufferBytes = 48 * 1024,
+        StartupPrefetchBytes = 128 * 1024,
         SeekPreloadBytes = 256 * 1024,
         MinBufferAheadForBackgroundFillMs = 4000,
 
@@ -88,7 +106,7 @@ public static class StreamingProfiles
     };
 
     /// <summary>
-    /// Профиль для быстрых и стабильных сетей.
+    /// Профиль для быстрых и стабильных сетей (50+ Мбит/с).
     /// </summary>
     public static StreamingConfig High { get; } = new()
     {
@@ -110,7 +128,8 @@ public static class StreamingProfiles
         PostRefreshDelayMs = 300,
 
         TargetBufferMs = 15_000,
-        InitialPrebufferBytes = 256 * 1024,
+        InitialPrebufferBytes = 96 * 1024,
+        StartupPrefetchBytes = 256 * 1024,
         SeekPreloadBytes = 384 * 1024,
         MinBufferAheadForBackgroundFillMs = 5000,
 
@@ -123,7 +142,7 @@ public static class StreamingProfiles
     };
 
     /// <summary>
-    /// Профиль для максимально быстрого канала.
+    /// Профиль для максимально быстрого канала (100+ Мбит/с).
     /// </summary>
     public static StreamingConfig Ultra { get; } = new()
     {
@@ -145,7 +164,8 @@ public static class StreamingProfiles
         PostRefreshDelayMs = 300,
 
         TargetBufferMs = 18_000,
-        InitialPrebufferBytes = 512 * 1024,
+        InitialPrebufferBytes = 128 * 1024,
+        StartupPrefetchBytes = 384 * 1024,
         SeekPreloadBytes = 768 * 1024,
         MinBufferAheadForBackgroundFillMs = 6000,
 

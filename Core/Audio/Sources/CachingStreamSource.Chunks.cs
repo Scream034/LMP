@@ -225,17 +225,75 @@ public sealed partial class CachingStreamSource
         Log.Debug($"[CachingSource] Latency: {latencyMs:F1}ms (Average Trend: {currentAverage:F1}ms)");
     }
 
-    private void SaveBandwidth(double speedBytesPerSec)
+    /// <summary>
+    /// Сохраняет замер пропускной способности через взвешенное скользящее среднее (EMA).
+    /// <para>
+    /// Алгоритм работает в двух фазах:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>
+    ///     <b>Bootstrap-фаза</b> (первые <see cref="StreamingConfig.BandwidthBootstrapSampleCount"/>
+    ///     замеров): применяется фиксированный повышенный вес
+    ///     (<see cref="StreamingConfig.BandwidthBootstrapWeight"/>).
+    ///     Обеспечивает быструю сходимость EMA на startup и после seek,
+    ///     когда предыдущая оценка отсутствует или устарела.
+    ///   </item>
+    ///   <item>
+    ///     <b>Steady-state фаза</b>: вес пропорционален объёму переданных данных —
+    ///     от 5% для мелких блоков (TCP slow-start, кэши ОС) до 50% для крупных (≥ 256 KB).
+    ///     Сглаживает случайные всплески скорости от коротких чанков.
+    ///   </item>
+    /// </list>
+    /// </summary>
+    /// <param name="speedBytesPerSec">Измеренная скорость в байт/сек.</param>
+    /// <param name="bytesTransferred">Объём переданных данных, определяющий вес замера.</param>
+    private void SaveBandwidth(double speedBytesPerSec, int bytesTransferred)
     {
         double currentSpeed;
         lock (_latencyLock)
         {
-            if (_estimatedBandwidthBytesPerSec <= 0) _estimatedBandwidthBytesPerSec = speedBytesPerSec;
-            else _estimatedBandwidthBytesPerSec = (0.3 * speedBytesPerSec) + (0.7 * _estimatedBandwidthBytesPerSec);
+            if (_estimatedBandwidthBytesPerSec <= 0)
+            {
+                // Первый замер: инициализируем EMA напрямую без усреднения.
+                _estimatedBandwidthBytesPerSec = speedBytesPerSec;
+                _bandwidthSampleCount = 1;
+            }
+            else
+            {
+                _bandwidthSampleCount++;
+
+                double weight;
+                if (_bandwidthSampleCount <= _config.BandwidthBootstrapSampleCount)
+                {
+                    // Bootstrap-фаза: фиксированный высокий вес для быстрого выхода
+                    // на реальную оценку канала независимо от размера блока.
+                    weight = _config.BandwidthBootstrapWeight;
+                }
+                else
+                {
+                    // Steady-state: вес зависит от объёма переданных данных.
+                    // Крупные блоки (≥ 256 KB) несут больше информации о реальной скорости,
+                    // мелкие блоки (< 16 KB) могут отражать TCP slow-start или кэш ОС.
+                    weight = Math.Clamp(
+                        bytesTransferred / (double)(256 * 1024),
+                        min: 0.05,
+                        max: 0.50);
+                }
+
+                _estimatedBandwidthBytesPerSec =
+                    (weight * speedBytesPerSec) + ((1.0 - weight) * _estimatedBandwidthBytesPerSec);
+            }
+
             currentSpeed = _estimatedBandwidthBytesPerSec;
         }
-        double speedMbps = (currentSpeed * 8) / 1000_000.0;
-        Log.Debug($"[CachingSource] Throughput: {speedMbps:F2} Mbps ({currentSpeed / 1024.0:F1} KB/s)");
+
+        double speedMbps = currentSpeed * 8.0 / 1_000_000.0;
+        Log.Debug(
+            $"[CachingSource] Throughput: {speedMbps:F2} Mbps ({currentSpeed / 1024.0:F1} KB/s, " +
+            $"sample={_bandwidthSampleCount}, " +
+            $"phase={(_bandwidthSampleCount <= _config.BandwidthBootstrapSampleCount
+                      ? "bootstrap"
+                      : "steady")})");
     }
 
     private double GetAverageLatencyInternal()
@@ -258,6 +316,30 @@ public sealed partial class CachingStreamSource
 
     #region Range Planning
 
+    /// <summary>
+    /// Вычисляет оптимальный диапазон для следующего HTTP range-запроса (MAPO planner).
+    /// <para>
+    /// Алгоритм работает в два режима в зависимости от состояния буфера:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>
+    ///     <b>Startup/seek фаза</b> (<c>currentBufferSec &lt; BdpFloorMaxBufferMs</c>):
+    ///     активируется BDP floor — запрашиваем не менее одного Bandwidth-Delay Product,
+    ///     чтобы максимально загрузить канал и быстро наполнить буфер.
+    ///   </item>
+    ///   <item>
+    ///     <b>Steady-state фаза</b> (буфер достаточен): чистый demand-based sizing
+    ///     по модели BBA (Buffer-Based Adaptation). BDP floor не применяется —
+    ///     достаточно качать ровно столько, сколько нужно для поддержания
+    ///     <see cref="StreamingConfig.TargetBufferMs"/>.
+    ///   </item>
+    /// </list>
+    /// <para>
+    /// Ко всем bandwidth-based оценкам применяется
+    /// <see cref="StreamingConfig.ThroughputSafetyFactor"/> (≤ 1.0) по модели
+    /// THROUGHPUT (dash.js) — резервируем часть канала, чтобы не упираться в его потолок.
+    /// </para>
+    /// </summary>
     private DownloadPlan BuildDownloadPlan(long requestedPosition, int minimumLength, bool isCritical)
     {
         long start = AlignDown(requestedPosition, _requestAlignmentBytes);
@@ -324,11 +406,17 @@ public sealed partial class CachingStreamSource
 
         int maxLength = Math.Max(minLengthAligned, effectiveMaxLength);
 
+        // Throughput safety factor (модель THROUGHPUT, dash.js)
+        // Используем ThroughputSafetyFactor от оценённой пропускной способности,
+        // чтобы не упираться в потолок канала и оставлять запас для других запросов.
+        // На узком канале (10 Мбит/с) без этого фактора safeBytes = 100% bandwidth,
+        // что приводит к конкуренции за канал между R1 (seek) и R2 (preload).
         double safeBytes = 0;
         if (estimatedBandwidth > 0)
         {
+            double effectiveBandwidth = estimatedBandwidth * _config.ThroughputSafetyFactor;
             double timeLeftSec = Math.Max(0.050, currentBufferSec - (avgLatencyMs / 1000.0));
-            safeBytes = estimatedBandwidth * timeLeftSec;
+            safeBytes = effectiveBandwidth * timeLeftSec;
         }
 
         long selectedBytes;
@@ -339,10 +427,17 @@ public sealed partial class CachingStreamSource
 
         if (selectedBytes < minLengthAligned) selectedBytes = minLengthAligned;
 
-        if (estimatedBandwidth > 0 && avgLatencyMs > 600)
+        // BDP floor (только в startup/seek фазе)
+        // По BBA-принципу (Netflix/dash.js): в steady state буфер уже достаточен,
+        // оценка пропускной способности не нужна — demand-based sizing справляется.
+        // BDP floor активируем только при пустом буфере, когда нужно максимально
+        // загрузить канал за один RTT, чтобы быстро наполнить буфер.
+        bool isStartupOrSeekPhase = currentBufferSec < (_config.BdpFloorMaxBufferMs / 1000.0);
+        if (estimatedBandwidth > 0 && avgLatencyMs > 600 && isStartupOrSeekPhase)
         {
             double latencySec = avgLatencyMs / 1000.0;
-            long bdpBytes = (long)(estimatedBandwidth * latencySec);
+            // BDP × safety factor: не претендуем на 100% трубы даже при заполнении буфера.
+            long bdpBytes = (long)(estimatedBandwidth * _config.ThroughputSafetyFactor * latencySec);
             long bdpFloor = AlignUp(Math.Max(minLengthAligned, bdpBytes * 2), _requestAlignmentBytes);
             if (bdpFloor > selectedBytes) selectedBytes = bdpFloor;
         }
@@ -375,14 +470,9 @@ public sealed partial class CachingStreamSource
 
         int plannedLength = (int)selectedBytes;
 
-        // если хвост планируемого aligned range уже есть локально / in-flight,
-        // скачиваем только первый missing gap, а не весь chunk целиком.
-        // Иначе RAM cache отвергнет overlap, и успешно скачанные байты исчезнут.
         int trimmedLength = TrimLengthToFirstKnownCoverage(start, plannedLength, includeInflight: true);
         if (trimmedLength > 0 && trimmedLength < plannedLength)
-        {
             plannedLength = trimmedLength;
-        }
 
         return new DownloadPlan(start, plannedLength);
     }
@@ -834,6 +924,12 @@ public sealed partial class CachingStreamSource
 
             Interlocked.Exchange(ref _consecutive403Count, 0);
 
+            // Регистрация CDN-хоста для спекулятивного прогрева
+            // После первого успешного ответа запоминаем CDN-ноду.
+            // При следующем PlayTrack AudioEngine.PreWarmCdnConnections откроет
+            // соединение к этому хосту ДО YouTube API call, перекрывая TLS-рукопожатие.
+            Http.CdnConnectionPreWarmer.RecordHost(_currentUrl);
+
             if (response.Content.Headers.ContentType?.MediaType?.Contains("yt-ump") == true)
                 throw new ChunkDownloadFatalException("YouTube returned encrypted UMP format", chunkIndex: logicalIndex, consecutiveFailures: 0, reason: ChunkDownloadFailureReason.UmpFormat, trackId: _trackId);
 
@@ -883,10 +979,12 @@ public sealed partial class CachingStreamSource
                     bodySw.Stop();
                 }
 
-                if (actualLength > 0 && bodySw.Elapsed.TotalMilliseconds > 5)
+                // Увеличены пороги: игнорируем микро-замеры (< 16KB или < 20мс), 
+                // так как они дают ложные всплески из-за TCP Slow Start или кэшей ОС.
+                if (actualLength >= 16384 && bodySw.Elapsed.TotalMilliseconds >= 20)
                 {
                     double speedBytesPerSec = actualLength / (bodySw.Elapsed.TotalMilliseconds / 1000.0);
-                    SaveBandwidth(speedBytesPerSec);
+                    SaveBandwidth(speedBytesPerSec, actualLength);
                 }
 
                 if (ct.IsCancellationRequested)

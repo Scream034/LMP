@@ -729,6 +729,12 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
     /// <summary>
     /// Основной метод подготовки и запуска воспроизведения трека с поддержкой SeekPosition.
+    /// <para>
+    /// Перед разрешением stream URL запускается спекулятивный прогрев TCP+TLS-соединений
+    /// к последним известным YouTube CDN нодам через <see cref="CdnConnectionPreWarmer"/>.
+    /// Пока YouTube API отвечает (~500 мс), TLS-рукопожатие завершается в фоне —
+    /// при совпадении CDN-ноды TTFB первого GET падает с ~3 с до ~100 мс.
+    /// </para>
     /// </summary>
     private async Task PlayTrackCoreAsync(TrackInfo track, int session, CancellationToken ct, TimeSpan? seekPosition = null)
     {
@@ -775,11 +781,18 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                 _pendingGainWrites.Enqueue((track.Id, track.CachedNormalizationGain));
             }
 
+            // ── CDN Connection Pre-Warming ──────────────────────────────────
+            // Запускаем спекулятивный прогрев TCP+TLS к последним известным CDN-нодам
+            // ПЕРЕД YouTube API call. Пока API отвечает (~500 мс), TLS-рукопожатие
+            // завершается в фоне. При совпадении ноды → TTFB ~100 мс вместо ~3 с.
+            // Fire-and-forget: если full cache / partial cache — прогрев просто не пригодится.
+            AudioSourceFactory.PreWarmCdnConnections(
+                Audio.Http.SharedHttpClient.Instance, _lifetimeCts.Token);
+
             string streamUrl = "";
             int bitrateHint = 0;
             const int maxStartupAttempts = 3;
 
-            // Локальный цикл повторных попыток для защиты от транзиентных отмен (например, при перезагрузке Auth-клиента на старте)
             for (int attempt = 1; attempt <= maxStartupAttempts; attempt++)
             {
                 try
@@ -795,11 +808,11 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                     if (_session.IsStaleOrCancelled(session, ct) || IsSealedFailedTrack(track.Id)) return;
 
                     await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct, seekPosition: seekPosition).ConfigureAwait(false);
-                    break; // Успешно запустились, выходим из цикла попыток
+                    break;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    throw; // Сессия отменена пользователем, пробрасываем выше для тихого выхода
+                    throw;
                 }
                 catch (OperationCanceledException ex) when (attempt < maxStartupAttempts)
                 {
@@ -814,8 +827,6 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         }
         catch (OperationCanceledException ex)
         {
-            // Если сессионный токен отменен — выходим молча. 
-            // Если транзиентная отмена исчерпала лимит попыток, останавливаем плеер, но НЕ блокируем трек в IsSealedFailedTrack.
             if (!ct.IsCancellationRequested)
             {
                 Log.Warn($"[AudioEngine] Playback startup aborted due to exhausted transient cancellations: {ex.Message}");
@@ -823,7 +834,6 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                 RaiseError(ex);
             }
         }
-        // Предупреждение CS0168 устранено (ex убран)
         catch (Exception) when (_session.IsStaleOrCancelled(session, ct)) { }
         catch (Exception ex)
         {
@@ -1486,11 +1496,21 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// При выходе из suspend вместо бесполезного HEAD к <c>redirector.googlevideo.com</c>
+    /// прогреваем TCP+TLS к последним реально использованным CDN-нодам.
+    /// Это обеспечивает мгновенное возобновление preload после разворачивания окна.
+    /// </remarks>
     public void OnResume(SuspendLevel previousLevel)
     {
         _isSuspended = false;
         ApplyLifecycleSourceSuspendPolicy();
-        _ = PreWarmHttpConnectionAsync();
+
+        // Прогрев реальных CDN-нод вместо redirector:
+        // после suspend idle-соединения могут быть закрыты ОС/сервером.
+        // Спекулятивный прогрев восстанавливает их до первого реального range-запроса.
+        AudioSourceFactory.PreWarmCdnConnections(
+            Audio.Http.SharedHttpClient.Instance, _lifetimeCts.Token);
     }
 
     private static async Task PreWarmHttpConnectionAsync()

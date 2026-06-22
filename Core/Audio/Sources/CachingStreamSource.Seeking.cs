@@ -9,12 +9,21 @@ public sealed partial class CachingStreamSource
     /// а <c>AudioPlayer</c> перейдёт в <c>Buffering</c> и автоматически возобновит
     /// воспроизведение, когда decoder/ring buffer наполнится.</para>
     /// <para>Это полностью развязывает actor loop плеера от задержек сети.</para>
+    ///
     /// <para><b>Epoch reset policy:</b> на высокой задержке (600ms+) убийство
     /// TCP/TLS-соединений через <see cref="ResetDownloadEpoch"/> катастрофически дорого
     /// (переподключение 5–18 секунд). Поэтому epoch сбрасывается ТОЛЬКО когда
     /// данных на seek-позиции нет локально и нужна новая загрузка.
     /// Если данные уже есть — preload loop естественно подстроится
     /// к новой <see cref="_currentReadOffset"/> на следующей итерации (~500ms).</para>
+    ///
+    /// <para><b>R1/R2 dedup:</b> после завершения R1 (<see cref="EnsureRangeAsync"/>
+    /// с isCritical=true) фактически закоммиченный prefix читается через
+    /// <see cref="GetBufferedBytesAhead"/> и передаётся в R2
+    /// (<see cref="PreloadRangeForSeekFireAndForgetAsync"/> как <c>skipBytes</c>).
+    /// Это исключает дублирование байт: R2 продолжает ровно с того места,
+    /// до которого дошёл R1, вне зависимости от того, скачал ли R1 ровно
+    /// <c>minimalBytes</c> или больше (BDP floor, adaptive sizing).</para>
     /// </remarks>
     public async ValueTask<bool> SeekAsync(long positionMs, CancellationToken ct)
     {
@@ -48,16 +57,11 @@ public sealed partial class CachingStreamSource
         if (HasMinimalLocalSeekStartData(targetBytePos))
         {
             Log.Debug($"[CachingSource] Seek: sufficient local prefix at {targetBytePos}, starting immediately");
-            // Epoch НЕ сбрасываем: preload loop подстроится к новой позиции
-            // через _currentReadOffset на следующей итерации (~500ms).
-            // Живые TCP-соединения сохраняются — критично для high-latency сетей.
-            _ = PreloadRangeForSeekFireAndForgetAsync(targetBytePos);
+            _ = PreloadRangeForSeekFireAndForgetAsync(targetBytePos, skipBytes: 0);
             return true;
         }
 
         //  4. Медленный путь: данных нет, нужна сетевая загрузка 
-        // Только здесь сбрасываем epoch: это переключает preload loop
-        // на новую позицию и отменяет загрузки, которые уже бесполезны.
         ResetDownloadEpoch();
 
         int minimalBytes = GetMinimalSeekStartBytes(targetBytePos);
@@ -87,8 +91,17 @@ public sealed partial class CachingStreamSource
             Log.Warn($"[CachingSource] Seek: critical range failed: {ex.Message}");
         }
 
-        //  5. Запуск фоновой предзагрузки 
-        _ = PreloadRangeForSeekFireAndForgetAsync(targetBytePos);
+        //  5. Запуск фоновой предзагрузки (R2) 
+        // Читаем реальный committed prefix ПОСЛЕ завершения R1.
+        // R1 мог скачать больше, чем minimalBytes (BDP floor, adaptive sizing) —
+        // передаём фактически закоммиченную длину, чтобы R2 не запрашивал
+        // уже полученные байты повторно.
+        long committedAhead = GetBufferedBytesAhead(targetBytePos);
+        int r2SkipBytes = (int)Math.Min(committedAhead, (long)int.MaxValue);
+
+        Log.Debug($"[CachingSource] Seek: R1 committed {r2SkipBytes} bytes (requested {minimalBytes}), R2 starts at offset {r2SkipBytes}");
+
+        _ = PreloadRangeForSeekFireAndForgetAsync(targetBytePos, skipBytes: r2SkipBytes);
 
         return true;
     }
@@ -134,11 +147,9 @@ public sealed partial class CachingStreamSource
     /// Fire-and-forget preload диапазона вокруг seek-позиции.
     /// Не блокирует возврат из <see cref="SeekAsync"/>.
     /// </summary>
-    /// <remarks>
-    /// Если до завершения загрузки произойдёт новый seek (epoch change),
-    /// все запросы отменятся автоматически через <see cref="CurrentDownloadToken"/>.
-    /// </remarks>
-    private async Task PreloadRangeForSeekFireAndForgetAsync(long targetBytePos)
+    /// <param name="targetBytePos">Базовая позиция перемотки.</param>
+    /// <param name="skipBytes">Количество байт, уже запрошенных синхронным критическим путём.</param>
+    private async Task PreloadRangeForSeekFireAndForgetAsync(long targetBytePos, int skipBytes)
     {
         try
         {
@@ -146,23 +157,24 @@ public sealed partial class CachingStreamSource
             var downloadToken = CurrentDownloadToken;
             int preloadLength = GetAdaptiveSeekPreloadBytes();
 
-            if (targetBytePos >= _contentLength)
+            // Сдвигаем стартовую позицию, чтобы не запрашивать то, что уже качается в SeekAsync
+            long startPos = targetBytePos + skipBytes;
+            int remainingPreload = preloadLength - skipBytes;
+
+            if (startPos >= _contentLength || remainingPreload <= 0)
                 return;
 
-            if (preloadLength > _contentLength - targetBytePos)
-                preloadLength = (int)(_contentLength - targetBytePos);
-
-            if (preloadLength <= 0)
-                return;
+            if (remainingPreload > _contentLength - startPos)
+                remainingPreload = (int)(_contentLength - startPos);
 
             if (Interlocked.Read(ref _downloadEpoch) != epochAtStart)
                 return;
 
-            if (!IsRangeLocallyAvailable(targetBytePos, preloadLength))
+            if (!IsRangeLocallyAvailable(startPos, remainingPreload))
             {
-                Log.Debug($"[CachingSource] Seek preloading range at {targetBytePos}, bytes={preloadLength}");
+                Log.Debug($"[CachingSource] Seek preloading next range at {startPos}, bytes={remainingPreload}");
 
-                await EnsureRangeAsync(targetBytePos, preloadLength, downloadToken, isCritical: false)
+                await EnsureRangeAsync(startPos, remainingPreload, downloadToken, isCritical: false)
                     .ConfigureAwait(false);
             }
         }

@@ -31,10 +31,16 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Фоновый цикл предзагрузки диапазонов.
-    /// Удерживает буфер вокруг текущей позиции, учитывает in-flight загрузки,
-    /// адаптирует параллелизм и размер запросов к состоянию сети.
-    /// Добавлена логика opportunistic completion: если трек почти скачан,
-    /// preload loop докачивает оставшиеся gaps до полного кэширования.
+    /// <para>
+    /// Первая итерация выполняется без задержки, чтобы немедленно подхватить
+    /// работу <see cref="SafeStartupPrefetchAsync"/> и продолжить заполнение буфера.
+    /// Последующие итерации разделены интервалом <see cref="StreamingConfig.PreloadIntervalMs"/>.
+    /// </para>
+    /// <para>
+    /// Адаптирует параллелизм и размер запросов к состоянию сети.
+    /// Включает opportunistic completion: если трек почти скачан,
+    /// добиваем оставшиеся gaps до полного кэширования.
+    /// </para>
     /// </summary>
     private async Task PreloadLoopAsync(CancellationToken ct)
     {
@@ -115,9 +121,6 @@ public sealed partial class CachingStreamSource
                     continue;
                 }
 
-                //  Штатный интервал ожидания между итерациями 
-                await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
-
                 if (_cacheEntry.IsComplete) break;
 
                 //  Snapshot текущего состояния 
@@ -129,7 +132,10 @@ public sealed partial class CachingStreamSource
                 int pending = GetActiveDownloadCount();
 
                 if (pending >= adaptiveMaxDownloads)
+                {
+                    await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
                     continue;
+                }
 
                 int adaptiveTargetBufferMs = GetAdaptiveTargetBufferMs();
                 int refillStopMs = adaptiveTargetBufferMs + TargetBufferHysteresisMs;
@@ -145,7 +151,6 @@ public sealed partial class CachingStreamSource
                     long plannedAheadBytes = GetBufferedBytesAheadIncludingInflight(currentOffset);
                     int plannedAheadMs = ConvertBufferedBytesToMs(plannedAheadBytes);
 
-                    // Достаточно буферизовано — стоп
                     if (plannedAheadMs >= refillStopMs)
                         break;
 
@@ -164,18 +169,14 @@ public sealed partial class CachingStreamSource
                     _ = SafeEnsureRangeAsync(nextPosition, requestBytes, token, critical);
                     pending++;
 
-                    // На деградированной сети — один запрос за итерацию
                     if (degradation != NetworkDegradationLevel.Normal)
                         break;
 
-                    // На нормальной сети — только critical запросы идут цепочкой
                     if (!critical)
                         break;
                 }
 
                 //  Opportunistic completion fill 
-                // Если трек почти скачан — добиваем оставшиеся gaps,
-                // независимо от текущей позиции воспроизведения.
                 if (pending < adaptiveMaxDownloads && !_cacheEntry.IsComplete)
                 {
                     long downloadedBytes = _cacheEntry.DownloadedBytes;
@@ -206,6 +207,12 @@ public sealed partial class CachingStreamSource
                     lastReportedProgress = progress;
                 }
 #endif
+
+                //  Интервал ожидания перед следующей итерацией 
+                // Delay в конце цикла, а не в начале:
+                // первая итерация выполняется немедленно после startup,
+                // что устраняет мёртвое время PreloadIntervalMs между init и первым preload-запросом.
+                await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { break; }
             catch { /* Защита от неожиданных исключений в фоновом цикле */ }
@@ -232,7 +239,6 @@ public sealed partial class CachingStreamSource
         var ranges = _cacheEntry.GetDownloadedRangesSnapshot();
         int fired = 0;
 
-        // Ищем gap перед первым диапазоном
         long scanPosition = 0;
 
         for (int i = 0; i <= ranges.Length && fired < maxRequests; i++)
@@ -248,7 +254,6 @@ public sealed partial class CachingStreamSource
             }
             else
             {
-                // gap после последнего диапазона до конца файла
                 gapStart = scanPosition;
                 gapEnd = totalSize;
             }
@@ -260,7 +265,6 @@ public sealed partial class CachingStreamSource
             if (gapLength <= 0)
                 continue;
 
-            // Ограничиваем размер одного запроса
             int requestLength = (int)Math.Min(gapLength, _config.MaxRequestSizeBytes);
 
             _ = SafeEnsureRangeAsync(gapStart, requestLength, downloadToken, isCritical: false);
@@ -315,7 +319,6 @@ public sealed partial class CachingStreamSource
         if (diskRanges.Length == 0 && ramBlocks.Length == 0)
             return [];
 
-        //  Собираем все диапазоны в один массив и сортируем 
         var all = new List<(long Start, long End)>(diskRanges.Length + ramBlocks.Length);
 
         for (int i = 0; i < diskRanges.Length; i++)
@@ -326,7 +329,6 @@ public sealed partial class CachingStreamSource
 
         all.Sort((a, b) => a.Start.CompareTo(b.Start));
 
-        //  Merge overlapping ranges и нормализуем 
         var merged = new List<(double, double)>(all.Count);
         long mergedStart = -1;
         long mergedEnd = -1;
