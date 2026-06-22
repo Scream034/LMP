@@ -133,7 +133,7 @@
     <PublishTrimmed>true</PublishTrimmed>
     <TrimMode>partial</TrimMode>
     <TrimmerRootDescriptor>trimming.xml</TrimmerRootDescriptor>
-    
+
     <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
 
     <NoWarn>$(NoWarn);IL2026</NoWarn>
@@ -160,12 +160,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="Native/quickjs_bridge.dll">
+    <Content Include="Native/quickjs_bridge.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      <!-- Указываем компилятору упаковать DLL внутрь SingleFile EXE -->
       <ExcludeFromSingleFile>false</ExcludeFromSingleFile>
-    </None>
+    </Content>
   </ItemGroup>
 
   <ItemGroup Label="Hot Reload" Condition="'$(Configuration)' == 'Debug'">
