@@ -121,7 +121,7 @@ public sealed class TestConfig
 
         /// <summary>Путь к документации.</summary>
         [JsonPropertyName("docs")]
-        public string Docs { get; init; } = "https://github.com/Scream034/LMP/tree/avalonia/Tests/Framework/TestConfig.cs";
+        public string Docs { get; init; } = "https://github.com/Scream034/LMP/tree/main/Tests/Framework/TestConfig.cs";
 
         /// <summary>Версия схемы конфига.</summary>
         [JsonPropertyName("schemaVersion")]
