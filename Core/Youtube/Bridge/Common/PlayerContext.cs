@@ -1,34 +1,80 @@
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace LMP.Core.Youtube.Bridge.Common;
 
 /// <summary>
-/// Контекст версии плеера YouTube + закэшированный base.js.
-/// Иммутабельный, потокобезопасный.
+/// Представляет иммутабельный и потокобезопасный контекст конкретной версии JS-плеера YouTube.
+/// Координирует хранение оригинального кода, результатов AST-оптимизации и скомпилированного нативного байткода.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Архитектура памяти (Предотвращение LOH Fragmentation):</b>
+/// Исходный код YouTube плеера (<c>base.js</c>) весит ~2.5 МБ. Строки такого размера аллоцируются в Large Object Heap (LOH).
+/// Длительное удержание таких строк в памяти неизбежно приводит к фрагментации LOH и провоцирует дорогостоящие GC Gen 2 сборки.
+/// После компиляции контекста в нативный движок, метод <see cref="ReleaseRawScripts"/> принудительно освобождает оригинальный 
+/// <see cref="BaseJs"/>, минимизируя нагрузку на сборщик мусора.
+/// </para>
+/// <para>
+/// <b>Безопасность Байткода QuickJS (Native Crash Prevention):</b>
+/// Нативный байткод QuickJS-NG бинарно несовместим между разными версиями компилятора или конфигурациями моста.
+/// Попытка загрузить устаревший или несовместимый байткод вызывает SegFault нативного процесса, что роняет всё .NET приложение.
+/// Для защиты от таких падений кэш байткода содержит маркер ABI нативного моста в имени файла (<see cref="GetBytecodeCachePath"/>).
+/// </para>
+/// </remarks>
 public sealed partial class PlayerContext
 {
     private const int MaxCachedVersions = 10;
     private const int MaxAgeDays = 14;
 
+    /// <summary>
+    /// Легковесный объект синхронизации (.NET 9+), защищающий процесс компиляции 
+    /// и оптимизации скрипта от гонок потоков (Thread Races).
+    /// </summary>
     private readonly Lock _prepLock = new();
 
-    /// <summary>Версия плеера (например, 6c5cb4f4).</summary>
+    /// <summary>
+    /// Хэш-идентификатор версии плеера YouTube (например, <c>"06cb0078"</c>).
+    /// Используется как ключевой маркер во всех файловых операциях и путях кэша.
+    /// </summary>
     public string Version { get; }
 
-    /// <summary>Полный исходный код base.js. Может быть очищен после подготовки скрипта.</summary>
+    /// <summary>
+    /// Полный оригинальный исходный код плеера (<c>base.js</c>), загруженный из сети или диска.
+    /// </summary>
+    /// <value>
+    /// Может быть сброшен в <see cref="string.Empty"/> после инициализации контекста методом <see cref="ReleaseRawScripts"/>
+    /// для предотвращения удержания памяти в LOH.
+    /// </value>
     public string BaseJs { get; private set; }
 
-    /// <summary>Препроцессированный и оптимизированный код JS. Может быть очищен после подготовки скрипта.</summary>
+    /// <summary>
+    /// Оптимизированный методом Tree Shaking и готовый к исполнению JS-код.
+    /// </summary>
+    /// <remarks>
+    /// Содержит только те функции и зависимости, которые непосредственно участвуют в обходе подписи (Sig) и N-токена.
+    /// </remarks>
     public string? PreprocessedJs { get; private set; }
 
-    /// <summary>Временная метка подписи (sts).</summary>
+    /// <summary>
+    /// Временная метка подписи (STS / Signature Timestamp).
+    /// Необходима для формирования валидных запросов к серверам раздачи видео (видео-кукам) YouTube.
+    /// </summary>
     public string? Sts { get; private set; }
 
-    /// <summary>Время кэширования контекста.</summary>
+    /// <summary>
+    /// Временная метка создания объекта в памяти приложения.
+    /// Используется для контроля ротации и инвалидации устаревших контекстов плеера в рамках 12-часового цикла YouTube.
+    /// </summary>
     public DateTimeOffset CachedAt { get; }
 
-    /// <summary>Создает новый контекст плеера.</summary>
+    /// <summary>
+    /// Инициализирует новый экземпляр класса <see cref="PlayerContext"/>.
+    /// </summary>
+    /// <param name="version">Уникальная строковая версия плеера.</param>
+    /// <param name="baseJs">Оригинальный JS-код плеера плеера.</param>
+    /// <param name="preprocessedJs">Необязательный уже оптимизированный JS-код.</param>
+    /// <param name="sts">Необязательная метка подписи. Если передана как <c>null</c>, будет извлечена автоматически.</param>
     public PlayerContext(string version, string baseJs, string? preprocessedJs = null, string? sts = null)
     {
         Version = version;
@@ -39,19 +85,26 @@ public sealed partial class PlayerContext
     }
 
     /// <summary>
-    /// Обеспечивает подготовку препроцессированного скрипта.
-    /// Jint.Prepared полностью удален.
+    /// Возвращает препроцессированный JS-код или компилирует его «на лету» (Lazy Initialization)
+    /// с использованием предоставленного делегата оптимизации.
     /// </summary>
+    /// <param name="preprocessor">Делегат, выполняющий синтаксический разбор AST и Tree Shaking плеера.</param>
+    /// <returns>Строка с оптимизированным JavaScript-кодом.</returns>
+    /// <remarks>
+    /// Метод потокобезопасен. После успешной компиляции результат автоматически записывается на диск asynchronously.
+    /// </remarks>
     public string GetOrPrepareScript(Func<string> preprocessor)
     {
-        if (!string.IsNullOrEmpty(PreprocessedJs)) return PreprocessedJs!;
+        if (!string.IsNullOrEmpty(PreprocessedJs)) return PreprocessedJs;
 
         lock (_prepLock)
         {
-            if (!string.IsNullOrEmpty(PreprocessedJs)) return PreprocessedJs!;
+            if (!string.IsNullOrEmpty(PreprocessedJs)) return PreprocessedJs;
 
             string js = preprocessor();
             PreprocessedJs = js;
+
+            // Запись кэша в фоновом режиме, чтобы не блокировать основной поток выполнения
             _ = SavePreprocessedCacheAsync();
 
             return js;
@@ -59,9 +112,12 @@ public sealed partial class PlayerContext
     }
 
     /// <summary>
-    /// Освобождает исходную гигантскую строку base.js из оперативной памяти для предотвращения фрагментации кучи больших объектов (LOH).
-    /// Препроцессированный скрипт (PreprocessedJs) строго сохраняется, так как он необходим для работы обоих дешифраторов.
+    /// Освобождает гигантскую строку оригинального скрипта плеера (<see cref="BaseJs"/>) из оперативной памяти.
     /// </summary>
+    /// <remarks>
+    /// <b>Важно:</b> Вызывать строго ПОСЛЕ того, как контекст нативного моста QuickJS был успешно инициализирован.
+    /// Оптимизированный код (<see cref="PreprocessedJs"/>) сохраняется, так как он может потребоваться для отладки или реинициализации.
+    /// </remarks>
     public void ReleaseRawScripts()
     {
         lock (_prepLock)
@@ -71,10 +127,15 @@ public sealed partial class PlayerContext
         }
     }
 
-    /// <summary>Проверяет, является ли кэш актуальным (не более 12 часов для соответствия циклу ротации YouTube).</summary>
+    /// <summary>
+    /// Проверяет, актуален ли данный контекст плеера в оперативной памяти.
+    /// </summary>
+    /// <returns><c>true</c>, если с момента кэширования прошло менее 12 часов (соответствует циклу ротации YouTube).</returns>
     public bool IsValid() => (DateTimeOffset.UtcNow - CachedAt).TotalHours < 12;
 
-    /// <summary>Сохраняет препроцессированный JS на диск.</summary>
+    /// <summary>
+    /// Асинхронно записывает оптимизированную JS-версию и временную метку STS на диск.
+    /// </summary>
     public async Task SavePreprocessedCacheAsync()
     {
         try
@@ -99,7 +160,10 @@ public sealed partial class PlayerContext
         }
     }
 
-    /// <summary>Сохраняет base.js в файловый кэш.</summary>
+    /// <summary>
+    /// Выполняет полное асинхронное кэширование: оригинального кода, оптимизированного JS и метаданных на диск.
+    /// Запускает процедуру автоматической очистки устаревших файлов.
+    /// </summary>
     public async Task SaveCacheAsync()
     {
         try
@@ -122,7 +186,9 @@ public sealed partial class PlayerContext
         }
     }
 
-    /// <summary>Загружает base.js или его препроцессированную версию из кэша.</summary>
+    /// <summary>
+    /// Загружает метаданные из кэша. Избегает чтения тяжелых JS-файлов, если доступен готовый байткод.
+    /// </summary>
     public static PlayerContext? LoadFromCache(string version)
     {
         try
@@ -130,20 +196,33 @@ public sealed partial class PlayerContext
             var prepPath = GetPreprocessedCachePath(version);
             var stsPath = GetStsCachePath(version);
             var baseJsPath = GetCachePath(version);
+            var bytecodePath = GetBytecodeCachePath(version);
 
+            // Улучшенная оптимизация:
+            // Если на диске уже есть готовый байткод и файл STS — нам вообще не нужны тяжелые JS-файлы.
+            // Мы считываем только 5 байт STS (необходим для внешних HTTP-запросов к CDN Google)
+            // и мгновенно возвращаем контекст. Экономия 2.5 МБ дискового I/O на каждом старте!
+            if (File.Exists(bytecodePath) && File.Exists(stsPath))
+            {
+                var sts = File.ReadAllText(stsPath).Trim();
+                Log.Debug($"[PlayerContext] Bytecode and STS caches exist for {version}. Skipping base.js/preprocessed.js disk I/O.");
+                return new PlayerContext(version, string.Empty, preprocessedJs: null, sts);
+            }
+
+            // Быстрый путь (байткода нет, но есть оптимизированный JS):
+            // Возвращаем объект. preprocessed.js будет считан лениво только при реальном обращении к свойству.
             if (File.Exists(prepPath) && File.Exists(stsPath))
             {
                 var age = DateTimeOffset.UtcNow - File.GetLastWriteTimeUtc(prepPath);
                 if (age.TotalDays <= MaxAgeDays)
                 {
-                    var preprocessedJs = File.ReadAllText(prepPath);
                     var sts = File.ReadAllText(stsPath).Trim();
-
-                    Log.Debug($"[PlayerContext] Loaded preprocessed cache for {version} ({preprocessedJs.Length / 1024}KB, sts={sts})");
-                    return new PlayerContext(version, string.Empty, preprocessedJs, sts);
+                    Log.Debug($"[PlayerContext] Loaded metadata cache for {version} (sts={sts})");
+                    return new PlayerContext(version, string.Empty, preprocessedJs: null, sts);
                 }
             }
 
+            // Медленный путь (полный фоллбек на оригинальный base.js):
             if (!File.Exists(baseJsPath)) return null;
 
             var baseAge = DateTimeOffset.UtcNow - File.GetLastWriteTimeUtc(baseJsPath);
@@ -163,7 +242,12 @@ public sealed partial class PlayerContext
         }
     }
 
-    /// <summary>Загружает base.js из кэша БЕЗ проверки возраста (для тестов).</summary>
+    /// <summary>
+    /// Загружает кэшированный контекст плеера с диска БЕЗ валидации даты последнего изменения.
+    /// </summary>
+    /// <remarks>
+    /// Используется преимущественно в Unit-тестах для работы со стабильными локальными дампами.
+    /// </remarks>
     public static PlayerContext? LoadFromCacheNoExpiry(string version)
     {
         try
@@ -197,15 +281,33 @@ public sealed partial class PlayerContext
         }
     }
 
+    /// <summary>Возвращает физический путь к файлу оригинального <c>base.js</c> на диске.</summary>
     private static string GetCachePath(string version) =>
         Path.Combine(G.Folder.NTokenCache, $"player_{version}_basejs.txt");
 
+    /// <summary>Возвращает физический путь к файлу оптимизированного JS-кода.</summary>
     private static string GetPreprocessedCachePath(string version) =>
         Path.Combine(G.Folder.NTokenCache, $"player_{version}_preprocessed.js");
 
+    /// <summary>Возвращает физический путь к текстовому файлу с временной меткой STS плеера.</summary>
     private static string GetStsCachePath(string version) =>
         Path.Combine(G.Folder.NTokenCache, $"player_{version}_sts.txt");
 
+    /// <summary>Возвращает физический путь к файлу кэша бинарного байткода QuickJS.</summary>
+    /// <remarks>
+    /// Имя файла содержит маркер <c>QuickJsNative.BridgeAbi</c>, что гарантирует 
+    /// инвалидацию старого байткода при любом обновлении нативного моста (защита от аппаратного Access Violation).
+    /// </remarks>
+    public static string GetBytecodeCachePath(string version) =>
+        Path.Combine(G.Folder.NTokenCache, $"player_{version}_abi{QuickJsNative.BridgeAbi}_bytecode.bin");
+
+    /// <summary>
+    /// Автоматически сканирует директорию кэша и удаляет файлы плееров, которые старше <see cref="MaxAgeDays"/> дней,
+    /// если общее количество сохраненных версий превышает <see cref="MaxCachedVersions"/>.
+    /// </summary>
+    /// <remarks>
+    /// Метод осуществляет ротацию всех сопутствующих файлов версии: оригинального JS, препроцессированного JS, STS-файла и бинарного байткода.
+    /// </remarks>
     private static void CleanupOldVersions()
     {
         try
@@ -217,9 +319,11 @@ public sealed partial class PlayerContext
             if (files.Length <= MaxCachedVersions) return;
 
             var now = DateTime.UtcNow;
+
+            // Фильтруем кандидатов на удаление: сортируем по дате изменения и берем только устаревшие
             var candidates = files
-                .Select(f => new FileInfo(f))
-                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Select(static f => new FileInfo(f))
+                .OrderByDescending(static f => f.LastWriteTimeUtc)
                 .Skip(MaxCachedVersions)
                 .Where(f => (now - f.LastWriteTimeUtc).TotalDays > MaxAgeDays)
                 .ToArray();
@@ -235,21 +339,32 @@ public sealed partial class PlayerContext
                         var version = versionMatch.Groups[1].Value;
                         var prepPath = GetPreprocessedCachePath(version);
                         var stsPath = GetStsCachePath(version);
+                        var bytecodePath = GetBytecodeCachePath(version);
 
                         if (File.Exists(prepPath)) File.Delete(prepPath);
                         if (File.Exists(stsPath)) File.Delete(stsPath);
+                        if (File.Exists(bytecodePath)) File.Delete(bytecodePath);
                     }
 
                     file.Delete();
                     Log.Debug($"[PlayerContext] Cleaned up old cache: {file.Name}");
                 }
-                catch { /* ignore locked files */ }
+                catch
+                {
+                    // Игнорируем заблокированные или используемые другими процессами файлы
+                }
             }
         }
-        catch { /* ignore */ }
+        catch (Exception ex)
+        {
+            Log.Debug($"[PlayerContext] Scheduled cleanup failed: {ex.Message}");
+        }
     }
 
-    /// <summary>Определяет версию плеера через iframe_api.</summary>
+    /// <summary>
+    /// Определяет актуальную версию плеера на основе API-манифеста YouTube (iframe_api) 
+    /// и возвращает её вместе со списком URL-кандидатов для скачивания.
+    /// </summary>
     public static async Task<(string Version, string[] Urls)?> DetectVersionAsync(
         HttpClient http,
         CancellationToken ct = default)
@@ -273,8 +388,9 @@ public sealed partial class PlayerContext
     }
 
     /// <summary>
-    /// Физически удаляет файлы кэша конкретной версии плеера с диска.
+    /// Физически удаляет файлы кэша конкретной версии плеера (включая бинарный байткод) с диска.
     /// </summary>
+    /// <param name="version">Версия плеера, файлы которой необходимо удалить.</param>
     public static void ClearDiskCache(string version)
     {
         try
@@ -282,12 +398,14 @@ public sealed partial class PlayerContext
             var prepPath = GetPreprocessedCachePath(version);
             var stsPath = GetStsCachePath(version);
             var baseJsPath = GetCachePath(version);
+            var bytecodePath = GetBytecodeCachePath(version);
 
             if (File.Exists(prepPath)) File.Delete(prepPath);
             if (File.Exists(stsPath)) File.Delete(stsPath);
             if (File.Exists(baseJsPath)) File.Delete(baseJsPath);
+            if (File.Exists(bytecodePath)) File.Delete(bytecodePath);
 
-            Log.Info($"[PlayerContext] Cleared disk cache for version {version}");
+            Log.Info($"[PlayerContext] Cleared disk cache files for version {version}");
         }
         catch (Exception ex)
         {

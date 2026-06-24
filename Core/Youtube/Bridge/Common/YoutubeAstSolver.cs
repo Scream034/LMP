@@ -297,6 +297,16 @@ public static partial class YoutubeAstSolver
             }
         }
 
+// #if DEBUG
+//         // Временно
+//         var hubs = declaredToStmt
+//             .Where(kvp => kvp.Value.Count > 2)
+//             .OrderByDescending(kvp => kvp.Value.Count);
+
+//         foreach (var hub in hubs)
+//             Log.Warn($"[AstSolver] Hub-node: '{hub.Key}' → {hub.Value.Count} statements");
+// #endif
+
         var requiredIdentifiers = new HashSet<string>(32, StringComparer.Ordinal);
         var solverStatements = new List<Statement>();
 
@@ -454,6 +464,18 @@ public static partial class YoutubeAstSolver
             case ExpressionStatement es:
                 if (es.Expression is AssignmentExpression ae && ae.Operator == Operator.Assignment)
                 {
+                    // Было: CollectDeclaredIdentifiers(ae.Left, declared);
+                    // Это тоже сводило g.abc → "g" через MemberExpression case
+
+                    if (ae.Left is MemberExpression me && !me.Computed)
+                    {
+                        var path = GetMemberPath(me);
+                        if (path is not null)
+                        {
+                            declared.Add(path);
+                            break;
+                        }
+                    }
                     CollectDeclaredIdentifiers(ae.Left, declared);
                 }
                 break;
@@ -461,10 +483,15 @@ public static partial class YoutubeAstSolver
                 CollectDeclaredIdentifiers(aee.Left, declared);
                 break;
             case MemberExpression me:
-                var root = GetRootIdentifier(me);
-                if (root is not null)
+                var fullPath = GetMemberPath(me);
+                if (fullPath is not null)
+                    declared.Add(fullPath);   // "g.abc" вместо "g"
+                else
                 {
-                    declared.Add(root);
+                    // computed access: g[x] — fallback на корень
+                    var root = GetRootIdentifier(me);
+                    if (root is not null)
+                        declared.Add(root);
                 }
                 break;
             case Identifier id:
@@ -499,6 +526,21 @@ public static partial class YoutubeAstSolver
             node = me.Object;
         }
         return node is Identifier id ? id.Name : null;
+    }
+
+    /// <summary>
+    /// Строит полный путь MemberExpression: g.abc → "g.abc", g.k.xyz → "g.k.xyz".
+    /// Возвращает null для computed доступа (g[x]) и не-идентификаторов (f().abc).
+    /// </summary>
+    private static string? GetMemberPath(Node? node)
+    {
+        if (node is Identifier id) return id.Name;
+        if (node is MemberExpression me && !me.Computed && me.Property is Identifier prop)
+        {
+            var objPath = GetMemberPath(me.Object);
+            return objPath is not null ? $"{objPath}.{prop.Name}" : null;
+        }
+        return null;
     }
 
     /// <summary>
@@ -575,11 +617,23 @@ public static partial class YoutubeAstSolver
 
             if (node is MemberExpression me)
             {
+                // Пробуем полный путь: g.abc → "g.abc"
+                if (!me.Computed)
+                {
+                    var fullPath = GetMemberPath(me);
+                    if (fullPath is not null && _topLevelDeclared.Contains(fullPath))
+                    {
+                        _referenced.Add(fullPath);
+                        return;  // Точное попадание — не спускаемся к корню
+                    }
+                }
+
+                // Fallback: спускаемся к объекту
+                // g.unknown (не объявлен) → Visit(g) → тянет только "var g = ..."
+                // g[x] (computed) → Visit(g) + Visit(x)
                 Visit(me.Object);
                 if (me.Computed)
-                {
                     Visit(me.Property);
-                }
                 return;
             }
 

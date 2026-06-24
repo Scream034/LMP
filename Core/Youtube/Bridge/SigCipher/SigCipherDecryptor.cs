@@ -4,60 +4,99 @@ using LMP.Core.Youtube.Bridge.Common;
 namespace LMP.Core.Youtube.Bridge.SigCipher;
 
 /// <summary>
-/// Высокопроизводительный дешифратор SigCipher (подписей) YouTube на основе QuickJS-NG.
-/// Наследует общую логику инициализации из JsDecryptorBase.
+/// Дешифратор подписей (SigCipher) YouTube.
+/// <para>
+/// Тонкая обёртка над <see cref="JsDecryptionService"/>: добавляет
+/// двухуровневый кэш (memory + disk) и idempotency-защиту.
+/// Разделяет один persistent QuickJS context с <see cref="NToken.NTokenDecryptor"/>.
+/// </para>
 /// </summary>
-public sealed partial class SigCipherDecryptor(PlayerContextManager playerManager) 
-    : JsDecryptorBase<SigCipherDecryptor>(playerManager, G.FilePath.SigCipherCache, 500, 100)
+public sealed class SigCipherDecryptor : IYoutubeDecryptor, IDisposable
 {
-    private readonly ConcurrentDictionary<string, byte> _decryptedTokens = new(StringComparer.Ordinal);
+    private readonly JsDecryptionService _jsService;
+    private readonly DecryptorCache _cache;
 
-    protected override string FunctionName => "sig";
-    protected override string TestInput => "AHEqNM4wRQIgUw3FiHA8Pht_xgtH0N_C7fQwvOMGHPW9KCHzFbzj_uECIQDPrmvV4I7V_V-uKiksYsVh1xBFwp_vFpXjjLL7T4pBxg==";
+    private readonly ConcurrentDictionary<string, byte> _decryptedTokens =
+        new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Менеджер контекста плеера.
+    /// Делегирует к <see cref="JsDecryptionService.PlayerManager"/> для обратной совместимости
+    /// с <see cref="VideoClient"/> и <see cref="StreamClient"/>.
+    /// </summary>
+    public PlayerContextManager PlayerManager => _jsService.PlayerManager;
+
+    /// <param name="jsService">Shared persistent QuickJS service.</param>
+    /// <param name="cacheFilePath">Путь к файлу disk-кэша.</param>
+    public SigCipherDecryptor(JsDecryptionService jsService, string? cacheFilePath = null)
+    {
+        _jsService = jsService;
+        _cache = new DecryptorCache(
+            cacheFilePath ?? G.FilePath.SigCipherCache,
+            maxMemory: 500,
+            maxDisk: 100);
+    }
+
+    //  Public API 
+
+    /// <summary>
+    /// Расшифровывает подпись (signature) YouTube.
+    /// </summary>
+    /// <param name="signature">Зашифрованная подпись из <c>signatureCipher</c>.</param>
+    /// <param name="ct">Токен отмены.</param>
+    /// <returns>Расшифрованная подпись или исходная при ошибке.</returns>
     public async ValueTask<string> DecipherAsync(string signature, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(signature)) return signature;
 
+        // 1. Idempotency
         if (_decryptedTokens.ContainsKey(signature))
         {
-            Log.Debug($"[SigCipher] Idempotency bypass: '{signature}' is already deciphered.");
+            Log.Debug($"[SigCipher] Idempotency bypass: already deciphered");
             return signature;
         }
 
-        if (Cache.TryGet(signature, out var cached))
+        // 2. Cache
+        if (_cache.TryGet(signature, out var cached))
         {
             _decryptedTokens.TryAdd(cached, 0);
             return cached;
         }
 
-        await EnsureInitializedAsync(ct).ConfigureAwait(false);
+        // 3. JS дешифрация
+        await _jsService.EnsureInitializedAsync(ct).ConfigureAwait(false);
 
-        // Используем полностью асинхронный вызов для защиты UI-потока
-        var jsResult = await TryInvokeJsAsync(signature, "Decipher", ct).ConfigureAwait(false);
-        if (jsResult is not null)
+        var result = await _jsService.CallAsync("sig", signature, ct).ConfigureAwait(false);
+
+        if (!string.IsNullOrEmpty(result) && result != signature)
         {
-            _decryptedTokens.TryAdd(jsResult, 0);
-            return jsResult;
+            _cache.Set(signature, result);
+            _decryptedTokens.TryAdd(result, 0);
+            return result;
         }
 
         return signature;
     }
 
-    protected override bool ValidateResult(string? result, string input)
-    {
-        return !string.IsNullOrEmpty(result) && result != input;
-    }
+    //  IYoutubeDecryptor 
 
-    public override void InvalidateCache()
+    /// <inheritdoc/>
+    public void InvalidateCache()
     {
         _decryptedTokens.Clear();
-        base.InvalidateCache();
+        _cache.Clear();
+        Log.Info("[SigCipher] Cache invalidated");
     }
 
-    public override void Dispose()
+    /// <inheritdoc/>
+    public Task FlushCacheAsync() => _cache.SaveAsync();
+
+    //  Dispose 
+
+    /// <inheritdoc/>
+    public void Dispose()
     {
         _decryptedTokens.Clear();
-        base.Dispose();
+        FlushCacheAsync().GetAwaiter().GetResult();
     }
 }

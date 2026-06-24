@@ -699,7 +699,7 @@ public sealed partial class CachingStreamSource : IAudioSource
             _cacheEntry.Bitrate = _bitrate;
             _initialized = true;
 
-            // ── Startup Prefetch: заливаем warmup-буфер параллельно с decoder init ──
+            //  Startup Prefetch: заливаем warmup-буфер параллельно с decoder init 
             // Перекрывает задержку первой итерации preload loop (PreloadIntervalMs)
             // и обеспечивает данные для warmup-проверки в AudioPlayer.
             // Overlap protection в RegisterOrGetActiveDownload гарантирует,

@@ -786,15 +786,33 @@ public sealed class AudioPipeline : IAsyncDisposable
         tcs?.TrySetResult();
     }
 
-    /// <summary>Выполняет pre-scan нормализации.</summary>
+    /// <summary>
+    /// Выполняет pre-scan нормализации.
+    /// <para>
+    /// <b>Пропускается</b> для сетевых источников (<see cref="Sources.CachingStreamSource"/>),
+    /// которые ещё не полностью буферизированы: pre-scan через HTTP скачает весь файл
+    /// (20+ range requests), блокируя playback на 5–10 секунд.
+    /// В этом случае используется real-time анализ (~3 сек) или deferred gain lock.
+    /// </para>
+    /// </summary>
     public async Task PreScanNormalizationAsync(CancellationToken ct)
     {
         if (!_analyzer.IsEnabled || !_source.CanSeek) return;
         if (_analyzer.IsGainLocked) return;
 
+        // Сетевой source, не полностью буферизирован → pre-scan скачает весь файл.
+        // Real-time анализ (3 сек) справится без блокировки playback.
+        if (_source is Sources.CachingStreamSource { IsFullyBuffered: false })
+        {
+            Log.Debug("[AudioPipeline] Pre-scan skipped: CachingStreamSource not fully buffered, " +
+                      "using real-time analysis");
+            return;
+        }
+
         try
         {
-            float rawGain = await _analyzer.PreScanAsync(_source, _decoder, _decodeBuffer, ct).ConfigureAwait(false);
+            float rawGain = await _analyzer.PreScanAsync(_source, _decoder, _decodeBuffer, ct)
+                .ConfigureAwait(false);
             _analyzer.LockGain(rawGain);
             await _source.SeekAsync(0, ct).ConfigureAwait(false);
 

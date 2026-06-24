@@ -1,5 +1,6 @@
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Bridge.NToken;
+using LMP.Core.Youtube.Bridge.PoToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
@@ -18,15 +19,23 @@ public sealed class VideoClient
     /// <summary>Клиент управления аудиопотоками.</summary>
     public StreamClient Streams { get; }
 
+    /// <param name="http">HTTP-клиент.</param>
+    /// <param name="nTokenDecryptor">Провайдер расшифровки N-Token.</param>
+    /// <param name="sigCipherDecryptor">Провайдер расшифровки подписи.</param>
+    /// <param name="isAuthenticatedCheck">Callback проверки авторизации.</param>
+    /// <param name="poTokenProvider">Провайдер PoToken; <c>null</c> отключает pot.</param>
     public VideoClient(
         HttpClient http,
         NTokenDecryptor nTokenDecryptor,
         SigCipherDecryptor sigCipherDecryptor,
-        Func<bool>? isAuthenticatedCheck = null)
+        Func<bool>? isAuthenticatedCheck = null,
+        PoTokenProvider? poTokenProvider = null)
     {
         _controller = new VideoController(http, sigCipherDecryptor.PlayerManager);
         _isAuthenticatedCheck = isAuthenticatedCheck;
-        Streams = new StreamClient(http, nTokenDecryptor, sigCipherDecryptor, isAuthenticatedCheck);
+        Streams = new StreamClient(
+            http, nTokenDecryptor, sigCipherDecryptor,
+            isAuthenticatedCheck, poTokenProvider);
     }
 
     /// <summary>

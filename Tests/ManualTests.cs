@@ -4,19 +4,19 @@ using LMP.Tests.Framework;
 namespace LMP.Tests;
 
 /// <summary>
-/// Точка входа для запуска тестов из кода (F10 в Debug).
+/// Точка входа для запуска тестов из кода (F10 в Debug режиме).
 /// </summary>
 public static class ManualTests
 {
     /// <summary>
-    /// Запускает ВСЕ обнаруженные активные тесты: Unit → Integration → Benchmark.
+    /// Запускает все обнаруженные тесты: Unit → Integration → Benchmark.
     /// </summary>
     public static async Task RunAllAsync()
     {
         var sw = Stopwatch.StartNew();
 
         Console.WriteLine("\n" + new string('═', 70));
-        Console.WriteLine("  LMP TEST SUITE (Auto-Discovery)");
+        Console.WriteLine("  LMP TEST SUITE");
         Console.WriteLine(new string('═', 70) + "\n");
 
         var runner = new TestRunner(AppEntry.Services);
@@ -29,11 +29,12 @@ public static class ManualTests
                 TestRunState.Passed => "✓",
                 TestRunState.Failed => "✗",
                 TestRunState.Skipped => "⊘",
-                _ => "?",
+                _ => "?"
             };
 
-            Console.WriteLine($"  {icon} {descriptor.DisplayName} ({result.DurationFormatted})" +
-                (result.ErrorMessage is not null ? $" — {result.ErrorMessage}" : ""));
+            Console.WriteLine(
+                $"  {icon} {descriptor.DisplayName} ({result.DurationFormatted})" +
+                (result.ErrorMessage is not null ? $"\n    → {result.ErrorMessage}" : ""));
 
             switch (result.State)
             {
@@ -43,19 +44,16 @@ public static class ManualTests
             }
         };
 
-        var grouped = TestDiscovery.GetGrouped();
-
-        foreach (var (category, tests) in grouped)
+        foreach (var (category, tests) in TestDiscovery.GetGrouped())
         {
             var label = category switch
             {
-                TestCategory.Unit => "▶ UNIT TESTS (no network)",
+                TestCategory.Unit => "▶ UNIT TESTS",
                 TestCategory.Integration => "▶ INTEGRATION TESTS (network required)",
                 TestCategory.Benchmark => "▶ BENCHMARKS",
-                _ => $"▶ {category}",
+                _ => $"▶ {category}"
             };
             Console.WriteLine($"\n{label}\n");
-
             await runner.RunBatchAsync(tests);
         }
 
@@ -63,27 +61,31 @@ public static class ManualTests
 
         Console.WriteLine("\n" + new string('═', 70));
         Console.WriteLine($"  RESULTS: {passed} passed, {failed} failed, {skipped} skipped " +
-                         $"({sw.Elapsed.TotalSeconds:F1}s)");
+                          $"({sw.Elapsed.TotalSeconds:F1}s)");
         Console.WriteLine(new string('═', 70) + "\n");
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // LEGACY QUICK TESTS (для обратной совместимости)
-    // ══════════════════════════════════════════════════════════════════
-
-    /// <summary>Быстрый тест N-Token (самый важный).</summary>
-    public static Task TestNTokenQuickAsync() =>
+    /// <summary>Быстрый запуск только NToken integration теста.</summary>
+    public static Task TestNTokenAsync() =>
         Unit.NTokenTests.TestLiveDecryptionAsync(AppEntry.Services);
 
-    /// <summary>Быстрый тест Sig Cipher.</summary>
-    public static Task TestSigCipherQuickAsync() =>
+    /// <summary>Быстрый запуск только SigCipher integration теста.</summary>
+    public static Task TestSigCipherAsync() =>
         Unit.SigCipherTests.TestLiveDecryptionAsync(AppEntry.Services);
 
-    /// <summary>Полный pipeline тест.</summary>
-    public static Task TestSigCipherFullAsync(string videoId = "dQw4w9WgXcQ") =>
+    /// <summary>Быстрый запуск AST Solver теста (offline, нужен кэш плеера).</summary>
+    public static Task TestAstSolverAsync() =>
+        Unit.NTokenTests.TestAstSolverWithPersistentContextAsync();
+
+    /// <summary>Полный pipeline тест (сеть + дешифрация + стриминг).</summary>
+    public static Task TestFullPipelineAsync(string videoId = "dQw4w9WgXcQ") =>
         Integration.StreamPipelineTests.TestFullPipelineInternalAsync(AppEntry.Services, videoId);
 
-    /// <summary>Benchmark N-Token.</summary>
-    public static Task BenchmarkNTokenAsync() =>
-        Unit.NTokenTests.BenchmarkAsync(AppEntry.Services);
+    /// <summary>Пошаговая диагностика PoToken pipeline (запускает все 5 шагов).</summary>
+    public static Task TestPoTokenAsync() =>
+        Integration.PoTokenTests.TestFullPipelineAsync();
+
+    /// <summary>Только шаг 3 — QuickJS Snapshot (самый важный, выявляет async issues).</summary>
+    public static Task TestPoTokenSnapshotAsync() =>
+        Integration.PoTokenTests.TestQuickJsSnapshotAsync();
 }

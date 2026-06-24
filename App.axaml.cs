@@ -112,6 +112,11 @@ public partial class App : Application
             _splash?.SetProgress(5);
             _splash?.UpdateStatus(L["Splash_Initializing"]);
 
+            // Auth init первым: LibraryService.InitializeAsync зависит от CurrentOwnerId
+            var auth = AppEntry.Services.GetRequiredService<CookieAuthService>();
+            await auth.InitializeAsync().ConfigureAwait(false);
+            _splash?.SetProgress(10);
+
             // Audio Cache
             _splash?.UpdateStatus(L["Splash_InitAudioCache"]);
             var audioCacheManager = await Task.Run(() =>
@@ -289,9 +294,6 @@ public partial class App : Application
                     {
                         if (e.Key == Avalonia.Input.Key.F9)
                             new UI.Features.Debug.DebugWindow().Show();
-
-                        if (e.Key == Avalonia.Input.Key.F10)
-                            _ = Task.Run(ManualTests.RunAllAsync);
                     };
             });
 #endif

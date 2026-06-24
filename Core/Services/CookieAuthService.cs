@@ -10,6 +10,12 @@ namespace LMP.Core.Services;
 
 public partial class CookieAuthService
 {
+    // Два независимых семафора: auth_data.json и cookies.txt могут сохраняться параллельно
+    private readonly SemaphoreSlim _authSaveSemaphore = new(1, 1);
+    private readonly SemaphoreSlim _cookieSaveSemaphore = new(1, 1);
+    private CancellationTokenSource? _validateCts;
+    private readonly Lock _validateLock = new();
+
     private readonly Lock _lock = new();
     private readonly Dictionary<string, string> _cookieMap = new(32, StringComparer.Ordinal);
     private string _cachedHeaderString = "";
@@ -30,15 +36,63 @@ public partial class CookieAuthService
 
     public event Action? OnAuthStateChanged;
 
-    public CookieAuthService()
+    /// <summary>
+    /// Инициализирует сервис без файлового I/O.
+    /// Файловые операции выполняются в <see cref="InitializeAsync"/>.
+    /// </summary>
+    public CookieAuthService() { }
+
+    /// <summary>
+    /// Выполняет файловый I/O старта: загрузку кук, профиля и одноразовую миграцию.
+    /// Должен вызываться из <c>App.axaml.cs</c> до <c>LibraryService.InitializeAsync</c>.
+    /// </summary>
+    public async Task InitializeAsync()
     {
-        LoadCookies();
-        LoadAuthData();
+        await LoadCookiesAsync().ConfigureAwait(false);
+        await LoadAuthDataAsync().ConfigureAwait(false);
         UpdateStateAuthStatus();
-        MigrateLegacyAuthFile();
+        await MigrateLegacyAuthFileAsync().ConfigureAwait(false);
     }
 
-    private void MigrateLegacyAuthFile()
+    private async Task LoadCookiesAsync()
+    {
+        if (!File.Exists(G.FilePath.Cookie)) return;
+
+        try
+        {
+            var raw = await File.ReadAllTextAsync(G.FilePath.Cookie).ConfigureAwait(false);
+            ParseAndSetCookies(raw);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Auth] Failed to load cookies: {ex.Message}");
+        }
+    }
+
+    private async Task LoadAuthDataAsync()
+    {
+        if (!File.Exists(_authDataPath)) return;
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(_authDataPath).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(json)) return;
+
+            var loadedState = JsonSerializer.Deserialize(json, AppJsonContext.DefaultCompact.AuthState);
+            if (loadedState != null)
+            {
+                State = loadedState;
+                Log.Info($"[Auth] Profile restored from cache: {State.UserName}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _profileLoadError = ex.Message;
+            Log.Error($"[Auth] Failed to load auth data: {ex.Message}");
+        }
+    }
+
+    private async Task MigrateLegacyAuthFileAsync()
     {
         try
         {
@@ -47,9 +101,10 @@ public partial class CookieAuthService
 
             if (!File.Exists(_authDataPath) || new FileInfo(_authDataPath).Length == 0)
             {
+                // File.Copy: BCL не предоставляет async-аналога; для <10 KB файла Task.Run избыточен
                 File.Copy(legacyPath, _authDataPath, overwrite: true);
                 Log.Info($"[Auth] Migrated auth.json to {_authDataPath}");
-                LoadAuthData();
+                await LoadAuthDataAsync().ConfigureAwait(false);
             }
             File.Delete(legacyPath);
         }
@@ -104,43 +159,6 @@ public partial class CookieAuthService
             State.CachedAccounts = accounts;
         }
         SaveAuthData();
-    }
-
-    private void LoadAuthData()
-    {
-        if (!File.Exists(_authDataPath)) return;
-
-        try
-        {
-            var json = File.ReadAllText(_authDataPath);
-            if (string.IsNullOrWhiteSpace(json)) return;
-
-            // Высокопроизводительный AOT-совместимый разбор во избежание потери CachedAccounts при тримминге
-            var loadedState = JsonSerializer.Deserialize(json, AppJsonContext.DefaultCompact.AuthState);
-            if (loadedState != null)
-            {
-                State = loadedState;
-                Log.Info($"[Auth] Profile restored from cache: {State.UserName}");
-            }
-        }
-        catch (Exception ex)
-        {
-            _profileLoadError = ex.Message;
-            Log.Error($"[Auth] Failed to load auth data: {ex.Message}");
-        }
-    }
-
-    public void SaveAuthData()
-    {
-        try
-        {
-            var json = JsonSerializer.Serialize(State, AppJsonContext.DefaultCompact.AuthState);
-            File.WriteAllText(_authDataPath, json);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Auth] Failed to save auth data: {ex.Message}");
-        }
     }
 
     private void UpdateStateAuthStatus()
@@ -426,15 +444,6 @@ public partial class CookieAuthService
         OnAuthStateChanged?.Invoke();
     }
 
-    private void LoadCookies()
-    {
-        if (File.Exists(G.FilePath.Cookie))
-        {
-            var raw = File.ReadAllText(G.FilePath.Cookie);
-            ParseAndSetCookies(raw);
-        }
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string GetCookieHeader()
     {
@@ -502,28 +511,52 @@ public partial class CookieAuthService
 
     /// <summary>
     /// Выполняет отложенную валидацию сессии после свежего логина.
-    /// Гарантирует, что <see cref="OnAuthStateChanged"/> будет выстрелен
-    /// после полной установки профиля (или при ошибке — как fallback).
+    /// Предыдущий незавершённый вызов отменяется через <see cref="_validateCts"/>.
     /// </summary>
     private async Task ValidateAndNotifyAsync()
     {
+        CancellationTokenSource cts;
+        lock (_validateLock)
+        {
+            _validateCts?.Cancel();
+            _validateCts?.Dispose();
+            cts = _validateCts = new CancellationTokenSource();
+        }
+
         try
         {
-            var (isValid, _, isNetworkError) = await ValidateSessionAsync().ConfigureAwait(false);
+            var (_, _, isNetworkError) = await ValidateSessionAsync(cts.Token).ConfigureAwait(false);
 
-            // При успешной валидации UpdateUserProfile уже вызвал OnAuthStateChanged.
-            // При 401 — Logout() уже вызвал OnAuthStateChanged.
-            // При сетевой ошибке — профиль не установлен, стреляем fallback.
+            if (cts.IsCancellationRequested) return;
+
             if (isNetworkError)
             {
                 Log.Warn("[Auth] Post-login validation failed due to network. Firing fallback auth state change.");
                 OnAuthStateChanged?.Invoke();
             }
+            // Успех → UpdateUserProfile уже вызвал OnAuthStateChanged
+            // 401   → Logout() уже вызвал OnAuthStateChanged
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Log.Warn($"[Auth] Deferred session validation failed: {ex.Message}. Firing fallback auth state change.");
-            OnAuthStateChanged?.Invoke();
+            if (!cts.IsCancellationRequested)
+            {
+                Log.Warn($"[Auth] Deferred session validation failed: {ex.Message}. Firing fallback auth state change.");
+                OnAuthStateChanged?.Invoke();
+            }
+        }
+        finally
+        {
+            lock (_validateLock)
+            {
+                // Диспозим только если CTS ещё наш — не заменён следующим вызовом
+                if (_validateCts == cts)
+                {
+                    cts.Dispose();
+                    _validateCts = null;
+                }
+            }
         }
     }
 
@@ -577,6 +610,14 @@ public partial class CookieAuthService
 
     public void Logout()
     {
+        // Отменяем до OnAuthStateChanged — гарантируем что validate не выстрелит после выхода
+        lock (_validateLock)
+        {
+            _validateCts?.Cancel();
+            _validateCts?.Dispose();
+            _validateCts = null;
+        }
+
         lock (_lock)
         {
             _cookieMap.Clear();
@@ -650,19 +691,69 @@ public partial class CookieAuthService
         _cachedHeaderString = sb.ToString();
     }
 
+    // --- Section: Non-blocking Save ---
+
+    /// <summary>
+    /// Сериализует профиль синхронно (CPU-bound, ~0.1 мс),
+    /// запись на диск — fire-and-forget через <see cref="_authSaveSemaphore"/>.
+    /// </summary>
+    public void SaveAuthData()
+    {
+        string json;
+        try
+        {
+            json = JsonSerializer.Serialize(State, AppJsonContext.DefaultCompact.AuthState);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Auth] Failed to serialize auth data: {ex.Message}");
+            return;
+        }
+        _ = WriteAuthDataAsync(json);
+    }
+
+    private async Task WriteAuthDataAsync(string json)
+    {
+        await _authSaveSemaphore.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await File.WriteAllTextAsync(_authDataPath, json).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Auth] Failed to save auth data: {ex.Message}");
+        }
+        finally
+        {
+            _authSaveSemaphore.Release();
+        }
+    }
+
     private void SaveCookiesToFile()
     {
+        string? content;
         lock (_lock)
         {
-            try
-            {
-                if (_cookieMap.ContainsKey("SAPISID"))
-                    File.WriteAllText(G.FilePath.Cookie, _cachedHeaderString);
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[Auth] Failed to save updated cookies: {ex.Message}");
-            }
+            if (!_cookieMap.ContainsKey("SAPISID")) return;
+            content = _cachedHeaderString;
+        }
+        _ = WriteCookiesToFileAsync(content);
+    }
+
+    private async Task WriteCookiesToFileAsync(string content)
+    {
+        await _cookieSaveSemaphore.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await File.WriteAllTextAsync(G.FilePath.Cookie, content).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Auth] Failed to save updated cookies: {ex.Message}");
+        }
+        finally
+        {
+            _cookieSaveSemaphore.Release();
         }
     }
 

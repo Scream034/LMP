@@ -348,6 +348,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                     normConfig);
             }
 
+#if DEBUG
             if (track != null)
             {
                 Log.Debug($"[AudioEngine] Track resolved: ID={track.Id}, Title='{track.Title}' " +
@@ -358,19 +359,24 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                           $"| Cache Loudness: {(cacheEntry?.YoutubeIntegratedLoudnessDb is float cl ? cl.ToString("F2") + "dB" : "null")} " +
                           $"| Resolved Gain: {(float.IsNaN(cachedGain) ? "NaN" : cachedGain.ToString("F4"))}");
             }
+#endif
 
             if (!float.IsNaN(cachedGain))
             {
                 pipeline.Analyzer.LockFromCachedGain(cachedGain);
                 Log.Info($"[AudioEngine] Normalization gain locked from cache: {cachedGain:F4}x for {trackId}");
             }
+#if DEBUG
+            else if (_player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource { IsFullyBuffered: false })
+            {
+                // Partial-cache source: loudnessDb ещё не получен (API call параллелен).
+                // Real-time анализ (~3 сек) зафиксирует gain автоматически.
+                Log.Debug($"[AudioEngine] Gain deferred to real-time analysis for {trackId} (partial-cache, API pending)");
+            }
+#endif
             else if (track != null)
             {
                 Log.Warn($"[AudioEngine] Normalization resolver returned NaN for {trackId}. EBU R128 Pre-scan is REQUIRED.");
-            }
-            else
-            {
-                Log.Error($"[AudioEngine] ⚠ FAILED to resolve TrackInfo for '{trackId}' during pipeline configuration. Pre-scan will be triggered.");
             }
         }
 
@@ -781,7 +787,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                 _pendingGainWrites.Enqueue((track.Id, track.CachedNormalizationGain));
             }
 
-            // ── CDN Connection Pre-Warming ──────────────────────────────────
+            //  CDN Connection Pre-Warming 
             // Запускаем спекулятивный прогрев TCP+TLS к последним известным CDN-нодам
             // ПЕРЕД YouTube API call. Пока API отвечает (~500 мс), TLS-рукопожатие
             // завершается в фоне. При совпадении ноды → TTFB ~100 мс вместо ~3 с.
@@ -1511,17 +1517,6 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         // Спекулятивный прогрев восстанавливает их до первого реального range-запроса.
         AudioSourceFactory.PreWarmCdnConnections(
             Audio.Http.SharedHttpClient.Instance, _lifetimeCts.Token);
-    }
-
-    private static async Task PreWarmHttpConnectionAsync()
-    {
-        try
-        {
-            using var req = new HttpRequestMessage(HttpMethod.Head, "https://redirector.googlevideo.com/");
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            await Audio.Http.SharedHttpClient.Instance.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-        }
-        catch { }
     }
 
     #endregion

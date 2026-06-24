@@ -149,6 +149,24 @@
     <Content Include="Assets/app.ico" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <Content Include="Native/quickjs_bridge_debug.dll">
+      <Link>Native/quickjs_bridge.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>false</ExcludeFromSingleFile>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <Content Include="Native/quickjs_bridge_release.dll">
+      <Link>Native/quickjs_bridge.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>false</ExcludeFromSingleFile>
+    </Content>
+  </ItemGroup>
+
   <ItemGroup Label="Avalonia Core">
     <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
@@ -157,14 +175,6 @@
     <PackageReference Include="ReactiveUI.Avalonia" Version="$(ReactiveUIAvaloniaVersion)" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1"
       Condition="'$(Configuration)' == 'Debug'" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="Native/quickjs_bridge.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      <ExcludeFromSingleFile>false</ExcludeFromSingleFile>
-    </Content>
   </ItemGroup>
 
   <ItemGroup Label="Hot Reload" Condition="'$(Configuration)' == 'Debug'">

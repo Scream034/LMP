@@ -1123,8 +1123,7 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Гарантирует наличие валидного continuation URL перед сетевой загрузкой.
-    /// Реализует single-flight модель: одновременно выполняется только один URL resolution,
-    /// все остальные ожидающие разделяют тот же promise.
+    /// Реализует single-flight модель ожидания внешнего URL или самостоятельного разрешения.
     /// </summary>
     /// <param name="ct">Токен отмены.</param>
     /// <returns><c>true</c>, если URL доступен; иначе <c>false</c>.</returns>
@@ -1132,9 +1131,6 @@ public sealed partial class CachingStreamSource
     {
         if (!string.IsNullOrWhiteSpace(_currentUrl))
             return true;
-
-        if (_urlAcquirer == null)
-            return false;
 
         Task<string?> waitTask;
         bool isInitiator = false;
@@ -1158,11 +1154,19 @@ public sealed partial class CachingStreamSource
             }
         }
 
-        if (isInitiator)
+        // Если источник настроен на самостоятельное получение URL (acquirer != null), 
+        // инициатор запускает фоновый процесс.
+        // Если acquirer == null (например, при Partial-Cache Fast Start), 
+        // источник просто спокойно ждёт, пока внешний AudioEngine не вызовет TryAttachContinuationUrl.
+        if (isInitiator && _urlAcquirer != null)
+        {
             _ = ResolveContinuationUrlSingleFlightAsync(ct);
+        }
 
         try
         {
+            // Ждём разрешение URL (изнутри или снаружи).
+            // Не возвращаем false мгновенно, предотвращая retry storm и fatal crash.
             await waitTask.WaitAsync(ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)

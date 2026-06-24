@@ -6,6 +6,8 @@ using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Helpers.Extensions;
 using LMP.Core.Youtube.Videos.ClosedCaptions;
+using LMP.Core.Youtube.Bridge.PoToken;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Youtube.Videos.Streams;
 
@@ -21,6 +23,7 @@ public sealed class StreamClient
     private readonly PlayerContextManager _playerContextManager;
     private readonly Func<bool>? _isAuthenticatedCheck;
     private CipherManifest? _cipherManifest;
+    private readonly PoTokenProvider? _poTokenProvider;
 
     /// <summary>
     /// Создает экземпляр StreamClient с внедрением необходимых зависимостей.
@@ -29,11 +32,13 @@ public sealed class StreamClient
     /// <param name="nTokenDecryptor">Провайдер расшифровки N-Token.</param>
     /// <param name="sigCipherDecryptor">Провайдер расшифровки подписи.</param>
     /// <param name="isAuthenticatedCheck">Callback проверки авторизации.</param>
+    /// <param name="poTokenProvider">Провайдер PoToken для videoplayback URL.</param>
     public StreamClient(
         HttpClient http,
         NTokenDecryptor nTokenDecryptor,
         SigCipherDecryptor sigCipherDecryptor,
-        Func<bool>? isAuthenticatedCheck = null)
+        Func<bool>? isAuthenticatedCheck = null,
+        PoTokenProvider? poTokenProvider = null)
     {
         _http = http;
         _nTokenDecryptor = nTokenDecryptor;
@@ -41,6 +46,7 @@ public sealed class StreamClient
         _isAuthenticatedCheck = isAuthenticatedCheck;
         _playerContextManager = sigCipherDecryptor.PlayerManager;
         _controller = new VideoController(http, _playerContextManager);
+        _poTokenProvider = poTokenProvider;
     }
 
     /// <summary>
@@ -89,6 +95,28 @@ public sealed class StreamClient
     {
         bool? isNTokenDecryptionRequired = null;
 
+        // PoToken получается один раз для всего manifest
+        string? pot = null;
+        if (_poTokenProvider != null)
+        {
+            try
+            {
+                pot = await _poTokenProvider
+                    .GetContentTokenAsync(videoId.Value, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!string.IsNullOrEmpty(pot))
+                    Log.Debug($"[StreamClient] PoToken ready ({pot.Length} chars)");
+                else
+                    Log.Warn("[StreamClient] PoToken unavailable — proceeding without");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn($"[StreamClient] PoToken fetch failed: {ex.Message} — proceeding without");
+            }
+        }
+
         foreach (var streamData in streamDatas)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -113,22 +141,16 @@ public sealed class StreamClient
             if (!string.IsNullOrWhiteSpace(streamData.Signature))
             {
                 Log.Debug($"[StreamClient] itag={itag} needs signature decryption");
-
                 try
                 {
                     var decryptedSig = await _sigCipherDecryptor.DecipherAsync(
-                        streamData.Signature,
-                        cancellationToken).ConfigureAwait(false);
+                        streamData.Signature, cancellationToken).ConfigureAwait(false);
 
                     var sigParam = streamData.SignatureParameter ?? "sig";
                     url = UrlEx.SetQueryParameter(url, sigParam, decryptedSig);
-
                     Log.Debug($"[StreamClient] itag={itag} sig decrypted");
                 }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     Log.Error($"[StreamClient] itag={itag} sig decryption failed: {ex.Message}");
@@ -146,25 +168,15 @@ public sealed class StreamClient
                     try
                     {
                         using var headResponse = await _http.HeadAsync(url, cancellationToken).ConfigureAwait(false);
-                        if (headResponse.IsSuccessStatusCode)
-                        {
-                            isNTokenDecryptionRequired = false;
-                            Log.Debug($"[StreamClient] itag={itag} HEAD check OK, skipping n-token decryption globally");
-                        }
-                        else
-                        {
-                            isNTokenDecryptionRequired = true;
-                            Log.Debug($"[StreamClient] itag={itag} HEAD check returned {headResponse.StatusCode}, needs decryption");
-                        }
+                        isNTokenDecryptionRequired = !headResponse.IsSuccessStatusCode;
+                        Log.Debug($"[StreamClient] itag={itag} HEAD: {headResponse.StatusCode}, " +
+                                  $"needsNToken={isNTokenDecryptionRequired}");
                     }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
+                    catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
                         isNTokenDecryptionRequired = true;
-                        Log.Debug($"[StreamClient] HEAD check failed: {ex.Message}, will try to decrypt");
+                        Log.Debug($"[StreamClient] HEAD failed: {ex.Message}, will try to decrypt");
                     }
                 }
 
@@ -173,19 +185,13 @@ public sealed class StreamClient
                     try
                     {
                         var decryptedN = await _nTokenDecryptor.DecryptAsync(
-                            nToken,
-                            contextId: videoId.Value,
-                            ct: cancellationToken).ConfigureAwait(false);
+                            nToken, contextId: videoId.Value, ct: cancellationToken).ConfigureAwait(false);
 
                         hasEncryptedNToken = string.Equals(decryptedN, nToken, StringComparison.Ordinal);
                         url = UrlEx.SetQueryParameter(url, "n", decryptedN);
-
                         Log.Debug($"[StreamClient] itag={itag} n-token: '{nToken}' → '{decryptedN}'");
                     }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
+                    catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
                         hasEncryptedNToken = true;
@@ -200,7 +206,11 @@ public sealed class StreamClient
             url = UrlEx.RemoveQueryParameter(url, "ump");
             url = UrlEx.RemoveQueryParameter(url, "alr");
             url = UrlEx.RemoveQueryParameter(url, "srfvp");
-            url = UrlEx.RemoveQueryParameter(url, "pot");
+
+            // Добавляем pot если получен, иначе удаляем из URL
+            url = !string.IsNullOrEmpty(pot)
+                ? UrlEx.SetQueryParameter(url, "pot", pot)
+                : UrlEx.RemoveQueryParameter(url, "pot");
 
             Log.Debug($"[StreamClient] itag={itag} FINAL URL ready.");
 
@@ -222,13 +232,9 @@ public sealed class StreamClient
             }
 
             yield return new AudioOnlyStreamInfo(
-                itag.Value,
-                url,
-                container.Value,
-                new FileSize(contentLength),
-                bitrate.Value,
-                audioCodec,
-                audioLanguage,
+                itag.Value, url, container.Value,
+                new FileSize(contentLength), bitrate.Value,
+                audioCodec, audioLanguage,
                 streamData.IsAudioLanguageDefault,
                 hasEncryptedNToken,
                 streamData.LoudnessDb);

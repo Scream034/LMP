@@ -503,11 +503,9 @@ internal partial class PlayerResponse
         /// <inheritdoc/>
         public float LoudnessDb
         {
-            get;
-
-            set
+            get
             {
-                field = _content
+                var value = _content
                     .GetPropertyOrNull("loudnessDb")
                     ?.GetDoubleOrNull()
                     ?.Pipe(static d => (float)d) ?? float.NaN;
@@ -516,9 +514,10 @@ internal partial class PlayerResponse
                 if (!float.IsNaN(value) && !float.IsFinite(value))
                 {
                     Log.Warn($"[StreamData] itag={Itag}: Invalid loudnessDb value: {value}");
-                    value = float.NaN;
+                    return float.NaN;
                 }
 #endif
+                return value;
             }
         }
 

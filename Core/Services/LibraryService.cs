@@ -45,6 +45,7 @@ public sealed class LibraryService : IAsyncDisposable
     /// отменяет предыдущий, предотвращая параллельные Clear+Hydrate.
     /// </summary>
     private CancellationTokenSource? _hydrationCts;
+    private readonly Lock _hydrationLock = new();
 
     public AppSettings Settings { get; private set; } = new();
 
@@ -104,11 +105,14 @@ public sealed class LibraryService : IAsyncDisposable
     /// </summary>
     private async Task HandleAuthStateChangedAsync()
     {
-        _hydrationCts?.Cancel();
-        _hydrationCts?.Dispose();
+        CancellationTokenSource cts;
+        lock (_hydrationLock)
+        {
+            _hydrationCts?.Cancel();
+            _hydrationCts?.Dispose();
+            cts = _hydrationCts = new CancellationTokenSource();
+        }
 
-        var cts = new CancellationTokenSource();
-        _hydrationCts = cts;
         var ct = cts.Token;
 
         try
@@ -146,6 +150,17 @@ public sealed class LibraryService : IAsyncDisposable
         catch (Exception ex)
         {
             Log.Error($"[LibraryService] Hydration failed during auth state shift: {ex.Message}");
+        }
+        finally
+        {
+            lock (_hydrationLock)
+            {
+                if (_hydrationCts == cts)
+                {
+                    cts.Dispose();
+                    _hydrationCts = null;
+                }
+            }
         }
     }
 
@@ -854,8 +869,12 @@ public sealed class LibraryService : IAsyncDisposable
         LocalizationService.Instance.LanguageChanged -= OnLanguageChanged;
         _auth.OnAuthStateChanged -= HandleAuthStateChanged;
 
-        _hydrationCts?.Cancel();
-        _hydrationCts?.Dispose();
+        lock (_hydrationLock)
+        {
+            _hydrationCts?.Cancel();
+            _hydrationCts?.Dispose();
+            _hydrationCts = null;
+        }
 
         _saveSubscription.Dispose();
         _saveSettingsSignal.Dispose();

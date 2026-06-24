@@ -17,6 +17,8 @@ using ReactiveUI;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
+using LMP.Core.Youtube.Bridge.PoToken;
+using LMP.Core.Audio.Http;
 
 namespace LMP.Core.Services;
 
@@ -31,8 +33,9 @@ public partial class YoutubeProvider : IDisposable
     public readonly CookieAuthService AuthService = null!;
     private readonly LibraryService? _libraryService;
     private readonly YoutubeUserDataService _userDataService;
-    private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(DefaultCacheLifetimeHours);
+    private PoTokenProvider? _poTokenProvider;
 
+    private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(DefaultCacheLifetimeHours);
     private readonly ConcurrentDictionary<string, StreamCacheEntry> _streamCache =
         new(StringComparer.Ordinal);
 
@@ -91,6 +94,7 @@ public partial class YoutubeProvider : IDisposable
         _nTokenDecryptor = nTokenDecryptor;
         _sigCipherDecryptor = sigCipherDecryptor;
         _userDataService = userDataService;
+        _poTokenProvider = new PoTokenProvider(SharedHttpClient.Instance);
 
         // Связываем централизованный утилитный класс с куками сессии
         YoutubeClientUtils.Initialize(cookieAuth);
@@ -139,6 +143,9 @@ public partial class YoutubeProvider : IDisposable
     {
         DisposeCurrentClient();
 
+        // VisitorData меняется при смене аккаунта → старый session token невалиден
+        _poTokenProvider?.Invalidate();
+
         _currentHandler = new SocketsHttpHandler
         {
             UseCookies = false,
@@ -171,7 +178,8 @@ public partial class YoutubeProvider : IDisposable
             _nTokenDecryptor,
             _sigCipherDecryptor,
             isAuthenticatedCheck: () => AuthService?.IsAuthenticated ?? false,
-            ownsHttpClient: false);
+            ownsHttpClient: false,
+            poTokenProvider: _poTokenProvider);
 
         Log.Info($"[YouTube] Client reloaded. Auth: {AuthService?.IsAuthenticated ?? false}");
     }
@@ -569,16 +577,11 @@ public partial class YoutubeProvider : IDisposable
         {
             _nTokenDecryptor.InvalidateCache();
             _sigCipherDecryptor.InvalidateCache();
-            _nTokenDecryptor.PlayerManager.Invalidate();
-
-            // Сброс stale STS при 403-recovery
+            _nTokenDecryptor.PlayerManager.InvalidateContext();
             _youtube.Videos.Streams.InvalidateCipherManifest();
-
-            // Принудительно очищаем и пересоздаем VisitorData
+            _poTokenProvider?.Invalidate();
             _ = YoutubeClientUtils.EnsureVisitorDataAsync(forceRefresh: true);
-
             ClearCache();
-            Log.Info("[YouTube] Bypass engines successfully reset and ready for clean reload.");
         }
         catch (Exception ex)
         {
@@ -610,7 +613,8 @@ public partial class YoutubeProvider : IDisposable
             {
                 _nTokenDecryptor.InvalidateCache();
                 _sigCipherDecryptor.InvalidateCache();
-                _nTokenDecryptor.PlayerManager.Invalidate();
+                // Мягкая инвалидация: НЕ удаляем base.js с диска.
+                _nTokenDecryptor.PlayerManager.InvalidateContext();
 
                 // Сброс stale STS при 403-recovery
                 // _signatureTimestamp в VideoController и _cipherManifest в StreamClient
@@ -1969,11 +1973,13 @@ public partial class YoutubeProvider : IDisposable
         _disposed = true;
 
         AuthService?.OnAuthStateChanged -= ReloadClient;
-
         DisposeCurrentClient();
 
         _currentHandler?.Dispose();
         _currentHandler = null;
+
+        _poTokenProvider?.Dispose();
+        _poTokenProvider = null;
 
         _streamCache.Clear();
 

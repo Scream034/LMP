@@ -414,8 +414,19 @@ public sealed class AppEntry
         });
 
         services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.Instance));
-        services.AddSingleton<SigCipherDecryptor>();
-        services.AddSingleton<NTokenDecryptor>();
+        services.AddSingleton<JsDecryptionService>();
+
+        services.AddSingleton(sp =>
+        {
+            var jsService = sp.GetRequiredService<JsDecryptionService>();
+            return new NTokenDecryptor(jsService, G.FilePath.NTokenCache);
+        });
+
+        services.AddSingleton(sp =>
+        {
+            var jsService = sp.GetRequiredService<JsDecryptionService>();
+            return new SigCipherDecryptor(jsService, G.FilePath.SigCipherCache);
+        });
 
         services.AddSingleton<PlaylistSyncService>();
         services.AddSingleton<PlaylistEditService>();

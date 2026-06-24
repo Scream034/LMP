@@ -9,7 +9,8 @@ public static class YoutubeClientUtils
 {
   public static YoutubeClientProfile CurrentProfile { get; set; } = YoutubeClientProfile.WebRemix;
 
-  private static string _visitorData = "CgtsZG1ySnZiQUkSbyiMjuGSBg%3D%3D";
+  private const string DefaultVisitorData = "CgtsZG1ySnZiQUkSbyiMjuGSBg%3D%3D";
+  private static string _visitorData = DefaultVisitorData;
   private static Task<string>? _fetchTask;
   private static CookieAuthService? _authService;
   private static readonly Lock _visitorDataLock = new();
@@ -28,10 +29,7 @@ public static class YoutubeClientUtils
   /// </summary>
   public static string VisitorData
   {
-    get
-    {
-      lock (_visitorDataLock) return _visitorData;
-    }
+    get { lock (_visitorDataLock) return _visitorData; }
     set
     {
       if (string.IsNullOrWhiteSpace(value)) return;
@@ -40,26 +38,31 @@ public static class YoutubeClientUtils
   }
 
   /// <summary>
-  /// Гарантирует наличие свежего VisitorData. Если он равен дефолтному
-  /// или принудительно затребовано обновление — запускает фоновый/синхронный
-  /// сетевой запрос к sw.js_data с ограничением таймаута в 5 секунд.
+  /// Гарантирует наличие свежего VisitorData.
   /// </summary>
+  /// <remarks>
+  /// <para>
+  /// <paramref name="ct"/> используется для отмены <b>ожидания</b> результата,
+  /// но не отменяет сам сетевой запрос — fetch живёт независимо от вызывающей операции.
+  /// Это предотвращает ситуацию когда отмена одного трека портит глобальный кэш VisitorData.
+  /// </para>
+  /// </remarks>
+  /// <param name="forceRefresh">Принудительное обновление даже при наличии актуального значения.</param>
+  /// <param name="ct">Токен отмены ожидания.</param>
   public static Task<string> EnsureVisitorDataAsync(bool forceRefresh = false, CancellationToken ct = default)
   {
     lock (_visitorDataLock)
     {
-      if (!forceRefresh && _visitorData != "CgtsZG1ySnZiQUkSbyiMjuGSBg%3D%3D")
-      {
+      if (!forceRefresh && !string.Equals(_visitorData, DefaultVisitorData, StringComparison.Ordinal))
         return Task.FromResult(_visitorData);
-      }
 
-      if (_fetchTask != null && !forceRefresh)
-      {
-        return _fetchTask;
-      }
+      // Переиспользуем активный незавершённый таск — deduplication параллельных вызовов
+      if (!forceRefresh && _fetchTask is { IsCompleted: false } activeTask)
+        return ct.CanBeCanceled ? activeTask.WaitAsync(ct) : activeTask;
 
+      // Завершённый (в т.ч. faulted/cancelled) таск заменяем новым
       _fetchTask = FetchVisitorDataInternalAsync(ct);
-      return _fetchTask;
+      return ct.CanBeCanceled ? _fetchTask.WaitAsync(ct) : _fetchTask;
     }
   }
 
@@ -68,7 +71,7 @@ public static class YoutubeClientUtils
   /// Возвращает VisitorData и новые заголовки кук для сессии.
   /// </summary>
   public static async Task<(string? VisitorData, IEnumerable<string>? SetCookieHeaders, bool IsSuccess)> FetchSwDataAsync(
-      string? cookiesHeader, CancellationToken ct)
+    string? cookiesHeader, CancellationToken ct)
   {
     try
     {
@@ -165,9 +168,9 @@ public static class YoutubeClientUtils
   /// </summary>
   public static readonly string[] StreamFallbackClientsDefault =
   [
-      "ANDROID_VR",     // Основной — без pot, без sig, без лимита
-        "ANDROID_MUSIC",  // Fallback
-    ];
+    "ANDROID_VR",     // Основной — без pot, без sig, без лимита
+    // "ANDROID_MUSIC",  // Fallback
+  ];
 
   /// <summary>
   /// Клиенты для авторизованных пользователей.
@@ -175,10 +178,10 @@ public static class YoutubeClientUtils
   /// </summary>
   public static readonly string[] StreamFallbackClientsAuth =
   [
-      "ANDROID_VR",     // Основной — без pot, без sig, без лимита
-        "WEB_REMIX",      // С авторизацией — без лимита (siu=1)
-        "ANDROID_MUSIC",  // Fallback
-    ];
+    "ANDROID_VR",     // Основной — без pot, без sig, без лимита
+    "WEB_REMIX",      // С авторизацией — без лимита (siu=1)
+    // "ANDROID_MUSIC",  // Fallback
+  ];
 
   /// <summary>
   /// Возвращает список клиентов для fallback в зависимости от состояния авторизации.
@@ -200,16 +203,16 @@ public static class YoutubeClientUtils
   /// </summary>
   public static readonly string[] HlsFallbackClients =
   [
-      "IOS",
-        "ANDROID_VR",
-        "WEB_REMIX"
+    "IOS",
+    "ANDROID_VR",
+    "WEB_REMIX"
   ];
 
   public static string GeneratePlayerContext(string videoId, string? visitorData)
   {
     return GeneratePlayerContextForClient(
-        CurrentProfile.ToString().ToUpperInvariant().Replace("WEBREMIX", "WEB_REMIX"),
-        videoId, visitorData);
+      CurrentProfile.ToString().ToUpperInvariant().Replace("WEBREMIX", "WEB_REMIX"),
+      videoId, visitorData);
   }
 
   /// <summary>
