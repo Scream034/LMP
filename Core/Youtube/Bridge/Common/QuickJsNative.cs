@@ -40,11 +40,12 @@ internal static unsafe partial class QuickJsNative
                 string extension = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? ".dll" :
                                    RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? ".dylib" : ".so";
 
+                // Ищем напрямую рядом с приложением (без подпапки "Native")
                 var localPath = Path.Combine(
                     AppDomain.CurrentDomain.BaseDirectory,
-                    "Native",
                     $"{LibName}{extension}");
 
+                // Для Debug/Release сборок файл будет лежать рядом с EXE
                 if (File.Exists(localPath) && NativeLibrary.TryLoad(localPath, out var handle))
                 {
 #if DEBUG
@@ -53,6 +54,9 @@ internal static unsafe partial class QuickJsNative
                     return handle;
                 }
 
+                // В Single File Publish файла физически нет в BaseDirectory.
+                // Возвращаем IntPtr.Zero, чтобы позволить стандартному механизму .NET
+                // загрузить библиотеку из кэша извлечения бандла (%TEMP%).
                 return IntPtr.Zero;
             });
     }
@@ -486,7 +490,7 @@ internal static unsafe partial class QuickJsNative
             var sigPtr = qjs_get_bridge_signature();
             var signature = sigPtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(sigPtr);
             var featureMask = qjs_get_bridge_feature_mask();
-            var loadedPath = _resolvedLibraryPath ?? "(unknown path)";
+            var loadedPath = _resolvedLibraryPath ?? "(unknown path, loaded via Single-File abstraction)";
 
             Log.Info($"[QuickJsNative] Loaded quickjs_bridge.dll from: {loadedPath}");
             Log.Info($"[QuickJsNative] Bridge signature: {signature ?? "null"}");
@@ -509,7 +513,7 @@ internal static unsafe partial class QuickJsNative
                     $"Signature: {signature ?? "null"}\n" +
                     $"Mask:      0x{featureMask:X}\n" +
                     $"Expected:  0x{ExpectedBridgeFeatureMask:X}\n" +
-                    "Most likely the app loaded an old DLL from Native\\quickjs_bridge.dll.");
+                    "Most likely the app loaded an old DLL from the application directory.");
             }
 
             System.Threading.Volatile.Write(ref _bridgeVerified, 1);

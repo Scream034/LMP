@@ -151,7 +151,7 @@
 
   <ItemGroup Condition="'$(Configuration)' == 'Debug'">
     <Content Include="Native/quickjs_bridge_debug.dll">
-      <Link>Native/quickjs_bridge.dll</Link>
+      <Link>quickjs_bridge.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>false</ExcludeFromSingleFile>
@@ -160,7 +160,7 @@
 
   <ItemGroup Condition="'$(Configuration)' == 'Release'">
     <Content Include="Native/quickjs_bridge_release.dll">
-      <Link>Native/quickjs_bridge.dll</Link>
+      <Link>quickjs_bridge.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>false</ExcludeFromSingleFile>
