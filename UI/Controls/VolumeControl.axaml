@@ -7,40 +7,37 @@
     ClipToBounds="False">
 
     <Panel Name="VolumePanel">
-        <!-- Кнопка вызова/сворачивания и Mute с бесшовными границами (Transitions сброшены для мгновенного отклика) -->
+        <!-- Кнопка вызова/сворачивания (Управление свойствами перенесено в Code-Behind) -->
         <Button x:Name="VolumeButton" Width="38" Height="38"
             Classes="icon-btn"
             Transitions="{x:Null}"
-            BorderBrush="{Binding ButtonBorderBrush, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}"
-            BorderThickness="{Binding ButtonBorderThickness, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}"
-            CornerRadius="{Binding ButtonCornerRadius, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}"
             Click="OnVolumeButtonClick"
             PointerWheelChanged="OnVolumeScroll">
             <Grid>
                 <PathIcon Width="24" Height="24"
-                    Foreground="{Binding ButtonForegroundBrush, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}"
+                    Foreground="{Binding $parent[Button].Foreground}"
                     Data="{StaticResource Icon.VolumeMute}"
                     IsVisible="{Binding IsMuted, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}" />
                 <PathIcon Width="24" Height="24"
-                    Foreground="{Binding ButtonForegroundBrush, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}"
+                    Foreground="{Binding $parent[Button].Foreground}"
                     Data="{StaticResource Icon.VolumeLow}"
                     IsVisible="{Binding IsVolumeLow, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}" />
                 <PathIcon Width="24" Height="24"
-                    Foreground="{Binding ButtonForegroundBrush, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}"
+                    Foreground="{Binding $parent[Button].Foreground}"
                     Data="{StaticResource Icon.VolumeMedium}"
                     IsVisible="{Binding IsVolumeMedium, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}" />
                 <PathIcon Width="24" Height="24"
-                    Foreground="{Binding ButtonForegroundBrush, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}"
+                    Foreground="{Binding $parent[Button].Foreground}"
                     Data="{StaticResource Icon.VolumeHigh}"
                     IsVisible="{Binding IsVolumeHigh, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}" />
                 <PathIcon Width="24" Height="24"
-                    Foreground="{Binding ButtonForegroundBrush, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}"
+                    Foreground="{Binding $parent[Button].Foreground}"
                     Data="{StaticResource Icon.VolumeVibrate}"
                     IsVisible="{Binding IsVolumeBoosted, RelativeSource={RelativeSource AncestorType=controls:VolumeControl}}" />
             </Grid>
         </Button>
 
-        <!-- Вертикальный парящий Popup-слайдер (Ширина 38px, Адаптивная Высота) -->
+        <!-- Вертикальный парящий Popup-слайдер -->
         <Popup
             x:Name="VolumePopup"
             IsLightDismissEnabled="False"
@@ -54,7 +51,7 @@
                 Width="38"
                 Padding="6,8"
                 Background="Transparent"
-                BorderBrush="{Binding PopupBorderBrush}"
+                BorderBrush="{DynamicResource AccentBrush}"
                 BorderThickness="2,2,2,0"
                 CornerRadius="10,10,0,0"
                 ClipToBounds="False"
@@ -62,17 +59,15 @@
                 PointerExited="OnVolumePopupContentExited">
                 <Grid RowDefinitions="Auto,*">
                     
-                    <!-- Текст процентов строго в шапке -->
                     <TextBlock Name="VolumeValueText"
                         Grid.Row="0"
                         FontSize="11"
                         FontWeight="Bold"
                         HorizontalAlignment="Center"
                         Margin="0,0,0,6"
-                        Foreground="{Binding ValueTextBrush}"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
                         Text="{Binding VolumePercentText}" />
 
-                    <!-- Тонкая область ползунка со связанной динамической высотой -->
                     <Panel
                         Grid.Row="1"
                         Name="VolumeSliderPanel"

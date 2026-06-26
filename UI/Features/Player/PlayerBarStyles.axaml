@@ -1,13 +1,33 @@
 <Styles xmlns="https://github.com/avaloniaui"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Section: Flyouts & Popups Instancy -->
+    <Style Selector="FlyoutPresenter">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="4" />
+        <!-- Отключаем любые анимации, чтобы рамка исчезала строго в момент закрытия -->
+        <Setter Property="Transitions" Value="{x:Null}" />
+    </Style>
+
+    <!-- Применяется к корневым нативным окнам всплывающих элементов -->
+    <Style Selector="PopupRoot">
+        <Setter Property="Transitions" Value="{x:Null}" />
+    </Style>
 
     <Style Selector="Button.icon-btn.popup-open">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <!-- Обнуляем транзиции перехода, чтобы рамка возвращалась к дефолтной мгновенно -->
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
 
     <Style Selector="Button.format-btn.popup-open">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <!-- Мгновенный сброс цвета рамки при закрытии формата -->
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
 
     <Style Selector="Button.icon-btn PathIcon.heart-icon">
@@ -15,7 +35,7 @@
         <Setter Property="Transitions">
             <Transitions>
                 <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2"
-                    Easing="BackEaseOut" />
+                                               Easing="BackEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -28,7 +48,7 @@
         <Setter Property="Transitions">
             <Transitions>
                 <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
-                    Easing="CubicEaseOut" />
+                                               Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -88,15 +108,15 @@
         <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
 
+    <!-- Section: Volume Thumb Styles -->
     <Style Selector="Ellipse.vol-thumb">
         <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="Fill" Duration="0:0:0.15" />
-                <ThicknessTransition Property="Margin" Duration="0:0:0.06" Easing="CubicEaseOut" />
                 <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"
-                    Easing="CubicEaseOut" />
+                                               Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -122,7 +142,6 @@
         <Setter Property="CornerRadius" Value="2" />
         <Setter Property="Transitions">
             <Transitions>
-                <DoubleTransition Property="Height" Duration="0:0:0.06" Easing="CubicEaseOut" />
                 <BrushTransition Property="Background" Duration="0:0:0.15" />
             </Transitions>
         </Setter>
@@ -178,7 +197,7 @@
             <Transitions>
                 <DoubleTransition Property="Opacity" Duration="0:0:0.2" Easing="CubicEaseOut" />
                 <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25"
-                    Easing="CubicEaseOut" />
+                                               Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>

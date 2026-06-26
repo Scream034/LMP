@@ -334,15 +334,14 @@ public sealed class AppEntry
         // Если это Windows, но версия сборки ниже 22000 — значит это Windows 10 или старше.
         if (OperatingSystem.IsWindows() && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
         {
-            Log.Info("[AppEntry] Windows 10 detected. Using DirectComposition to prevent DWM deadlocks.");
+            Log.Info("[AppEntry] Windows 10 detected. Using RedirectionSurface to prevent dcomp.dll compositor crashes.");
 
             builder.With(new Win32PlatformOptions
             {
-                // Отключаем WinUIComposition (вызывающий дедлоки при закрытии окон на Win 10),
-                // оставляем проверенный аппаратный DirectComposition.
+                // Исключаем DirectComposition на Windows 10.
+                // RedirectionSurface рендерит окно через стандартный GDI-backbuffer, что обходит баги нативных аниматоров ОС.
                 CompositionMode =
                 [
-                    Win32CompositionMode.DirectComposition,
                     Win32CompositionMode.RedirectionSurface
                 ]
             });

@@ -1,3 +1,4 @@
+using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -57,24 +58,6 @@ public partial class VolumeControl : UserControl
     public static readonly DirectProperty<VolumeControl, string> VolumePercentTextProperty =
         AvaloniaProperty.RegisterDirect<VolumeControl, string>(nameof(VolumePercentText), o => o.VolumePercentText);
 
-    public static readonly DirectProperty<VolumeControl, IBrush> ValueTextBrushProperty =
-        AvaloniaProperty.RegisterDirect<VolumeControl, IBrush>(nameof(ValueTextBrush), o => o.ValueTextBrush);
-
-    public static readonly DirectProperty<VolumeControl, IBrush> PopupBorderBrushProperty =
-        AvaloniaProperty.RegisterDirect<VolumeControl, IBrush>(nameof(PopupBorderBrush), o => o.PopupBorderBrush);
-
-    public static readonly DirectProperty<VolumeControl, IBrush> ButtonBorderBrushProperty =
-        AvaloniaProperty.RegisterDirect<VolumeControl, IBrush>(nameof(ButtonBorderBrush), o => o.ButtonBorderBrush);
-
-    public static readonly DirectProperty<VolumeControl, IBrush> ButtonForegroundBrushProperty =
-        AvaloniaProperty.RegisterDirect<VolumeControl, IBrush>(nameof(ButtonForegroundBrush), o => o.ButtonForegroundBrush);
-
-    public static readonly DirectProperty<VolumeControl, Thickness> ButtonBorderThicknessProperty =
-        AvaloniaProperty.RegisterDirect<VolumeControl, Thickness>(nameof(ButtonBorderThickness), o => o.ButtonBorderThickness);
-
-    public static readonly DirectProperty<VolumeControl, CornerRadius> ButtonCornerRadiusProperty =
-        AvaloniaProperty.RegisterDirect<VolumeControl, CornerRadius>(nameof(ButtonCornerRadius), o => o.ButtonCornerRadius);
-
     public static readonly DirectProperty<VolumeControl, double> VolumeSliderHeightProperty =
         AvaloniaProperty.RegisterDirect<VolumeControl, double>(nameof(VolumeSliderHeight), o => o.VolumeSliderHeight);
 
@@ -88,12 +71,6 @@ public partial class VolumeControl : UserControl
     private bool _isVolumeHigh;
     private bool _isVolumeBoosted;
     private string _volumePercentText = "0";
-    private IBrush _valueTextBrush = Brushes.White;
-    private IBrush _popupBorderBrush = Brushes.Transparent;
-    private IBrush _buttonBorderBrush = (IBrush)(Application.Current?.Resources["AccentBrushTransparent"] ?? Brushes.Transparent);
-    private IBrush _buttonForegroundBrush = Brushes.Transparent;
-    private Thickness _buttonBorderThickness = new Thickness(VolumeConstants.InactiveBorderThickness);
-    private CornerRadius _buttonCornerRadius = new CornerRadius(VolumeConstants.ButtonCornerRadius);
     private double _volumeSliderHeight = VolumeConstants.DefaultSliderHeight;
 
     #endregion
@@ -118,12 +95,6 @@ public partial class VolumeControl : UserControl
     public bool IsVolumeHigh { get => _isVolumeHigh; private set => SetAndRaise(IsVolumeHighProperty, ref _isVolumeHigh, value); }
     public bool IsVolumeBoosted { get => _isVolumeBoosted; private set => SetAndRaise(IsVolumeBoostedProperty, ref _isVolumeBoosted, value); }
     public string VolumePercentText { get => _volumePercentText; private set => SetAndRaise(VolumePercentTextProperty, ref _volumePercentText, value); }
-    public IBrush ValueTextBrush { get => _valueTextBrush; private set => SetAndRaise(ValueTextBrushProperty, ref _valueTextBrush, value); }
-    public IBrush PopupBorderBrush { get => _popupBorderBrush; private set => SetAndRaise(PopupBorderBrushProperty, ref _popupBorderBrush, value); }
-    public IBrush ButtonBorderBrush { get => _buttonBorderBrush; private set => SetAndRaise(ButtonBorderBrushProperty, ref _buttonBorderBrush, value); }
-    public IBrush ButtonForegroundBrush { get => _buttonForegroundBrush; private set => SetAndRaise(ButtonForegroundBrushProperty, ref _buttonForegroundBrush, value); }
-    public Thickness ButtonBorderThickness { get => _buttonBorderThickness; private set => SetAndRaise(ButtonBorderThicknessProperty, ref _buttonBorderThickness, value); }
-    public CornerRadius ButtonCornerRadius { get => _buttonCornerRadius; private set => SetAndRaise(ButtonCornerRadiusProperty, ref _buttonCornerRadius, value); }
     public double VolumeSliderHeight { get => _volumeSliderHeight; private set => SetAndRaise(VolumeSliderHeightProperty, ref _volumeSliderHeight, value); }
 
     #endregion
@@ -164,7 +135,6 @@ public partial class VolumeControl : UserControl
     {
         int maxVol = MaxVolume > 0 ? MaxVolume : VolumeConstants.DefaultMaxVolume;
 
-        // Автоматический лимит текущей громкости рамками MaxVolume (снимает ограничение в 100)
         if (Volume > maxVol)
         {
             Volume = maxVol;
@@ -188,30 +158,36 @@ public partial class VolumeControl : UserControl
 
         VolumePercentText = $"{Volume}";
 
+        // Прямое и безопасное получение системных ресурсов темы
         var accentBrush = (IBrush)(Application.Current?.Resources["AccentBrush"] ?? Brushes.Purple);
-        var textPrimaryBrush = (IBrush)(Application.Current?.Resources["TextPrimaryBrush"] ?? Brushes.White);
         var textMutedBrush = (IBrush)(Application.Current?.Resources["TextMutedBrush"] ?? Brushes.Gray);
         var textSecondaryBrush = (IBrush)(Application.Current?.Resources["TextSecondaryBrush"] ?? Brushes.LightGray);
         var transparentBrush = (IBrush)(Application.Current?.Resources["AccentBrushTransparent"] ?? Brushes.Transparent);
 
-        ValueTextBrush = textPrimaryBrush;
-        PopupBorderBrush = accentBrush;
-
         bool isPopupOpen = VolumePopup != null && VolumePopup.IsOpen;
 
+        // ПРЯМОЕ УПРАВЛЕНИЕ СВОЙСТВАМИ КНОПКИ (100% надежность отрисовки без участия биндингов)
         if (isPopupOpen)
         {
-            ButtonBorderBrush = accentBrush;
-            ButtonForegroundBrush = accentBrush;
-            ButtonBorderThickness = new Thickness(VolumeConstants.ActiveBorderThickness, 0, VolumeConstants.ActiveBorderThickness, VolumeConstants.ActiveBorderThickness);
-            ButtonCornerRadius = new CornerRadius(0, 0, VolumeConstants.PopupCornerRadius, VolumeConstants.PopupCornerRadius);
+            VolumeButton.BorderBrush = accentBrush;
+            VolumeButton.Foreground = accentBrush;
+            VolumeButton.BorderThickness = new Thickness(
+                VolumeConstants.ActiveBorderThickness, 
+                0, 
+                VolumeConstants.ActiveBorderThickness, 
+                VolumeConstants.ActiveBorderThickness);
+            VolumeButton.CornerRadius = new CornerRadius(
+                0, 
+                0, 
+                VolumeConstants.PopupCornerRadius, 
+                VolumeConstants.PopupCornerRadius);
         }
         else
         {
-            ButtonBorderBrush = transparentBrush;
-            ButtonForegroundBrush = isMuted ? textMutedBrush : textSecondaryBrush;
-            ButtonBorderThickness = new Thickness(VolumeConstants.InactiveBorderThickness);
-            ButtonCornerRadius = new CornerRadius(VolumeConstants.ButtonCornerRadius);
+            VolumeButton.BorderBrush = transparentBrush;
+            VolumeButton.Foreground = isMuted ? textMutedBrush : textSecondaryBrush;
+            VolumeButton.BorderThickness = new Thickness(VolumeConstants.InactiveBorderThickness);
+            VolumeButton.CornerRadius = new CornerRadius(VolumeConstants.ButtonCornerRadius);
         }
     }
 
@@ -236,7 +212,6 @@ public partial class VolumeControl : UserControl
 
         VolumeBar.Height = height * ratio;
 
-        // Позволяет ползунку уходить в отрицательный отступ (margin) для идеального центрирования
         double thumbTop = height * (1.0 - ratio) - VolumeConstants.ThumbRadius;
         VolumeThumb.Margin = new Thickness(0, thumbTop, 0, 0);
     }
