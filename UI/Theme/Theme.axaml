@@ -19,7 +19,7 @@
     <Style Selector="Window">
         <Setter Property="Background" Value="{DynamicResource BgPrimaryBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="FontFamily" Value="Inter, Segoe UI, sans-serif" />
+        <Setter Property="FontFamily" Value="Segoe UI, sans-serif" />
     </Style>
 
 </Styles>

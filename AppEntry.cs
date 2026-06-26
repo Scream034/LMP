@@ -21,6 +21,7 @@ using LMP.UI.Features.Notifications;
 using ReactiveUI.Avalonia;
 using LMP.UI.Features.Queue;
 using LMP.Core.Data.Entities;
+using LMP.Core.Diagnostics;
 
 namespace LMP;
 
@@ -348,7 +349,11 @@ public sealed class AppEntry
         }
 
 #if DEBUG
-        builder.LogToTrace();
+        // Инициализируем наш Sink после создания приложения
+        builder.AfterSetup(_ =>
+        {
+            Avalonia.Logging.Logger.Sink = new AvaloniaCustomLogSink(Avalonia.Logging.LogEventLevel.Debug);
+        });
 #endif
 
         return builder.UseReactiveUI(_ => { });
