@@ -308,9 +308,9 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
     #region Fallback & DASH Methods
 
     public async ValueTask<(PlayerResponse Response, string ClientName)> GetPlayerResponseWithFallbackAsync(
-        VideoId videoId,
-        CancellationToken cancellationToken,
-        bool isAuthenticated = false)
+       VideoId videoId,
+       CancellationToken cancellationToken,
+       bool isAuthenticated = false)
     {
         var clients = YoutubeClientUtils.GetStreamFallbackClients(isAuthenticated);
         var errors = new List<string>();
@@ -333,6 +333,16 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
                 var error = response.PlayabilityError ?? "Not playable / No streams";
                 Log.Warn($"[VideoController] [{videoId}] {clientName}: {error}");
                 errors.Add($"{clientName}: {error}");
+
+                var reason = PlayabilityErrorClassifier.Classify(error, out _);
+                if (reason is StreamUnavailableReason.CopyrightBlocked or
+                             StreamUnavailableReason.RegionBlocked or
+                             StreamUnavailableReason.Private or
+                             StreamUnavailableReason.Removed)
+                {
+                    Log.Info($"[VideoController] [{videoId}] Hard legal restriction detected ({reason}). Fast-failing further clients.");
+                    throw new StreamUnavailableException(error, videoId.Value, reason, wasHlsFallback: false);
+                }
 
                 if (!IsBotDetectionResponse(response))
                     allBotDetection = false;

@@ -253,14 +253,17 @@ public sealed class StreamClient
     {
         PlayerResponse playerResponse;
         bool isAuth = _isAuthenticatedCheck?.Invoke() ?? false;
+        VideoUnplayableException? fallbackChainException = null;
 
         try
         {
             (playerResponse, _) = await _controller.GetPlayerResponseWithFallbackAsync(
                 videoId, cancellationToken, isAuthenticated: isAuth).ConfigureAwait(false);
         }
-        catch (VideoUnplayableException)
+        catch (VideoUnplayableException ex)
         {
+            fallbackChainException = ex;
+
             var cipherManifest = await ResolveCipherManifestAsync(cancellationToken).ConfigureAwait(false);
             playerResponse = await _controller.GetPlayerResponseAsync(
                 videoId,
@@ -270,8 +273,15 @@ public sealed class StreamClient
         }
 
         if (!playerResponse.IsPlayable)
+        {
+            if (fallbackChainException != null)
+            {
+                throw fallbackChainException;
+            }
+
             throw new VideoUnplayableException(
                 $"Video {videoId} is not playable: {playerResponse.PlayabilityError}");
+        }
 
         var streams = new List<IStreamInfo>();
         await foreach (var stream in GetAudioStreamInfosAsync(videoId, playerResponse.Streams, cancellationToken).ConfigureAwait(false))

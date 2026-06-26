@@ -764,7 +764,11 @@ public partial class YoutubeProvider : IDisposable
             catch (StreamUnavailableException ex) when (ex.HttpStatusCode == 403)
             {
                 Log.Error($"[YouTube] [{videoId}] HTTP 403 Forbidden");
-                HandlePlayback403Fatal(); // Аварийное самовосстановление: сбрасываем кэши при 403
+                HandlePlayback403Fatal();
+                throw;
+            }
+            catch (StreamUnavailableException)
+            {
                 throw;
             }
             catch (Exception ex)

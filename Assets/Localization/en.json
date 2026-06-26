@@ -565,6 +565,7 @@
   "Recommendation_Login_403": "Sign in to YouTube via Settings → Account to access this content.",
   "Recommendation_AllClientsFailed_Auth": "All clients failed. Try changing the client in Settings → Network, or contact the developer.",
   "Recommendation_DpiBlocked": "This is usually caused by DPI blocking/throttling. Please run a DPI bypass tool (such as zapret, GoodbyeDPI) or enable a VPN/proxy.",
+  "Recommendation_Copyright": "This content is unavailable due to legal restrictions.",
 
   "Error_CopyDetails": "Copy Details",
   "Error_Stream_HlsForbidden": "HLS stream blocked (403). Please contact the developer.",
@@ -594,6 +595,7 @@
   "Error_NoAudioDevice": "Audio output device is not available. Please connect headphones or speakers and try again.",
   "Error_CacheInvalidated": "Track cache was deleted. Playback stopped.",
   "Error_SslHandshake_Failed": "Failed to establish a secure SSL connection to YouTube servers.",
+  "Error_Stream_CopyrightBlocked": "Track blocked on copyright grounds by {0}.",
 
   "Splash_Initializing": "Initializing...",
   "Splash_InitAudioCache": "Initializing audio cache...",

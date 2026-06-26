@@ -1,6 +1,7 @@
 using Avalonia.Threading;
 using LMP.Core.Exceptions;
 using LMP.Core.Youtube.Exceptions;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.UI.Services;
 
@@ -159,13 +160,9 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         }
 
         string errorKey = GetErrorDeduplicationKey(exception);
-        if (!TryRegisterError(errorKey))
-        {
-            Log.Debug($"[Orchestrator] Skipping duplicate error: {errorKey}");
-            return;
-        }
+        bool isDuplicate = !TryRegisterError(errorKey);
 
-        Log.Info($"[Orchestrator] Handling: {exception.GetType().Name}");
+        Log.Info($"[Orchestrator] Handling error: {exception.GetType().Name} (isDuplicate={isDuplicate})");
 
         try
         {
@@ -180,17 +177,71 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
             await (actualException switch
             {
                 BotDetectionException botEx => HandleBotDetectionAsync(botEx),
-                LoginRequiredException loginEx => HandleLoginRequiredAsync(loginEx),
-                StreamUnavailableException streamEx => HandleStreamUnavailableAsync(streamEx),
-                ChunkDownloadFatalException chunkEx => HandleChunkFatalAsync(chunkEx),
+                LoginRequiredException loginEx => HandleLoginRequiredAsync(loginEx, isDuplicate),
+                StreamUnavailableException streamEx => HandleStreamUnavailableAsync(streamEx, isDuplicate),
+                ChunkDownloadFatalException chunkEx => HandleChunkFatalAsync(chunkEx, isDuplicate),
                 OperationCanceledException oce2 when NetworkErrorHelper.IsCancellationLike(oce2) => Task.CompletedTask,
-                _ => HandleGenericErrorAsync(actualException)
+                _ => HandleGenericErrorAsync(actualException, isDuplicate)
             });
         }
         catch (Exception ex)
         {
             Log.Error($"[Orchestrator] Error in handler: {ex.Message}", ex);
         }
+    }
+
+    private async Task HandleLoginRequiredAsync(LoginRequiredException exception, bool isDuplicate)
+    {
+        Log.Warn($"[Orchestrator] Login required: {exception.Reason} for {exception.VideoId}");
+
+        await InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
+
+        if (isDuplicate)
+        {
+            Log.Debug("[Orchestrator] Suppressing duplicate LoginRequired notification toast");
+            return;
+        }
+
+        var settings = _libraryService.Settings.Audio;
+        if (settings.PlayErrorSound)
+            _notificationService.PlayErrorSound();
+
+        var messageKey = GetLoginRequiredMessageKey(exception);
+        var recommendationKey = GetRecommendation(exception);
+        var (Id, Title) = GetCurrentTrackInfo();
+
+        await _notificationService.ShowPlaybackErrorAsync(
+            "Error_Playback_Title", messageKey, Id, Title, null, exception.ToString(),
+            NotificationSeverity.Error, DialogToastDurationMs, recommendationKey);
+
+        await NotificationService.ShowOsNotificationAsync(
+            LocalizationService.Instance["Error_Playback_Title"],
+            LocalizationService.Instance[messageKey],
+            NotificationSeverity.Error);
+    }
+
+    private async Task HandleStreamUnavailableAsync(StreamUnavailableException exception, bool isDuplicate)
+    {
+        Log.Error($"[Orchestrator] Stream unavailable: {exception.Reason} for {exception.VideoId}");
+        var attempts = ExtractAttemptsFromException(exception);
+        var messageKey = GetStreamErrorMessageKey(exception);
+        await DispatchPlaybackErrorAsync(exception, messageKey, attempts, isDuplicate);
+    }
+
+    private async Task HandleChunkFatalAsync(ChunkDownloadFatalException exception, bool isDuplicate)
+    {
+        Log.Error($"[Orchestrator] Chunk fatal: {exception.Reason} at chunk {exception.ChunkIndex}");
+        var attempts = new List<AttemptRecord> {
+            new($"Chunk {exception.ChunkIndex}", false, $"{exception.Reason}: {exception.Message}", DateTime.UtcNow)
+        };
+        var messageKey = GetChunkErrorMessageKey(exception);
+        await DispatchPlaybackErrorAsync(exception, messageKey, attempts, isDuplicate);
+    }
+
+    private async Task HandleGenericErrorAsync(Exception exception, bool isDuplicate)
+    {
+        Log.Error($"[Orchestrator] Generic error: {exception.Message}");
+        await DispatchPlaybackErrorAsync(exception, exception.Message, null, isDuplicate);
     }
 
     #endregion
@@ -276,9 +327,10 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     /// Полностью устраняет дублирование между типами ошибок.
     /// </summary>
     private async Task DispatchPlaybackErrorAsync(
-        Exception exception,
-        string messageOrKey,
-        List<AttemptRecord>? attempts = null)
+      Exception exception,
+      string messageOrKey,
+      List<AttemptRecord>? attempts = null,
+      bool skipNotification = false)
     {
         var behavior = _libraryService.Settings.Audio.CriticalErrorBehavior;
 
@@ -286,6 +338,17 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         {
             Log.Debug("[Orchestrator] Ignoring error, applying fatal recovery");
             await RecoverFromFatalPlaybackErrorAsync();
+            return;
+        }
+
+        if (behavior == PlaybackErrorBehavior.Dialog)
+            await PauseOrStopForDialogAsync();
+        else
+            await RecoverFromFatalPlaybackErrorAsync();
+
+        if (skipNotification)
+        {
+            Log.Debug($"[Orchestrator] Silently recovered duplicate error without UI notification: {messageOrKey}");
             return;
         }
 
@@ -299,27 +362,28 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
             ? "Recommendation_DpiBlocked"
             : GetRecommendation(exception);
 
-        if (behavior == PlaybackErrorBehavior.Dialog)
-            await PauseOrStopForDialogAsync();
-        else
-            await RecoverFromFatalPlaybackErrorAsync();
-
         if (settings.PlayErrorSound)
             _notificationService.PlayErrorSound();
 
-        // Playback failure is ALWAYS shown as a critical Error (red toast) to the user.
         var severity = NotificationSeverity.Error;
         int duration = behavior == PlaybackErrorBehavior.Dialog ? DialogToastDurationMs : SkipToastDurationMs;
 
-        // Показ внутреннего тоста
+        object[]? messageArgs = null;
+        if (exception is StreamUnavailableException { Reason: StreamUnavailableReason.CopyrightBlocked } copyrightEx)
+        {
+            string claimant = PlayabilityErrorClassifier.ExtractCopyrightHolder(copyrightEx.Message);
+            messageArgs = [claimant];
+        }
+
         await _notificationService.ShowPlaybackErrorAsync(
             "Error_Playback_Title", finalMessageOrKey, trackId, trackTitle, attempts, exception.ToString(),
-            severity, durationMs: duration, recommendationKey: recommendationKey);
+            severity, durationMs: duration, recommendationKey: recommendationKey, messageArgs: messageArgs);
 
-        // Показ системного уведомления (переводим на лету)
         string localizedTitle = LocalizationService.Instance["Error_Playback_Title"];
         string localizedMessage = finalMessageOrKey.StartsWith("Error_")
-            ? LocalizationService.Instance[finalMessageOrKey]
+            ? (messageArgs != null
+                ? string.Format(LocalizationService.Instance[finalMessageOrKey], messageArgs)
+                : LocalizationService.Instance[finalMessageOrKey])
             : finalMessageOrKey;
 
         await NotificationService.ShowOsNotificationAsync(localizedTitle, localizedMessage, severity);
@@ -377,6 +441,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     {
         return exception.Reason switch
         {
+            StreamUnavailableReason.CopyrightBlocked => "Error_Stream_CopyrightBlocked",
             StreamUnavailableReason.Forbidden403 => "Error_Stream_Forbidden",
             StreamUnavailableReason.RegionBlocked => "Error_Stream_RegionBlocked",
             StreamUnavailableReason.AgeRestricted => "Error_Stream_AgeRestricted",
@@ -505,6 +570,9 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
 
     private static string GetStreamRecommendation(StreamUnavailableException stream, bool isAuthenticated)
     {
+        if (stream.Reason == StreamUnavailableReason.CopyrightBlocked)
+            return "Recommendation_Copyright";
+
         if (stream.Reason == StreamUnavailableReason.Forbidden403)
             return isAuthenticated ? "Recommendation_ChangeClient" : "Recommendation_Login_403";
 

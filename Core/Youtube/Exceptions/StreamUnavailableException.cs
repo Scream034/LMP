@@ -1,34 +1,81 @@
 namespace LMP.Core.Youtube.Exceptions;
 
 /// <summary>
+/// Причина недоступности стрима.
+/// </summary>
+public enum StreamUnavailableReason
+{
+    /// <summary>Неизвестная причина.</summary>
+    Unknown = 0,
+
+    /// <summary>HTTP 403 Forbidden.</summary>
+    Forbidden403,
+
+    /// <summary>Все клиенты не смогли получить стрим.</summary>
+    AllClientsFailed,
+
+    /// <summary>Заблокировано в регионе.</summary>
+    RegionBlocked,
+
+    /// <summary>Возрастные ограничения.</summary>
+    AgeRestricted,
+
+    /// <summary>Прямая трансляция (не VOD).</summary>
+    LiveStream,
+
+    /// <summary>Приватное видео.</summary>
+    Private,
+
+    /// <summary>Видео удалено.</summary>
+    Removed,
+
+    /// <summary>Требуется подписка/оплата.</summary>
+    PaymentRequired,
+
+    /// <summary>Заблокировано по жалобе правообладателя (нарушение авторских прав).</summary>
+    CopyrightBlocked
+}
+
+/// <summary>
 /// Выбрасывается когда стримы недоступны (403, блокировка региона, и т.д.).
 /// </summary>
-public sealed class StreamUnavailableException(
-    string message,
-    string videoId,
-    StreamUnavailableReason reason,
-    int? httpStatusCode = null,
-    bool wasHlsFallback = false) : YoutubeExplodeException(message)
+public sealed class StreamUnavailableException : YoutubeExplodeException
 {
     /// <summary>
     /// Тип недоступности стрима.
     /// </summary>
-    public StreamUnavailableReason Reason { get; } = reason;
+    public StreamUnavailableReason Reason { get; }
 
     /// <summary>
     /// ID видео.
     /// </summary>
-    public string VideoId { get; } = videoId;
+    public string VideoId { get; }
 
     /// <summary>
     /// HTTP статус код (если применимо).
     /// </summary>
-    public int? HttpStatusCode { get; } = httpStatusCode;
+    public int? HttpStatusCode { get; }
 
     /// <summary>
     /// Был ли это HLS fallback.
     /// </summary>
-    public bool WasHlsFallback { get; } = wasHlsFallback;
+    public bool WasHlsFallback { get; }
+
+    /// <summary>
+    /// Инициализирует новое исключение StreamUnavailableException.
+    /// </summary>
+    public StreamUnavailableException(
+        string message,
+        string videoId,
+        StreamUnavailableReason reason,
+        int? httpStatusCode = null,
+        bool wasHlsFallback = false) : base(message)
+    {
+        VideoId = videoId;
+        Reason = reason;
+        HttpStatusCode = httpStatusCode;
+        WasHlsFallback = wasHlsFallback;
+    }
 
     /// <summary>
     /// Ключ локализации для данного типа ошибки.
@@ -37,6 +84,9 @@ public sealed class StreamUnavailableException(
     {
         return Reason switch
         {
+            StreamUnavailableReason.CopyrightBlocked 
+                => "Error_Stream_CopyrightBlocked",
+
             StreamUnavailableReason.Forbidden403 when WasHlsFallback 
                 => "Error_Stream_HlsForbidden",
             
@@ -67,37 +117,4 @@ public sealed class StreamUnavailableException(
             _ => "Error_Stream_Unknown"
         };
     }
-}
-
-/// <summary>
-/// Причина недоступности стрима.
-/// </summary>
-public enum StreamUnavailableReason
-{
-    /// <summary>Неизвестная причина.</summary>
-    Unknown = 0,
-
-    /// <summary>HTTP 403 Forbidden.</summary>
-    Forbidden403,
-
-    /// <summary>Все клиенты не смогли получить стрим.</summary>
-    AllClientsFailed,
-
-    /// <summary>Заблокировано в регионе.</summary>
-    RegionBlocked,
-
-    /// <summary>Возрастные ограничения.</summary>
-    AgeRestricted,
-
-    /// <summary>Прямая трансляция (не VOD).</summary>
-    LiveStream,
-
-    /// <summary>Приватное видео.</summary>
-    Private,
-
-    /// <summary>Видео удалено.</summary>
-    Removed,
-
-    /// <summary>Требуется подписка/оплата.</summary>
-    PaymentRequired
 }
