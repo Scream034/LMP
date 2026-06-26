@@ -64,7 +64,6 @@ public sealed class StreamClient
             var context = await _playerContextManager.GetOrLoadAsync(cancellationToken).ConfigureAwait(false);
 
             // context.Sts — единственный надёжный источник STS
-            // Идентичная причина что и в VideoController.ResolveSignatureTimestampAsync.
             var sts = context.Sts;
 
             if (string.IsNullOrEmpty(sts) && !string.IsNullOrEmpty(context.BaseJs))
@@ -86,18 +85,22 @@ public sealed class StreamClient
     /// </summary>
     /// <param name="videoId">ID видео на YouTube.</param>
     /// <param name="streamDatas">Коллекция сырых данных о потоках.</param>
+    /// <param name="clientName">Имя активного клиента YouTube (допускает null при фоллбеках).</param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Асинхронный итератор элементов потоков.</returns>
     private async IAsyncEnumerable<IStreamInfo> GetAudioStreamInfosAsync(
       VideoId videoId,
       IEnumerable<IStreamData> streamDatas,
+      string? clientName,
       [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         bool? isNTokenDecryptionRequired = null;
 
-        // PoToken получается один раз для всего manifest
+        // PoToken не запрашивается для клиентов, не проходящих проверку аттестации (например, ANDROID_VR)
         string? pot = null;
-        if (_poTokenProvider != null)
+        bool skipPoToken = string.Equals(clientName, "ANDROID_VR", StringComparison.OrdinalIgnoreCase);
+
+        if (_poTokenProvider != null && !skipPoToken)
         {
             try
             {
@@ -207,7 +210,6 @@ public sealed class StreamClient
             url = UrlEx.RemoveQueryParameter(url, "alr");
             url = UrlEx.RemoveQueryParameter(url, "srfvp");
 
-            // Добавляем pot если получен, иначе удаляем из URL
             url = !string.IsNullOrEmpty(pot)
                 ? UrlEx.SetQueryParameter(url, "pot", pot)
                 : UrlEx.RemoveQueryParameter(url, "pot");
@@ -252,12 +254,13 @@ public sealed class StreamClient
         CancellationToken cancellationToken = default)
     {
         PlayerResponse playerResponse;
+        string? clientName = null;
         bool isAuth = _isAuthenticatedCheck?.Invoke() ?? false;
         VideoUnplayableException? fallbackChainException = null;
 
         try
         {
-            (playerResponse, _) = await _controller.GetPlayerResponseWithFallbackAsync(
+            (playerResponse, clientName) = await _controller.GetPlayerResponseWithFallbackAsync(
                 videoId, cancellationToken, isAuthenticated: isAuth).ConfigureAwait(false);
         }
         catch (VideoUnplayableException ex)
@@ -284,7 +287,7 @@ public sealed class StreamClient
         }
 
         var streams = new List<IStreamInfo>();
-        await foreach (var stream in GetAudioStreamInfosAsync(videoId, playerResponse.Streams, cancellationToken).ConfigureAwait(false))
+        await foreach (var stream in GetAudioStreamInfosAsync(videoId, playerResponse.Streams, clientName, cancellationToken).ConfigureAwait(false))
         {
             streams.Add(stream);
         }
@@ -319,13 +322,6 @@ public sealed class StreamClient
     /// <summary>
     /// Инвалидирует закэшированный CipherManifest и signatureTimestamp контроллера.
     /// </summary>
-    /// <remarks>
-    /// Единая точка сброса всех stale STS-данных при 403-recovery.
-    /// Вызывается из <see cref="YoutubeProvider.RefreshStreamUrlAsync"/> при <c>forceRefresh=true</c>.
-    /// Без этого вызова <see cref="ResolveCipherManifestAsync"/> и
-    /// <see cref="VideoController.ResolveSignatureTimestampAsync"/> вернут stale пустой STS,
-    /// приводя к бесконечному 403-циклу.
-    /// </remarks>
     public void InvalidateCipherManifest()
     {
         _cipherManifest = null;
