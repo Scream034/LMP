@@ -376,7 +376,8 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
         AutoShuffleEnabled = _playerControl.ShuffleEnabled;
         RepeatMode = _playerControl.RepeatMode;
 
-        _audio.SetVolumeInstant(Volume);
+        // Синхронизируем начальное значение с координатором, минуя лишний дисковый I/O
+        _playerControl.SetVolumeFast(Volume);
         RecalcEffectivePercent();
 
         _isInitialized = true;
@@ -538,15 +539,29 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
             .Subscribe(_ => HandleForceSync())
             .DisposeWith(Disposables);
 
+        // Реактивная синхронизация: получение изменений громкости от координатора (трея, горячих клавиш)
+        _playerControl.VolumeObservable
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(v =>
+            {
+                if (Volume != v)
+                {
+                    Volume = v;
+                }
+            })
+            .DisposeWith(Disposables);
+
+        // Передача изменений громкости от слайдера плеербара к координатору
         this.WhenAnyValue(x => x.Volume)
             .Subscribe(v =>
             {
-                _audio.SetVolumeInstant(v);
+                if (_playerControl.CurrentVolume != v)
+                {
+                    _playerControl.SetVolumeFast(v);
+                }
+
                 RecalcEffectivePercent();
                 RaiseVolumePropertiesChanged();
-
-                if (_isInitialized && v > 0)
-                    _library.UpdateSettings(s => s.LastVolume = v);
             })
             .DisposeWith(Disposables);
 
@@ -1204,9 +1219,12 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
         SyncPositionFromEngine();
     }
 
+    /// <summary>
+    /// Фиксирует измененную громкость в конфигурационном файле приложения.
+    /// </summary>
     public void OnVolumeChangeComplete()
     {
-        _audio.SaveVolumeNow();
+        _playerControl.CommitVolume();
     }
 
     public int GetVolumeScrollStep()
@@ -1529,6 +1547,9 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
         Log.Debug("[PlayerBar] Resumed: heavy subscriptions recreated");
     }
 
+    /// <summary>
+    /// Освобождает ресурсы, используемые ViewModel, и сохраняет текущую громкость.
+    /// </summary>
     protected override void Dispose(bool disposing)
     {
         if (disposing)
@@ -1544,9 +1565,9 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
             _heavySubscriptions?.Dispose();
 
             if (_isInitialized && Volume > 0)
-                _library.UpdateSettings(s => s.LastVolume = Volume);
-
-            _audio.SaveVolumeNow();
+            {
+                _playerControl.CommitVolume();
+            }
         }
         base.Dispose(disposing);
     }

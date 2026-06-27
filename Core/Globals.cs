@@ -76,7 +76,7 @@ public static class G
             }
             catch { }
 
-            // ═══ УПРОЩЁННАЯ ВЕРСИЯ: только коммиты ═══
+            // УПРОЩЁННАЯ ВЕРСИЯ: только коммиты
             var displayVersion = IsDebug
                 ? $"#{commitCount}-dev"
                 : $"#{commitCount}";

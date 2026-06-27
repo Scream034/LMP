@@ -46,7 +46,7 @@ internal sealed partial class TrayManager : IDisposable
     private const int WM_USER = 0x0400;
     private const int WM_TRAYICON = WM_USER + 1;
 
-    // ═══ Mouse message IDs (V4: приходят как LOWORD(lParam)) ═══
+    // Mouse message IDs (V4: приходят как LOWORD(lParam))
     private const int WM_MOUSEMOVE = 0x0200;
     private const int WM_LBUTTONDBLCLK = 0x0203;
     private const int WM_DESTROY = 0x0002;
@@ -57,7 +57,7 @@ internal sealed partial class TrayManager : IDisposable
     /// </summary>
     private const int WM_CONTEXTMENU = 0x007B;
 
-    // ═══ NIN_ notifications (V4: приходят как LOWORD(lParam)) ═══
+    // NIN_ notifications (V4: приходят как LOWORD(lParam))
     /// <summary>Курсор вошёл в область иконки (Shell_NotifyIcon V4).</summary>
     private const int NIN_POPUPOPEN = 0x0406;
     /// <summary>Курсор покинул область иконки (Shell_NotifyIcon V4).</summary>
@@ -69,12 +69,12 @@ internal sealed partial class TrayManager : IDisposable
     /// </summary>
     private const int NIN_SELECT = 0x0400;
 
-    // ═══ Mouse Hook ═══
+    // Mouse Hook
     private const int WH_MOUSE_LL = 14;
     private const int HC_ACTION = 0;
     private const int WM_MOUSEWHEEL_MSG = 0x020A;
 
-    // ═══ Shell_NotifyIcon ═══
+    // Shell_NotifyIcon
     private const int NIM_ADD = 0x00;
     private const int NIM_MODIFY = 0x01;
     private const int NIM_DELETE = 0x02;
@@ -316,7 +316,7 @@ internal sealed partial class TrayManager : IDisposable
     /// <summary>Кастомное Avalonia-окно контекстного меню трея. Создаётся лениво.</summary>
     private TrayPopupWindow? _popupWindow;
 
-    // ═══ Dedicated Hook Thread ═══
+    // Dedicated Hook Thread
 
     /// <summary>
     /// Выделенный поток для WH_MOUSE_LL hook.
@@ -361,7 +361,7 @@ internal sealed partial class TrayManager : IDisposable
     /// <summary>Флаг: hook сейчас установлен. Volatile для чтения из UI thread.</summary>
     private volatile bool _isHookInstalled;
 
-    // ═══ Кеш RECT иконки ═══
+    // Кеш RECT иконки
     private RECT _cachedIconRect;
     private long _iconRectCacheTime;
     private volatile bool _iconRectCacheValid;
@@ -877,7 +877,7 @@ internal sealed partial class TrayManager : IDisposable
         if (!IsCursorOverTrayIconCached(cursorX, cursorY))
             return CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
 
-        // ═══ Wheel event над иконкой ═══
+        // Wheel event над иконкой
         Volatile.Write(ref _lastHookActivityTime, Environment.TickCount64);
 
         int mouseData = Marshal.ReadInt32(lParam, 8);

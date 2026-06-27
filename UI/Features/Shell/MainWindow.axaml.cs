@@ -801,12 +801,6 @@ public partial class MainWindow : Window
         });
     }
 
-    private static void OnTrayClearMemory()
-    {
-        Log.Info("[Tray] Manual memory cleanup");
-        MemoryCleanupHelper.PerformCleanup(aggressive: true);
-    }
-
     /// <summary>
     /// Обрабатывает изменение громкости через скролл на иконке трея (Windows).
     /// Показывает tooltip с акцентом на громкости, debounce-восстанавливает стандартный.
