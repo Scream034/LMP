@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LMP.Core.Audio.Cache;
+using LMP.Core.Audio.Http;
 using LMP.Core.Data;
 using LMP.Core.Youtube.Bridge.Common;
 using LMP.Core.Youtube.Bridge.PoToken;
@@ -21,6 +22,12 @@ namespace LMP.Core.Models;
 [JsonSerializable(typeof(AudioCacheEntry))]
 [JsonSerializable(typeof(List<AudioCacheEntry>))]
 [JsonSerializable(typeof(CachedSearchResult))]
+[JsonSerializable(typeof(CdnHostStatsEnvelope))]
+[JsonSerializable(typeof(CdnClusterStats))]
+[JsonSerializable(typeof(List<CdnClusterStats>))]
+[JsonSerializable(typeof(SessionCacheEnvelope))]
+[JsonSerializable(typeof(SessionEntry))]
+[JsonSerializable(typeof(List<SessionEntry>))]
 [JsonSerializable(typeof(ThemeSettings))]
 [JsonSerializable(typeof(BootstrapSettings))]
 [JsonSerializable(typeof(AuthState))]

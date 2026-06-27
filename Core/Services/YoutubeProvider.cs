@@ -2007,7 +2007,7 @@ public partial class YoutubeProvider : IDisposable
     #endregion
 }
 
-public partial class StreamOption : ReactiveObject
+public sealed partial class StreamOption : ReactiveObject
 {
     public string Container { get; set; } = "";
     public double Bitrate { get; set; }
@@ -2024,7 +2024,7 @@ public partial class StreamOption : ReactiveObject
     [Reactive] public partial bool IsActive { get; set; }
 }
 
-public class HomeSection
+public sealed class HomeSection
 {
     public string Title { get; set; } = "";
     public List<TrackInfo> Tracks { get; set; } = [];

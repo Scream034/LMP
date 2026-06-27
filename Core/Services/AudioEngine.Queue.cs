@@ -1,3 +1,5 @@
+using LMP.Core.Audio.Http;
+
 namespace LMP.Core.Services;
 
 public sealed partial class AudioEngine
@@ -168,6 +170,48 @@ public sealed partial class AudioEngine
             InvalidateQueueSnapshot();
         }
         RaiseOnUI(() => OnQueueChanged?.Invoke());
+    }
+
+    #endregion
+
+    #region Pre-warm
+
+    /// <summary>
+    /// Спекулятивно прогревает CDN-соединения для следующих треков в очереди.
+    /// <para>
+    /// Использует снапшот очереди (<see cref="Queue"/>) — thread-safe без дополнительного лока.
+    /// Прогревает только треки с уже известным <see cref="TrackInfo.StreamUrl"/>:
+    /// API call для неизвестных URL не делается.
+    /// Полностью закэшированные треки пропускаются — им CDN не нужен.
+    /// </para>
+    /// </summary>
+    /// <param name="currentIndex">Текущий индекс воспроизведения в очереди.</param>
+    /// <param name="httpClient">HTTP-клиент с общим connection pool.</param>
+    /// <param name="ct">Токен отмены (lifetime плеера).</param>
+    private void PreWarmNextTracksInQueue(int currentIndex, HttpClient httpClient, CancellationToken ct)
+    {
+        const int LookaheadCount = 2;
+
+        // Queue property возвращает IReadOnlyList<T> снапшот — безопасно читать вне лока
+        var queue = Queue;
+
+        for (int i = 1; i <= LookaheadCount; i++)
+        {
+            int idx = currentIndex + i;
+            if (idx >= queue.Count)
+                break;
+
+            var next = queue[idx];
+
+            if (AudioSourceFactory.FindAnyCachedTrack(next.Id) != null)
+                continue;
+
+            if (!string.IsNullOrEmpty(next.StreamUrl))
+            {
+                CdnConnectionPreWarmer.PreWarmHost(httpClient, next.StreamUrl, ct);
+                Log.Debug($"[AudioEngine] Lookahead CDN prewarm queue[{idx}]: {next.Id}");
+            }
+        }
     }
 
     #endregion

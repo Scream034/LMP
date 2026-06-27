@@ -40,6 +40,8 @@ internal static class CdnConnectionPreWarmer
     /// </summary>
     private const string GoogleVideoCdnSuffix = ".googlevideo.com";
 
+    private const string GenerateEndpoint = "/generate_204";
+
     /// <summary>
     /// Максимальное количество запоминаемых CDN-хостов.
     /// YouTube обычно использует 2–4 ноды для одного региона.
@@ -85,6 +87,9 @@ internal static class CdnConnectionPreWarmer
     {
         if (!TryExtractHost(url, out var host))
             return;
+
+        // Регистрируем хит в персистентной статистике
+        CdnHostStatsStore.RecordHit(host);
 
         lock (_lock)
         {
@@ -191,31 +196,43 @@ internal static class CdnConnectionPreWarmer
     }
 
     /// <summary>
-    /// Выполняет TCP+TLS-рукопожатие к CDN-хосту через HTTP HEAD запрос.
+    /// Выполняет TCP+TLS прогрев CDN-ноды через <c>GET /generate_204</c>.
     /// <para>
-    /// HEAD к корню хоста — минимально возможный HTTP-запрос.
-    /// YouTube CDN вернёт 404 или 403, но это не имеет значения:
-    /// TCP+TLS-соединение зарегистрировано в connection pool <see cref="HttpClient"/>
-    /// и будет переиспользовано для последующих range-запросов через HTTP/2 мультиплексирование.
+    /// <c>/generate_204</c> — нативный Google connectivity-check endpoint.
+    /// Возвращает HTTP 204 No Content с гарантированно пустым телом,
+    /// что исключает аллокации на парсинг error-body (в отличие от HEAD /).
+    /// Легитимный паттерн: браузерный YouTube player использует его для CDN pre-connect.
+    /// </para>
+    /// <para>
+    /// После успешного прогрева TTFB записывается в <see cref="CdnHostStatsStore"/>
+    /// для адаптивного probe-timeout в <see cref="SessionCacheStore"/>.
     /// </para>
     /// </summary>
     private static async Task WarmHostCoreAsync(HttpClient httpClient, string host, CancellationToken ct)
     {
-        var sw = Stopwatch.StartNew();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(WarmTimeout);
 
-            using var request = new HttpRequestMessage(HttpMethod.Head, $"https://{host}/");
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"https://{host}{GenerateEndpoint}");
+
             request.Headers.ConnectionClose = false;
+            SharedHttpClient.ApplyUserAgentFromUrl(request, $"https://{host}/");
 
             using var response = await httpClient
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token)
                 .ConfigureAwait(false);
 
             sw.Stop();
+
+            CdnHostStatsStore.RecordTtfb(host, sw.ElapsedMilliseconds);
+            CdnHostStatsStore.FlushIfNeeded();
+
             Log.Debug(
                 $"[CdnPreWarmer] {host[..Math.Min(host.Length, 30)]}... " +
                 $"warm in {sw.ElapsedMilliseconds}ms (HTTP {(int)response.StatusCode})");
@@ -232,6 +249,15 @@ internal static class CdnConnectionPreWarmer
             Log.Debug($"[CdnPreWarmer] {host[..Math.Min(host.Length, 30)]}... failed ({sw.ElapsedMilliseconds}ms): {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Прогревает один конкретный хост. Используется из <see cref="CdnHostStatsStore.PreWarmTopClustersAsync"/>.
+    /// </summary>
+    /// <param name="httpClient">HTTP-клиент с общим connection pool.</param>
+    /// <param name="host">CDN hostname.</param>
+    /// <param name="ct">Токен отмены.</param>
+    internal static Task WarmSingleHostAsync(HttpClient httpClient, string host, CancellationToken ct)
+        => WarmHostCoreAsync(httpClient, host, ct);
 
     /// <summary>
     /// Извлекает hostname из URL, если это YouTube CDN.

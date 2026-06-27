@@ -146,6 +146,7 @@ public static class G
         public static readonly string NTokenCache = Path.Combine(Cache, "NToken");
         public static readonly string SigCipherCache = Path.Combine(Cache, "SigCipher");
         public static readonly string Extension = Path.Combine(Cache, "Extension");
+        public static readonly string StreamCache = Path.Combine(Cache, "StreamCache");
 
         /// <summary>
         /// Папка с тестовыми данными для разных версий плеера.
@@ -165,6 +166,7 @@ public static class G
             Directory.CreateDirectory(SigCipherCache);
             Directory.CreateDirectory(Logs);
             Directory.CreateDirectory(TestData);
+            Directory.CreateDirectory(StreamCache);
         }
     }
 
@@ -194,6 +196,9 @@ public static class G
         public static readonly string TestConfig = Path.Combine(Folder.Cache, "test-config.json");
     
         public static readonly string TempAuthExtensionZipFile = Path.Combine(Folder.Cache, "LMP-Auth-main.zip");
+
+        public static readonly string CdnHostStats  = Path.Combine(Folder.StreamCache, "cdn_hosts.json");
+        public static readonly string SessionCache  = Path.Combine(Folder.StreamCache, "session_cache.json");
     }
 
     public static class Json

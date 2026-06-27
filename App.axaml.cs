@@ -7,6 +7,8 @@ using LMP.UI.Features.Shell;
 using AsyncImageLoader;
 using LMP.Core.Audio.Cache;
 using System.Diagnostics;
+using LMP.Core.Audio.Http;
+
 
 
 #if DEBUG
@@ -19,6 +21,7 @@ namespace LMP;
 public partial class App : Application
 {
     private SplashWindow? _splash;
+    private readonly CancellationTokenSource _appLifetimeCts = new();
 
 #if DEBUG
     private static UIHangWatchdog? _uiWatchdog;
@@ -119,10 +122,44 @@ public partial class App : Application
 
             // Audio Cache
             _splash?.UpdateStatus(L["Splash_InitAudioCache"]);
-            var audioCacheManager = await Task.Run(() =>
+            var audioCacheTask = Task.Run(() =>
                 AppEntry.Services.GetRequiredService<AudioCacheManager>());
+
+            var statsLoadTask = Task.Run(() =>
+            {
+                CdnHostStatsStore.Load();
+                SessionCacheStore.Load();
+            });
+
+            await Task.WhenAll(audioCacheTask, statsLoadTask).ConfigureAwait(false);
+
+            var audioCacheManager = audioCacheTask.Result;
             AudioSourceFactory.InitializeGlobalCache(audioCacheManager);
+
+            // Fire-and-forget: прогрев top CDN-кластеров пока UI продолжает инициализацию
+            _ = CdnHostStatsStore.PreWarmTopClustersAsync(
+                    SharedHttpClient.Instance,
+                    _appLifetimeCts.Token);
+
             _splash?.SetProgress(20);
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var timer = new PeriodicTimer(TimeSpan.FromMinutes(5));
+                    while (await timer.WaitForNextTickAsync(_appLifetimeCts.Token).ConfigureAwait(false))
+                    {
+                        CdnHostStatsStore.Save();
+                        SessionCacheStore.Save();
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[App] Periodic stats save failed: {ex.Message}");
+                }
+            });
 
             // Memory Monitor
             MemoryCleanupHelper.StartAutoCleanup();
@@ -272,9 +309,13 @@ public partial class App : Application
             {
                 try
                 {
-                    // Безопасный Dispose без создания сервера
-                    LocalAuthServer.DisposeIfCreated();
+                    _appLifetimeCts.Cancel();
 
+                    // Сохраняем ДО dispose AudioCacheManager — порядок важен
+                    CdnHostStatsStore.Save();
+                    SessionCacheStore.Save();
+
+                    LocalAuthServer.DisposeIfCreated();
                     MemoryCleanupHelper.Dispose();
                     await audioCacheManager.DisposeAsync();
                     await library.DisposeAsync();
@@ -282,6 +323,10 @@ public partial class App : Application
                 catch (Exception ex)
                 {
                     Log.Error($"Shutdown error: {ex.Message}");
+                }
+                finally
+                {
+                    _appLifetimeCts.Dispose();
                 }
             };
 
