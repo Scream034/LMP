@@ -8,6 +8,7 @@ using LMP.Core.Helpers.Extensions;
 using LMP.Core.Youtube.Videos.ClosedCaptions;
 using LMP.Core.Youtube.Bridge.PoToken;
 using LMP.Core.Youtube.Utils;
+using LMP.Core.Audio.Http;
 
 namespace LMP.Core.Youtube.Videos.Streams;
 
@@ -253,6 +254,33 @@ public sealed class StreamClient
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
+        string trackId = $"yt_{videoId.Value}";
+
+        // 1. Проверяем единый источник правды. Если сессии живы, возвращаем манифест мгновенно (0 мс)
+        var cachedSessions = SessionCacheStore.GetValidSessions(trackId);
+        if (cachedSessions.Count > 0)
+        {
+            var cachedStreams = new List<IStreamInfo>(cachedSessions.Count);
+            for (int i = 0; i < cachedSessions.Count; i++)
+            {
+                var session = cachedSessions[i];
+                cachedStreams.Add(new AudioOnlyStreamInfo(
+                    session.Itag,
+                    session.VideoplaybackUrl,
+                    new Container(session.Container),
+                    new FileSize(session.Clen),
+                    new Bitrate(session.Bitrate),
+                    session.Codec,
+                    audioLanguage: null,
+                    isAudioLanguageDefault: false,
+                    hasEncryptedNToken: false));
+            }
+
+            Log.Debug($"[StreamClient] Returned cached manifest for {videoId} ({cachedStreams.Count} formats) from SessionCacheStore");
+            return new StreamManifest(cachedStreams);
+        }
+
+        // 2. Cold Path: Если кэш пуст — идем в сеть
         PlayerResponse playerResponse;
         string? clientName = null;
         bool isAuth = _isAuthenticatedCheck?.Invoke() ?? false;

@@ -1174,6 +1174,14 @@ public sealed partial class CachingStreamSource
             return !string.IsNullOrWhiteSpace(_currentUrl);
         }
 
+        // ЗАЩИТА ОТ RETRY-ШТОРМА: Если ссылка так и не была получена (API упал / вернул null),
+        // делаем принудительную задержку, чтобы предотвратить Infinite Loop в вызывающем preload-цикле.
+        if (string.IsNullOrWhiteSpace(_currentUrl))
+        {
+            Log.Warn($"[CachingSource] URL acquirer returned null. Delaying to prevent retry storm...");
+            try { await Task.Delay(1500, ct).ConfigureAwait(false); } catch { }
+        }
+
         return !string.IsNullOrWhiteSpace(_currentUrl);
     }
 

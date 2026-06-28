@@ -84,9 +84,10 @@ internal static class SessionCacheStore
 {
     private const int MaxSessions = 30;
     private const int TtlSafetyMarginMinutes = 30;
-    private const int MinProbeTimeoutMs = 300;
+    private const int MinProbeTimeoutMs = 1000;
     private const int MaxProbeTimeoutMs = 3000;
     private const int DefaultProbeTimeoutMs = 2000;
+    private const int TtlBypassProbeMinutes = 10;
     private const double ProbeTtfbMultiplier = 4.0;
 
     private static readonly Lock _lock = new();
@@ -165,13 +166,27 @@ internal static class SessionCacheStore
     // --- Section: Record ---
 
     /// <summary>
+    /// Возвращает дефолтный битрейт для заданного itag, если точные данные отсутствуют.
+    /// </summary>
+    private static int GetDefaultBitrateForItag(int itag) => itag switch
+    {
+        140 => 128000,
+        249 => 50000,
+        250 => 70000,
+        251 => 160000,
+        _ => 128000
+    };
+
+    /// <summary>
     /// Сохраняет videoplayback URL после успешного YouTube API resolve.
     /// </summary>
-    /// <param name="trackId">ID трека (с префиксом <c>yt_</c>).</param>
-    /// <param name="url">Полный videoplayback URL.</param>
-    /// <param name="codec">Кодек потока.</param>
-    /// <param name="container">Контейнер потока.</param>
-    public static void Record(string trackId, string url, string codec, string container)
+    public static void Record(
+        string trackId,
+        string url,
+        string codec,
+        string container,
+        int bitrateKbps = 0,
+        long clen = 0)
     {
         if (string.IsNullOrEmpty(trackId) || string.IsNullOrEmpty(url))
             return;
@@ -183,33 +198,42 @@ internal static class SessionCacheStore
         if (expireUtc <= DateTime.UtcNow)
             return;
 
+        int itag = (int)ParseLongParam(url, "itag");
+        int finalBitrate = bitrateKbps > 0
+            ? bitrateKbps * 1000
+            : (int)ParseLongParam(url, "bitrate");
+
+        if (finalBitrate <= 0)
+        {
+            finalBitrate = GetDefaultBitrateForItag(itag);
+        }
+
         var entry = new SessionEntry
         {
             TrackId = trackId,
             VideoplaybackUrl = url,
             CdnHost = host,
             ExpireUtc = expireUtc,
-            Clen = ParseLongParam(url, "clen"),
-            Itag = (int)ParseLongParam(url, "itag"),
-            Bitrate = (int)ParseLongParam(url, "bitrate"),
+            Clen = clen > 0 ? clen : ParseLongParam(url, "clen"),
+            Itag = itag,
+            Bitrate = finalBitrate,
             Codec = codec,
-            Container = container,
+            Container = container ?? string.Empty,
             SavedAtUtc = DateTime.UtcNow
         };
 
         lock (_lock)
         {
-            // Удаляем предыдущую запись для того же трека
             for (int i = _data.Sessions.Count - 1; i >= 0; i--)
             {
-                if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal))
+                if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal) &&
+                    string.Equals(_data.Sessions[i].Container, container, StringComparison.OrdinalIgnoreCase))
                 {
                     _data.Sessions.RemoveAt(i);
                     break;
                 }
             }
 
-            // LRU eviction при переполнении
             while (_data.Sessions.Count >= MaxSessions)
                 EvictLeastRecentlyUsedMustHoldLock();
 
@@ -217,28 +241,28 @@ internal static class SessionCacheStore
             _dirty = true;
         }
 
-        // Cold path: ~1 раз на трек. File.WriteAllText для ~3KB < 1ms на ThreadPool.
         _ = Task.Run(Save);
     }
 
     // --- Section: Probe ---
 
     /// <summary>
-    /// Пытается получить и проверить cached URL для трека.
+    /// Пытается получить и проверить cached URL для трека с учетом контейнера.
     /// <para>
     /// Алгоритм:
     /// </para>
     /// <list type="number">
-    ///   <item>Поиск записи по <paramref name="trackId"/>.</item>
+    ///   <item>Поиск записи по <paramref name="trackId"/> и <paramref name="container"/>.</item>
     ///   <item>Проверка TTL: если <c>expireUtc - 30 мин &lt; now</c> — запись дропается.</item>
     ///   <item>
     ///     Probe HEAD к cached URL с адаптивным timeout
     ///     (<c>AvgTtfbMs × 4</c>, зажато в [300, 3000] мс).
     ///   </item>
-    ///   <item>200/206 → возвращает entry. 403/timeout → дропает запись.</item>
+    ///   <item>200/206 → возвращает entry. 403/404 → дропает запись.</item>
     /// </list>
     /// </summary>
     /// <param name="trackId">ID трека.</param>
+    /// <param name="container">Контейнер потока (webm, mp4).</param>
     /// <param name="httpClient">HTTP-клиент с общим connection pool.</param>
     /// <param name="ct">Токен отмены.</param>
     /// <returns>
@@ -246,6 +270,7 @@ internal static class SessionCacheStore
     /// </returns>
     public static async ValueTask<SessionEntry?> TryGetAndProbeAsync(
       string trackId,
+      string container,
       HttpClient httpClient,
       CancellationToken ct)
     {
@@ -253,18 +278,25 @@ internal static class SessionCacheStore
 
         lock (_lock)
         {
-            entry = FindMustHoldLock(trackId);
+            entry = FindMustHoldLock(trackId, container);
             if (entry is null) return null;
 
             if (entry.ExpireUtc.AddMinutes(-TtlSafetyMarginMinutes) <= DateTime.UtcNow)
             {
-                DropMustHoldLock(trackId);
-                Log.Debug($"[SessionCache] TTL expired for {trackId}, dropping");
+                DropMustHoldLock(trackId, container);
+                Log.Debug($"[SessionCache] TTL expired for {trackId} ({container}), dropping");
                 return null;
+            }
+
+            // Мгновенный возврат без сетевого зонда, если ссылка получена менее 10 минут назад.
+            // Предотвращает лаги и таймауты при быстрых перезапусках.
+            if (DateTime.UtcNow - entry.SavedAtUtc < TimeSpan.FromMinutes(TtlBypassProbeMinutes))
+            {
+                Log.Debug($"[SessionCache] Probe bypassed (saved {(DateTime.UtcNow - entry.SavedAtUtc).TotalSeconds:F0}s ago) for {trackId} ({container})");
+                return entry;
             }
         }
 
-        // Async, вне I/O
         var probeTimeoutMs = ComputeProbeTimeout(entry.CdnHost);
 
         try
@@ -273,8 +305,6 @@ internal static class SessionCacheStore
             probeCts.CancelAfter(probeTimeoutMs);
 
             using var request = new HttpRequestMessage(HttpMethod.Head, entry.VideoplaybackUrl);
-            // Range: bytes=0-0 гарантирует что CDN реально проверяет доступность контента,
-            // а не возвращает 200 на redirect/login страницу
             request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
             request.Version = System.Net.HttpVersion.Version20;
             SharedHttpClient.ApplyUserAgentFromUrl(request, entry.VideoplaybackUrl);
@@ -287,23 +317,61 @@ internal static class SessionCacheStore
 
             if (status is 200 or 206)
             {
-                Log.Debug($"[SessionCache] Probe OK ({status}) for {trackId}");
+                Log.Debug($"[SessionCache] Probe OK ({status}) for {trackId} ({container})");
                 return entry;
             }
 
-            Log.Debug($"[SessionCache] Probe rejected (HTTP {status}) for {trackId}, dropping");
+            if (status is 401 or 403 or 404 or 410)
+            {
+                Log.Debug($"[SessionCache] Probe rejected (HTTP {status}) for {trackId}, dropping");
+                lock (_lock) { DropMustHoldLock(trackId, container); }
+                return null;
+            }
+
+            Log.Warn($"[SessionCache] Probe returned HTTP {status} for {trackId}, keeping entry for safety");
+            return null;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            Log.Debug($"[SessionCache] Probe timed out ({probeTimeoutMs}ms) for {trackId}, dropping");
+            Log.Debug($"[SessionCache] Probe timed out ({probeTimeoutMs}ms) for {trackId}, keeping entry");
+            return null;
+        }
+        catch (HttpRequestException ex)
+        {
+            Log.Debug($"[SessionCache] Probe network error for {trackId}: {ex.Message}, keeping entry");
+            return null;
         }
         catch (Exception ex)
         {
-            Log.Debug($"[SessionCache] Probe failed for {trackId}: {ex.Message}");
+            Log.Debug($"[SessionCache] Probe failed for {trackId}: {ex.Message}, keeping entry");
+            return null;
         }
+    }
 
-        lock (_lock) { DropMustHoldLock(trackId); }
-        return null;
+    /// <summary>
+    /// Возвращает список всех валидных, неистекших сессий для указанного трека.
+    /// Позволяет реконструировать манифест без обращения к сети.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    public static List<SessionEntry> GetValidSessions(string trackId)
+    {
+        var result = new List<SessionEntry>();
+        lock (_lock)
+        {
+            var threshold = DateTime.UtcNow.AddMinutes(-TtlSafetyMarginMinutes);
+            for (int i = 0; i < _data.Sessions.Count; i++)
+            {
+                var session = _data.Sessions[i];
+                if (string.Equals(session.TrackId, trackId, StringComparison.Ordinal))
+                {
+                    if (session.ExpireUtc > threshold)
+                    {
+                        result.Add(session);
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     // --- Section: Private Helpers ---
@@ -317,21 +385,34 @@ internal static class SessionCacheStore
         return Math.Clamp((int)(avgTtfb * ProbeTtfbMultiplier), MinProbeTimeoutMs, MaxProbeTimeoutMs);
     }
 
-    private static SessionEntry? FindMustHoldLock(string trackId)
+    private static SessionEntry? FindMustHoldLock(string trackId, string container)
     {
+        // Сначала ищем точное совпадение с контейнером
+        for (int i = 0; i < _data.Sessions.Count; i++)
+        {
+            if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal) &&
+                string.Equals(_data.Sessions[i].Container, container, StringComparison.OrdinalIgnoreCase))
+            {
+                return _data.Sessions[i];
+            }
+        }
+        // Fallback для старых записей без указания контейнера
         for (int i = 0; i < _data.Sessions.Count; i++)
         {
             if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal))
+            {
                 return _data.Sessions[i];
+            }
         }
         return null;
     }
 
-    private static void DropMustHoldLock(string trackId)
+    private static void DropMustHoldLock(string trackId, string container)
     {
         for (int i = _data.Sessions.Count - 1; i >= 0; i--)
         {
-            if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal))
+            if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal) &&
+               (string.IsNullOrEmpty(_data.Sessions[i].Container) || string.Equals(_data.Sessions[i].Container, container, StringComparison.OrdinalIgnoreCase)))
             {
                 _data.Sessions.RemoveAt(i);
                 _dirty = true;

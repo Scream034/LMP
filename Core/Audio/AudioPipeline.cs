@@ -986,6 +986,7 @@ public sealed class AudioPipeline : IAsyncDisposable
         Interlocked.Exchange(ref _warmupTcs, tcs);
         Volatile.Write(ref _warmupThreshold, minSamples);
 
+        // Повторная проверка после установки threshold, чтобы исключить race condition
         if (_pcmBuffer.Count >= minSamples)
         {
             Volatile.Write(ref _warmupThreshold, 0);
@@ -994,16 +995,26 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(maxWaitMs);
 
         try
         {
-            await tcs.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
-            return true;
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return false;
+            // Exception-free ожидание по таймауту.
+            // Передаем timeoutCts.Token в Delay, чтобы отменить таймер, если данные придут раньше.
+            var delayTask = Task.Delay(maxWaitMs, timeoutCts.Token);
+            var completedTask = await Task.WhenAny(tcs.Task, delayTask).ConfigureAwait(false);
+
+            if (completedTask == tcs.Task)
+            {
+                // Данные пришли быстрее таймаута: отменяем Task.Delay для мгновенного освобождения таймера
+                timeoutCts.Cancel();
+                return true;
+            }
+            else
+            {
+                // Сработал Task.Delay. Либо это таймаут, либо отмена внешнего ct.
+                ct.ThrowIfCancellationRequested();
+                return false;
+            }
         }
         finally
         {

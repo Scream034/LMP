@@ -10,6 +10,24 @@
         "**/.DS_Store": true,
         "**/Thumbs.db": true
     },
+    "files.watcherExclude": {
+        "**/.git/objects/**": true,
+        "**/.git/subtree-cache/**": true,
+        "**/node_modules/*/**": true,
+        "**/.hg/store/**": true,
+        "**/bin/**": true,
+        "**/obj/**": true,
+        "**/.vs/**": true,
+        "**/.idea/**": true
+    },
+    "search.exclude": {
+        "**/node_modules": true,
+        "**/bower_components": true,
+        "**/*.code-search": true,
+        "**/bin": true,
+        "**/obj": true,
+        "**/.vs": true
+    },
     "[bat]": {
         "files.encoding": "utf8bom"
     },
