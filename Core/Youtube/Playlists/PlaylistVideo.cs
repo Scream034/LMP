@@ -6,7 +6,7 @@ namespace LMP.Core.Youtube.Playlists;
 /// <summary>
 /// Metadata associated with a YouTube video included in a playlist.
 /// </summary>
-public class PlaylistVideo(
+public sealed class PlaylistVideo(
     PlaylistId playlistId,
     VideoId id,
     string title,

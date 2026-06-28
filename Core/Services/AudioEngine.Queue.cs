@@ -178,21 +178,11 @@ public sealed partial class AudioEngine
 
     /// <summary>
     /// Спекулятивно прогревает CDN-соединения для следующих треков в очереди.
-    /// <para>
-    /// Использует снапшот очереди (<see cref="Queue"/>) — thread-safe без дополнительного лока.
-    /// Прогревает только треки с уже известным <see cref="TrackInfo.StreamUrl"/>:
-    /// API call для неизвестных URL не делается.
-    /// Полностью закэшированные треки пропускаются — им CDN не нужен.
-    /// </para>
     /// </summary>
-    /// <param name="currentIndex">Текущий индекс воспроизведения в очереди.</param>
-    /// <param name="httpClient">HTTP-клиент с общим connection pool.</param>
-    /// <param name="ct">Токен отмены (lifetime плеера).</param>
     private void PreWarmNextTracksInQueue(int currentIndex, HttpClient httpClient, CancellationToken ct)
     {
         const int LookaheadCount = 2;
 
-        // Queue property возвращает IReadOnlyList<T> снапшот — безопасно читать вне лока
         var queue = Queue;
 
         for (int i = 1; i <= LookaheadCount; i++)
@@ -206,9 +196,28 @@ public sealed partial class AudioEngine
             if (AudioSourceFactory.FindAnyCachedTrack(next.Id) != null)
                 continue;
 
-            if (!string.IsNullOrEmpty(next.StreamUrl))
+            string? targetUrl = null;
+
+            var manifest = SessionCacheStore.GetManifest(next.Id);
+            if (manifest is { Variants.Count: > 0 })
             {
-                CdnConnectionPreWarmer.PreWarmHost(httpClient, next.StreamUrl, ct);
+                targetUrl = manifest.Variants[0].Url;
+            }
+            else
+            {
+                string rawId = next.GetRawIdSpan().ToString();
+                var descriptor = _youtube.TryGetCachedStreamDescriptor(
+                    rawId,
+                    GetRequestedContainerHint(next),
+                    GetRequestedBitrateHint(next));
+
+                if (descriptor is { HasLiveUrl: true } d)
+                    targetUrl = d.Url;
+            }
+
+            if (!string.IsNullOrEmpty(targetUrl))
+            {
+                CdnConnectionPreWarmer.PreWarmHost(httpClient, targetUrl, ct);
                 Log.Debug($"[AudioEngine] Lookahead CDN prewarm queue[{idx}]: {next.Id}");
             }
         }

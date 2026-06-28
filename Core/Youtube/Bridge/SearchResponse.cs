@@ -689,9 +689,6 @@ internal partial class SearchResponse
 
             return sb?.ToString() ?? first;
         }
-
-        private static readonly string[] DurationFormats =
-            [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"];
     }
 
     internal sealed class PlaylistData

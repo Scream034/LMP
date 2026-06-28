@@ -23,7 +23,6 @@ public sealed class SearchCacheService
     private readonly LinkedList<string> _lruOrder = new();
     private const int MaxMemoryCacheItems = 15;
 
-    
 
     private TimeSpan CacheTtl => TimeSpan.FromMinutes(
         _libraryService.Settings.SearchCacheTtlMinutes > 0

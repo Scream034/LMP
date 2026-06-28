@@ -24,7 +24,17 @@ internal static class JsonExtensions
     extension(JsonElement element)
     {
         /// <summary>
-        /// ОПТИМИЗАЦИЯ: проверка свойства по строке.
+        /// Извлекает VisitorData из структуры ответа responseContext (zero-alloc по UTF-8 ключам).
+        /// </summary>
+        /// <returns>Строка visitorData или null, если свойство отсутствует.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public string? GetVisitorData() =>
+            element.GetPropertyOrNull("responseContext"u8)
+                   ?.GetPropertyOrNull("visitorData"u8)
+                   ?.GetStringOrNull();
+
+        /// <summary>
+        /// проверка свойства по строке.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public JsonElement? GetPropertyOrNull(string propertyName)
@@ -43,7 +53,7 @@ internal static class JsonExtensions
         }
 
         /// <summary>
-        /// КРИТИЧНАЯ ОПТИМИЗАЦИЯ: проверка по UTF8 байтам — zero-alloc для имени свойства.
+        /// проверка по UTF8 байтам — zero-alloc для имени свойства.
         /// Используйте для горячих путей с константными именами.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -110,7 +120,7 @@ internal static class JsonExtensions
             element.EnumerateObjectOrNull() ?? default;
 
         /// <summary>
-        /// ОПТИМИЗАЦИЯ: получает N-й элемент массива через индексатор — O(1).
+        /// получает N-й элемент массива через индексатор — O(1).
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public JsonElement? GetArrayElementOrNull(int index)
@@ -138,7 +148,7 @@ internal static class JsonExtensions
         }
 
         /// <summary>
-        /// КРИТИЧНАЯ ОПТИМИЗАЦИЯ: рекурсивный поиск БЕЗ промежуточных List аллокаций.
+        /// рекурсивный поиск БЕЗ промежуточных List аллокаций.
         /// Использует ArrayPool для стека результатов.
         /// </summary>
         public void EnumerateDescendantProperties(string propertyName, List<JsonElement> results)
@@ -160,7 +170,7 @@ internal static class JsonExtensions
         }
 
         /// <summary>
-        /// ОПТИМИЗАЦИЯ: ранний выход при первом найденном свойстве — избегает обхода всего дерева.
+        /// ранний выход при первом найденном свойстве — избегает обхода всего дерева.
         /// </summary>
         public JsonElement? FindFirstDescendantProperty(string propertyName)
         {
@@ -189,7 +199,7 @@ internal static class JsonExtensions
         }
 
         /// <summary>
-        /// ОПТИМИЗАЦИЯ: поиск по UTF-8 имени — для горячих путей.
+        /// поиск по UTF-8 имени — для горячих путей.
         /// </summary>
         public JsonElement? FindFirstDescendantProperty(ReadOnlySpan<byte> utf8PropertyName)
         {
@@ -227,7 +237,7 @@ internal static class JsonExtensions
 
         /// <summary>
         /// HELPER: извлекает текст из runs[0].text — частый паттерн YouTube API.
-        /// ОПТИМИЗАЦИЯ: используем UTF-8 константы.
+        /// используем UTF-8 константы.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public string? GetTextFromRuns()

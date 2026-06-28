@@ -6,7 +6,7 @@ namespace LMP.Core.Youtube.Videos.Streams;
 /// <summary>
 /// Metadata associated with an audio-only YouTube media stream.
 /// </summary>
-public class AudioOnlyStreamInfo(
+public sealed class AudioOnlyStreamInfo(
     int itag,
     string url,
     Container container,

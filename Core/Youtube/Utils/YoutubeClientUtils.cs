@@ -242,7 +242,7 @@ public static class YoutubeClientUtils
           "context": {
             "client": {
               "clientName": "WEB_REMIX",
-              "clientVersion": "1.20260209.03.00",
+              "clientVersion": "{{YoutubeHttpHandler.MusicClientVersion}}",
               "visitorData": {{vdJson}},
               "hl": {{hlJson}},
               "gl": {{glJson}},
@@ -306,7 +306,7 @@ public static class YoutubeClientUtils
           "context": {
             "client": {
               "clientName": "WEB",
-              "clientVersion": "2.20250120.01.00",
+              "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
               "visitorData": {{vdJson}},
               "hl": {{hlJson}},
               "gl": {{glJson}},

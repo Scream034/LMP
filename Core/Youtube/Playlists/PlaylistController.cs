@@ -1,6 +1,7 @@
 ﻿using System.Net.Http.Headers;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
+using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Videos;
 
 namespace LMP.Core.Youtube.Playlists;
@@ -108,6 +109,9 @@ internal class PlaylistController(HttpClient http)
         );
     }
 
+    /// <summary>
+    /// Получает ответ Next плейлиста с поддержкой отказоустойчивых повторных попыток.
+    /// </summary>
     public async ValueTask<PlaylistNextResponse> GetPlaylistNextResponseAsync(
         PlaylistId playlistId,
         VideoId? videoId = null,
@@ -119,8 +123,7 @@ internal class PlaylistController(HttpClient http)
         var hl = YoutubeHttpHandler.GetHl();
         var gl = YoutubeHttpHandler.GetGl();
 
-        const int retriesCount = 3;
-        for (var retriesRemaining = retriesCount; ; retriesRemaining--)
+        return await ResilienceExecutor.ExecuteWithRetryAsync(async () =>
         {
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
@@ -152,21 +155,20 @@ internal class PlaylistController(HttpClient http)
                 """
             );
 
-            using var response = await http.SendAsync(request, cancellationToken);
+            using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
             var playlistResponse = PlaylistNextResponse.Parse(
-                await response.Content.ReadAsStringAsync(cancellationToken)
+                await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false)
             );
 
             if (!playlistResponse.IsAvailable)
             {
-                if (retriesRemaining > 0) continue;
                 throw new PlaylistUnavailableException($"Плейлист '{playlistId}' недоступен.");
             }
 
             return playlistResponse;
-        }
+        }, maxRetries: 3, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<IPlaylistData> GetPlaylistResponseAsync(

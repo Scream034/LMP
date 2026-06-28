@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using LMP.Core.Youtube.Search;
+using LMP.Core.Youtube.Utils;
 using ReactiveUI;
 
 
@@ -61,26 +62,13 @@ public sealed partial class TrackInfo : ReactiveObject, IBatchItem, ISearchResul
     /// Извлекает чистый YouTube ID без префикса (zero-alloc через Span).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<char> GetRawIdSpan()
-    {
-        var span = Id.AsSpan();
-        if (span.StartsWith("yt_pl_".AsSpan()))
-            return span[6..];
-        if (span.StartsWith("yt_".AsSpan()))
-            return span[3..];
-        return span;
-    }
+    public ReadOnlySpan<char> GetRawIdSpan() => YoutubeIdHelper.ExtractRawIdSpan(Id);
 
     /// <summary>
     /// Получает чистый ID как строку (для async контекста).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public string GetRawId()
-    {
-        if (Id.StartsWith("yt_pl_")) return Id[6..];
-        if (Id.StartsWith("yt_")) return Id[3..];
-        return Id;
-    }
+    public string GetRawId() => YoutubeIdHelper.ExtractRawId(Id);
 
     #endregion
 
@@ -168,27 +156,21 @@ public sealed partial class TrackInfo : ReactiveObject, IBatchItem, ISearchResul
 
     #endregion
 
-    #region Runtime Cache
+    #region Runtime Stream Selection
 
+    /// <summary>
+    /// Временный контейнер, выбранный пользователем в текущей сессии
+    /// (например, при переключении качества).
+    /// Не является кэшем resolved stream metadata.
+    /// </summary>
     [JsonIgnore] public string? TransientContainer { get; set; }
+
+    /// <summary>
+    /// Временный битрейт, выбранный пользователем в текущей сессии
+    /// (например, при переключении качества).
+    /// Не является кэшем resolved stream metadata.
+    /// </summary>
     [JsonIgnore] public int TransientBitrate { get; set; }
-    [JsonIgnore] public long TransientSize { get; set; }
-
-    [JsonIgnore, Reactive] public partial string StreamUrl { get; set; } = string.Empty;
-
-    [JsonIgnore] public string CachedCodec { get; set; } = string.Empty;
-    [JsonIgnore] public int CachedBitrate { get; set; }
-    [JsonIgnore] public string CachedContainer { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Трек доступен только через HLS (обычные стримы заблокированы).
-    /// </summary>
-    [JsonIgnore] public bool IsHlsOnly { get; set; }
-
-    /// <summary>
-    /// URL HLS манифеста (если IsHlsOnly = true).
-    /// </summary>
-    [JsonIgnore] public string? HlsManifestUrl { get; set; }
 
     #endregion
 
@@ -335,19 +317,13 @@ public sealed partial class TrackInfo : ReactiveObject, IBatchItem, ISearchResul
         if (fresh.HasYoutubeLoudnessDb && !HasYoutubeLoudnessDb)
             YoutubeIntegratedLoudnessDb = fresh.YoutubeIntegratedLoudnessDb;
 
-        // Предотвращаем потерю StreamUrl и связанных runtime-свойств 
-        // при слиянии метаданных с сущностью, загруженной из базы данных.
-        if (!string.IsNullOrEmpty(fresh.StreamUrl) && fresh.StreamUrl != StreamUrl)
-            StreamUrl = fresh.StreamUrl;
-
+        // Сохраняем только явные runtime-hints выбора качества текущей сессии.
+        // Resolved stream metadata больше не переносится через TrackInfo.
         if (!string.IsNullOrEmpty(fresh.TransientContainer) && fresh.TransientContainer != TransientContainer)
             TransientContainer = fresh.TransientContainer;
 
         if (fresh.TransientBitrate > 0 && fresh.TransientBitrate != TransientBitrate)
             TransientBitrate = fresh.TransientBitrate;
-
-        if (fresh.TransientSize > 0 && fresh.TransientSize != TransientSize)
-            TransientSize = fresh.TransientSize;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

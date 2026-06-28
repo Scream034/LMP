@@ -211,7 +211,7 @@ public sealed class DownloadService
         }
     }
 
-    private class DownloadTask
+    private sealed class DownloadTask
     {
         public float Progress { get; set; }
         public CancellationTokenSource CancellationSource { get; set; } = new();

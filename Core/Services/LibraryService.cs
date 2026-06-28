@@ -371,6 +371,28 @@ public sealed class LibraryService : IAsyncDisposable
 
     public bool HasTrack(string id) => _registry.TryGet(id) != null;
 
+    /// <summary>
+    /// Групповая гидрация связей плейлистов и регистрация треков в L1-кэше.
+    /// Оптимизирована для минимизации аллокаций (избегает LINQ и декрементирует GC-pressure).
+    /// </summary>
+    private async Task HydrateAndRegisterTracksAsync(List<TrackInfo> tracks, CancellationToken ct)
+    {
+        if (tracks.Count == 0) return;
+
+        var trackIds = new List<string>(tracks.Count);
+        for (int i = 0; i < tracks.Count; i++)
+            trackIds.Add(tracks[i].Id);
+
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, CurrentOwnerId, ct).ConfigureAwait(false);
+
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            var t = tracks[i];
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
+            _registry.RegisterOrUpdate(t);
+        }
+    }
+
     public async Task<List<TrackInfo>> SearchTracksAsync(
      string query, int limit = 50, int offset = 0, CancellationToken ct = default)
     {
@@ -407,39 +429,17 @@ public sealed class LibraryService : IAsyncDisposable
         CancellationToken ct = default)
     {
         var tracks = await _tracks.GetAllAsync(CurrentOwnerId, limit, offset, ct).ConfigureAwait(false);
-        if (tracks.Count == 0) return tracks;
-
-        var trackIds = tracks.Select(t => t.Id).ToList();
-        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, CurrentOwnerId, ct).ConfigureAwait(false);
-
-        for (int i = 0; i < tracks.Count; i++)
-        {
-            var t = tracks[i];
-            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
-            _registry.RegisterOrUpdate(t);
-        }
-
+        await HydrateAndRegisterTracksAsync(tracks, ct).ConfigureAwait(false);
         return tracks;
     }
 
     public async Task<List<TrackInfo>> GetLocalTracksAsync(
-        int limit = 1000,
-        int offset = 0,
-        CancellationToken ct = default)
+       int limit = 1000,
+       int offset = 0,
+       CancellationToken ct = default)
     {
         var tracks = await _tracks.GetLocalTracksAsync(CurrentOwnerId, limit, offset, ct).ConfigureAwait(false);
-        if (tracks.Count == 0) return tracks;
-
-        var trackIds = tracks.Select(t => t.Id).ToList();
-        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, CurrentOwnerId, ct).ConfigureAwait(false);
-
-        for (int i = 0; i < tracks.Count; i++)
-        {
-            var t = tracks[i];
-            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
-            _registry.RegisterOrUpdate(t);
-        }
-
+        await HydrateAndRegisterTracksAsync(tracks, ct).ConfigureAwait(false);
         return tracks;
     }
 
@@ -454,9 +454,9 @@ public sealed class LibraryService : IAsyncDisposable
     }
 
     public async Task<List<TrackInfo>> SearchLocalTracksAsync(
-     string query,
-     int limit = 100,
-     CancellationToken ct = default)
+       string query,
+       int limit = 100,
+       CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query))
             return await GetLocalTracksAsync(limit, 0, ct).ConfigureAwait(false);
@@ -470,18 +470,7 @@ public sealed class LibraryService : IAsyncDisposable
             .Take(limit)
             .ToList();
 
-        if (filtered.Count == 0) return filtered;
-
-        var trackIds = filtered.Select(t => t.Id).ToList();
-        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, CurrentOwnerId, ct).ConfigureAwait(false);
-
-        for (int i = 0; i < filtered.Count; i++)
-        {
-            var t = filtered[i];
-            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
-            _registry.RegisterOrUpdate(t);
-        }
-
+        await HydrateAndRegisterTracksAsync(filtered, ct).ConfigureAwait(false);
         return filtered;
     }
 
@@ -587,18 +576,7 @@ public sealed class LibraryService : IAsyncDisposable
      int limit = 100, int offset = 0, CancellationToken ct = default)
     {
         var tracks = await _tracks.GetLikedAsync(CurrentOwnerId, limit, offset, ct).ConfigureAwait(false);
-        if (tracks.Count == 0) return tracks;
-
-        var trackIds = tracks.Select(t => t.Id).ToList();
-        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, CurrentOwnerId, ct).ConfigureAwait(false);
-
-        for (int i = 0; i < tracks.Count; i++)
-        {
-            var t = tracks[i];
-            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
-            _registry.RegisterOrUpdate(t);
-        }
-
+        await HydrateAndRegisterTracksAsync(tracks, ct).ConfigureAwait(false);
         return tracks;
     }
 
@@ -682,10 +660,7 @@ public sealed class LibraryService : IAsyncDisposable
     {
         var all = await _playlists.GetAllAsync(CurrentOwnerId, ct).ConfigureAwait(false);
         var liked = all.FirstOrDefault(p => p.Id == LikedPlaylistId);
-        if (liked != null)
-        {
-            liked.Name = LocalizationService.Instance["Playlist_Liked"];
-        }
+        liked?.Name = LocalizationService.Instance["Playlist_Liked"];
         return all;
     }
 

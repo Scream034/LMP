@@ -5,7 +5,7 @@ using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Youtube.Playlists;
 
-public class PlaylistClient(HttpClient http)
+public sealed class PlaylistClient(HttpClient http)
 {
     private readonly PlaylistController _controller = new(http);
 
@@ -278,7 +278,6 @@ public class PlaylistClient(HttpClient http)
     /// <summary>
     /// Добавляет треки из <paramref name="videos"/> в <paramref name="target"/>
     /// с дедупликацией через <paramref name="encounteredIds"/>.
-    /// Zero-LINQ, индексированный цикл.
     /// </summary>
     private static void AppendTracks(
         IReadOnlyList<PlaylistVideoData> videos,
@@ -297,7 +296,9 @@ public class PlaylistClient(HttpClient http)
 
             target.Add(new TrackInfo
             {
-                Id = $"yt_{videoId}",
+                // Идентификатор передается в сыром виде. Сеттер TrackInfo.Id автоматически 
+                // применит кэшированное префиксирование "yt_", исключая лишние аллокации строк.
+                Id = videoId,
                 Title = title,
                 Author = author,
                 ChannelId = videoData.ChannelId,

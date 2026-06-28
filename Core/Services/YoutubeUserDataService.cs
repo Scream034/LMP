@@ -82,10 +82,7 @@ public partial class YoutubeUserDataService
 
             for (int i = 0; i < likedTracks.Count; i++)
             {
-                var track = likedTracks[i];
-                track.IsLiked = true;
-                if (!track.Id.StartsWith("yt_", StringComparison.Ordinal))
-                    track.Id = "yt_" + track.Id;
+                likedTracks[i].IsLiked = true;
             }
 
             Log.Info($"[Sync] Total liked tracks: {likedTracks.Count}");

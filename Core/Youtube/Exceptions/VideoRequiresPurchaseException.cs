@@ -5,7 +5,7 @@ namespace LMP.Core.Youtube.Exceptions;
 /// <summary>
 /// Exception thrown when the requested video requires purchase.
 /// </summary>
-public class VideoRequiresPurchaseException(string message, VideoId previewVideoId)
+public sealed class VideoRequiresPurchaseException(string message, VideoId previewVideoId)
     : VideoUnplayableException(message)
 {
     /// <summary>

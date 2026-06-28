@@ -91,28 +91,33 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
 
     protected HttpClient Http { get; } = http;
 
+    /// <summary>
+    /// Получает HTML страницу просмотра видеоролика с поддержкой повторных попыток при сетевых сбоях.
+    /// </summary>
     public async ValueTask<VideoWatchPage> GetVideoWatchPageAsync(
-     VideoId videoId,
-     CancellationToken cancellationToken = default)
+        VideoId videoId,
+        CancellationToken cancellationToken = default)
     {
-        for (var retriesRemaining = 5; ; retriesRemaining--)
+        return await ResilienceExecutor.ExecuteWithRetryAsync(async () =>
         {
-            var watchPage = VideoWatchPage.TryParse(
-                await Http.GetStringAsync(
-                    $"https://www.youtube.com/watch?v={videoId}&bpctr=9999999999",
-                    cancellationToken));
+            var rawHtml = await Http.GetStringAsync(
+                $"https://www.youtube.com/watch?v={videoId}&bpctr=9999999999",
+                cancellationToken).ConfigureAwait(false);
+
+            var watchPage = VideoWatchPage.TryParse(rawHtml);
 
             if (watchPage is null)
             {
-                if (retriesRemaining > 0) continue;
                 throw new YoutubeExplodeException("Video watch page is broken. Please try again in a few minutes.");
             }
 
             if (!watchPage.IsAvailable)
+            {
                 throw new VideoUnavailableException($"Video '{videoId}' is not available.");
+            }
 
             return watchPage;
-        }
+        }, maxRetries: 5, cancellationToken).ConfigureAwait(false);
     }
 
     #region GetPlayerResponse

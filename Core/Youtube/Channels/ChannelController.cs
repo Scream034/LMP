@@ -1,5 +1,6 @@
 ﻿using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
+using LMP.Core.Youtube.Utils;
 using System.Text;
 
 namespace LMP.Core.Youtube.Channels;
@@ -11,27 +12,16 @@ internal class ChannelController(HttpClient http)
         CancellationToken cancellationToken = default
     )
     {
-        for (var retriesRemaining = 5; ; retriesRemaining--)
+        return await ResilienceExecutor.ExecuteWithRetryAsync(async () =>
         {
-            var channelPage = ChannelPage.TryParse(
-                await http.GetStringAsync(
-                    "https://www.youtube.com/" + channelRoute,
-                    cancellationToken
-                )
-            );
+            var rawHtml = await http.GetStringAsync(
+                "https://www.youtube.com/" + channelRoute,
+                cancellationToken
+            ).ConfigureAwait(false);
 
-            if (channelPage is null)
-            {
-                if (retriesRemaining > 0)
-                    continue;
-
-                throw new YoutubeExplodeException(
-                    "Channel page is broken. Please try again in a few minutes."
-                );
-            }
-
-            return channelPage;
-        }
+            return ChannelPage.TryParse(rawHtml)
+                ?? throw new YoutubeExplodeException("Channel page is broken. Please try again in a few minutes.");
+        }, maxRetries: 5, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ChannelPage> GetChannelPageAsync(

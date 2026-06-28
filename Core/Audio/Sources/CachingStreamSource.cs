@@ -647,6 +647,8 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         try
         {
+            Log.Info($"[CachingSource] Initialize: track={_trackId}, cacheKey={_cacheKey}, format={_format}, codec={Codec}, bitrate={_bitrate}kbps, contentLength={_contentLength}, hasInitialUrl={!string.IsNullOrWhiteSpace(_currentUrl)}");
+
             _cacheManager.AcquireLease(_cacheKey);
             _leaseAcquired = true;
 
@@ -654,6 +656,8 @@ public sealed partial class CachingStreamSource : IAudioSource
                 _cacheKey, _trackId, _currentUrl, _contentLength, _format,
                 AudioSourceFactory.GetCodecForFormat(_format), _bitrate,
                 alignmentBytes: _requestAlignmentBytes);
+
+            Log.Debug($"[CachingSource] Cache entry: downloaded={_cacheEntry.DownloadedBytes}, total={_cacheEntry.TotalSize}, complete={_cacheEntry.IsComplete}, alignment={_cacheEntry.AlignmentBytes}");
 
             if (_cacheEntry.DownloadedBytes > 0)
             {
@@ -699,11 +703,9 @@ public sealed partial class CachingStreamSource : IAudioSource
             _cacheEntry.Bitrate = _bitrate;
             _initialized = true;
 
-            //  Startup Prefetch: заливаем warmup-буфер параллельно с decoder init 
-            // Перекрывает задержку первой итерации preload loop (PreloadIntervalMs)
-            // и обеспечивает данные для warmup-проверки в AudioPlayer.
-            // Overlap protection в RegisterOrGetActiveDownload гарантирует,
-            // что preload loop не продублирует этот запрос.
+            Log.Info($"[CachingSource] Parser ready: track={_trackId}, codec={Codec}, sampleRate={SampleRate}, channels={Channels}, duration={DurationMs}ms");
+
+            // Startup Prefetch: заливаем warmup-буфер параллельно с decoder init
             FireStartupPrefetchIfNeeded(initialBytes);
 
             _preloadTask = Task.Run(
@@ -1000,11 +1002,6 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <c>true</c>, если URL был принят;
     /// <c>false</c>, если source уже имел URL, был disposed или входной URL невалиден.
     /// </returns>
-    /// <remarks>
-    /// <para>Если <see cref="EnsureUrlAvailableAsync"/> уже ожидает URL через
-    /// <see cref="_continuationUrlTcs"/>, данный метод завершает promise
-    /// и все ожидающие потоки немедленно продолжат работу.</para>
-    /// </remarks>
     internal bool TryAttachContinuationUrl(string url)
     {
         if (_disposed) return false;
@@ -1022,13 +1019,32 @@ public sealed partial class CachingStreamSource : IAudioSource
             _continuationUrlTcs = null;
         }
 
-        if (_cacheEntry != null)
-            _cacheEntry.OriginalUrl = url;
+        _cacheEntry?.OriginalUrl = url;
 
         pendingTcs?.TrySetResult(url);
 
-        Log.Debug("[CachingSource] Continuation URL attached externally");
+        var host = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : "?";
+        Log.Info($"[CachingSource] Continuation URL attached externally: track={_trackId}, host={host}");
         return true;
+    }
+
+    /// <summary>
+    /// Атомарно обновляет stream URL после успешного refresh.
+    /// Сбрасывает счётчик consecutive 403 и обновляет URL в cache entry.
+    /// </summary>
+    /// <param name="newUrl">Новый валидный stream URL.</param>
+    internal void UpdateUrl(string newUrl)
+    {
+        if (_disposed || string.IsNullOrWhiteSpace(newUrl))
+            return;
+
+        _currentUrl = newUrl;
+        Interlocked.Exchange(ref _consecutive403Count, 0);
+
+        _cacheEntry?.OriginalUrl = newUrl;
+
+        string host = Uri.TryCreate(newUrl, UriKind.Absolute, out var uri) ? uri.Host : "?";
+        Log.Warn($"[CachingSource] URL updated after refresh: track={_trackId}, host={host}, consecutive403Reset=true");
     }
 
     #endregion

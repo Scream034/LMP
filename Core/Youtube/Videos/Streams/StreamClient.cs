@@ -7,13 +7,30 @@ using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Helpers.Extensions;
 using LMP.Core.Youtube.Videos.ClosedCaptions;
 using LMP.Core.Youtube.Bridge.PoToken;
-using LMP.Core.Youtube.Utils;
 using LMP.Core.Audio.Http;
 
 namespace LMP.Core.Youtube.Videos.Streams;
 
 /// <summary>
-/// Обеспечивает высокопроизводительный доступ к медиа-потокам YouTube видео.
+/// Обеспечивает доступ к медиа-потокам YouTube видео.
+/// <para>
+/// <b>Кэш-стратегия (3-уровневая):</b>
+/// </para>
+/// <list type="number">
+///   <item>
+///     <b>Disk manifest cache</b> (<see cref="SessionCacheStore"/>):
+///     Полный манифест (все варианты) сохраняется на диск после первого API call.
+///     Переживает рестарт приложения. Инвалидируется по HTTP 403/410 при probe.
+///   </item>
+///   <item>
+///     <b>Network resolve</b>: Только если disk cache пуст или probe провалился.
+///     Один API call → полный манифест → записывается на диск.
+///   </item>
+///   <item>
+///     <b>CDN connection pre-warming</b>: TCP+TLS prewarm к известным CDN-нодам
+///     параллельно с API call.
+///   </item>
+/// </list>
 /// </summary>
 public sealed class StreamClient
 {
@@ -27,13 +44,8 @@ public sealed class StreamClient
     private readonly PoTokenProvider? _poTokenProvider;
 
     /// <summary>
-    /// Создает экземпляр StreamClient с внедрением необходимых зависимостей.
+    /// Создает экземпляр StreamClient.
     /// </summary>
-    /// <param name="http">Экземпляр HTTP-клиента.</param>
-    /// <param name="nTokenDecryptor">Провайдер расшифровки N-Token.</param>
-    /// <param name="sigCipherDecryptor">Провайдер расшифровки подписи.</param>
-    /// <param name="isAuthenticatedCheck">Callback проверки авторизации.</param>
-    /// <param name="poTokenProvider">Провайдер PoToken для videoplayback URL.</param>
     public StreamClient(
         HttpClient http,
         NTokenDecryptor nTokenDecryptor,
@@ -51,10 +63,8 @@ public sealed class StreamClient
     }
 
     /// <summary>
-    /// Извлекает signatureTimestamp из единого кэша <see cref="PlayerContextManager"/>.
+    /// Извлекает signatureTimestamp из кэша <see cref="PlayerContextManager"/>.
     /// </summary>
-    /// <param name="cancellationToken">Токен отмены.</param>
-    /// <returns>Вычисленный манифест шифрования плеера.</returns>
     private async ValueTask<CipherManifest> ResolveCipherManifestAsync(CancellationToken cancellationToken)
     {
         if (_cipherManifest is not null)
@@ -63,8 +73,6 @@ public sealed class StreamClient
         try
         {
             var context = await _playerContextManager.GetOrLoadAsync(cancellationToken).ConfigureAwait(false);
-
-            // context.Sts — единственный надёжный источник STS
             var sts = context.Sts;
 
             if (string.IsNullOrEmpty(sts) && !string.IsNullOrEmpty(context.BaseJs))
@@ -82,13 +90,8 @@ public sealed class StreamClient
     }
 
     /// <summary>
-    /// Асинхронно генерирует последовательность доступных аудиопотоков для трека.
+    /// Генерирует аудиопотоки из сырых данных ответа YouTube.
     /// </summary>
-    /// <param name="videoId">ID видео на YouTube.</param>
-    /// <param name="streamDatas">Коллекция сырых данных о потоках.</param>
-    /// <param name="clientName">Имя активного клиента YouTube (допускает null при фоллбеках).</param>
-    /// <param name="cancellationToken">Токен отмены.</param>
-    /// <returns>Асинхронный итератор элементов потоков.</returns>
     private async IAsyncEnumerable<IStreamInfo> GetAudioStreamInfosAsync(
       VideoId videoId,
       IEnumerable<IStreamData> streamDatas,
@@ -97,7 +100,6 @@ public sealed class StreamClient
     {
         bool? isNTokenDecryptionRequired = null;
 
-        // PoToken не запрашивается для клиентов, не проходящих проверку аттестации (например, ANDROID_VR)
         string? pot = null;
         bool skipPoToken = string.Equals(clientName, "ANDROID_VR", StringComparison.OrdinalIgnoreCase);
 
@@ -245,42 +247,21 @@ public sealed class StreamClient
     }
 
     /// <summary>
-    /// Асинхронно получает манифест доступных потоков для указанного видео-идентификатора.
+    /// Получает манифест потоков для видео.
+    /// <para>
+    /// <b>Всегда идёт в сеть.</b> Кэширование выполняется вызывающим кодом
+    /// (<see cref="SessionCacheStore.RecordManifest"/>).
+    /// Это разделение ответственности гарантирует, что StreamClient
+    /// не смешивает полные и неполные манифесты.
+    /// </para>
     /// </summary>
-    /// <param name="videoId">Уникальный ID видео.</param>
+    /// <param name="videoId">ID видео.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
-    /// <returns>Результат манифеста воспроизводимых аудио-потоков.</returns>
+    /// <returns>Манифест со всеми доступными аудио-потоками.</returns>
     public async ValueTask<StreamManifest> GetManifestAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
-        string trackId = $"yt_{videoId.Value}";
-
-        // 1. Проверяем единый источник правды. Если сессии живы, возвращаем манифест мгновенно (0 мс)
-        var cachedSessions = SessionCacheStore.GetValidSessions(trackId);
-        if (cachedSessions.Count > 0)
-        {
-            var cachedStreams = new List<IStreamInfo>(cachedSessions.Count);
-            for (int i = 0; i < cachedSessions.Count; i++)
-            {
-                var session = cachedSessions[i];
-                cachedStreams.Add(new AudioOnlyStreamInfo(
-                    session.Itag,
-                    session.VideoplaybackUrl,
-                    new Container(session.Container),
-                    new FileSize(session.Clen),
-                    new Bitrate(session.Bitrate),
-                    session.Codec,
-                    audioLanguage: null,
-                    isAudioLanguageDefault: false,
-                    hasEncryptedNToken: false));
-            }
-
-            Log.Debug($"[StreamClient] Returned cached manifest for {videoId} ({cachedStreams.Count} formats) from SessionCacheStore");
-            return new StreamManifest(cachedStreams);
-        }
-
-        // 2. Cold Path: Если кэш пуст — идем в сеть
         PlayerResponse playerResponse;
         string? clientName = null;
         bool isAuth = _isAuthenticatedCheck?.Invoke() ?? false;
@@ -306,9 +287,7 @@ public sealed class StreamClient
         if (!playerResponse.IsPlayable)
         {
             if (fallbackChainException != null)
-            {
                 throw fallbackChainException;
-            }
 
             throw new VideoUnplayableException(
                 $"Video {videoId} is not playable: {playerResponse.PlayabilityError}");
@@ -327,13 +306,8 @@ public sealed class StreamClient
     }
 
     /// <summary>
-    /// Выполняет непосредственную загрузку аудио-потока в указанный локальный путь на диске.
+    /// Загружает аудио-поток в файл.
     /// </summary>
-    /// <param name="streamInfo">Метаданные потока.</param>
-    /// <param name="filePath">Выходной путь записи файла.</param>
-    /// <param name="progress">Callback отображения прогресса.</param>
-    /// <param name="cancellationToken">Токен отмены операции.</param>
-    /// <returns>Асинхронная задача.</returns>
     public async ValueTask DownloadAsync(
         IStreamInfo streamInfo,
         string filePath,
@@ -348,7 +322,7 @@ public sealed class StreamClient
     }
 
     /// <summary>
-    /// Инвалидирует закэшированный CipherManifest и signatureTimestamp контроллера.
+    /// Инвалидирует CipherManifest и signatureTimestamp.
     /// </summary>
     public void InvalidateCipherManifest()
     {

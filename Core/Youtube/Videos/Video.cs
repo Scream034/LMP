@@ -3,7 +3,7 @@ namespace LMP.Core.Youtube.Videos;
 /// <summary>
 /// Облегченная модель видео с данными для музыкального плеера.
 /// </summary>
-public class Video(
+public sealed class Video(
     VideoId id,
     string title,
     Author author,

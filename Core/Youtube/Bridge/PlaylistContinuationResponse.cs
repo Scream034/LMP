@@ -35,17 +35,14 @@ internal partial class PlaylistContinuationResponse(JsonElement content)
             var actions = content.GetPropertyOrNull("onResponseReceivedActions");
             if (actions == null) return null;
 
-            // Ищем действие добавления элементов продолжения
             var appendAction = actions.Value.EnumerateArrayOrNull()?.FirstOrNull()
                 ?.GetPropertyOrNull("appendContinuationItemsAction");
 
             if (appendAction == null) return null;
 
-            // Получаем список элементов
             var items = appendAction.Value.GetPropertyOrNull("continuationItems");
             if (items == null) return null;
 
-            // Используем общий утилитный метод для поиска токена в конце списка
             return BridgeUtils.FindTokenInContents(items.Value);
         }
     }
@@ -53,11 +50,7 @@ internal partial class PlaylistContinuationResponse(JsonElement content)
     /// <summary>
     /// Данные о сессии пользователя.
     /// </summary>
-    public string? VisitorData =>
-        content
-            .GetPropertyOrNull("responseContext")
-            ?.GetPropertyOrNull("visitorData")
-            ?.GetStringOrNull();
+    public string? VisitorData => content.GetVisitorData();
 }
 
 internal partial class PlaylistContinuationResponse

@@ -10,18 +10,6 @@ namespace LMP.Core.Audio;
 /// <summary>
 /// Фабрика аудио источников. Определяет формат, проверяет кэш,
 /// создаёт подходящий <see cref="IAudioSource"/>.
-/// 
-/// <para><b>Приоритет источников:</b></para>
-/// <list type="number">
-///   <item>Полный дисковый кэш → <see cref="LocalFileSource"/></item>
-///   <item>Частичный кэш или онлайн → <see cref="CachingStreamSource"/></item>
-/// </list>
-/// 
-/// <para><b>ВАЖНО — Битрейт vs Ключ кэша:</b></para>
-/// <para><see cref="BuildCacheKey"/> использует **нормализованный** битрейт (134→128)
-/// для группировки близких битрейтов в один cache bucket.
-/// НО все методы возвращают **реальный** битрейт (134) для корректного отображения
-/// в UI и логах.</para>
 /// </summary>
 public static class AudioSourceFactory
 {
@@ -63,28 +51,9 @@ public static class AudioSourceFactory
 
     /// <summary>
     /// Строит уникальный ключ кэша: trackId + формат + **нормализованный** битрейт.
-    /// 
-    /// <para><b>ЕДИНСТВЕННЫЙ ИСТОЧНИК ИСТИНЫ</b> для генерации cache key.
-    /// Используется в <see cref="CreateAsync"/> и <see cref="AudioCacheManager"/>.</para>
-    /// 
-    /// <para><b>Почему нормализация:</b></para>
-    /// <para>YouTube возвращает битрейты вроде 127, 134, 131 kbps для одного формата.
-    /// Без нормализации один трек дублировался бы в кэше с ключами:
-    /// <c>track_WebM_127</c>, <c>track_WebM_134</c>, <c>track_WebM_131</c>.
-    /// Нормализация (см. <see cref="NormalizeBitrate"/>) группирует
-    /// 127-134 → 128, экономя ~60% места в кэше.</para>
     /// </summary>
-    /// <param name="trackId">ID трека.</param>
-    /// <param name="format">Формат контейнера (WebM, Mp4, etc).</param>
-    /// <param name="bitrate">Реальный битрейт в kbps (например, 134).</param>
-    /// <returns>
-    /// Нормализованный ключ кэша, например: <c>yt_o5hD5w2kE_I_WebM_128</c>
-    /// (134 kbps нормализован → 128).
-    /// </returns>
     public static string BuildCacheKey(string trackId, AudioFormat format, int bitrate)
     {
-        // BuildCacheKey использует NormalizeBitrate для группировки.
-        // НО возвращаемый битрейт из CreateAsync — РЕАЛЬНЫЙ (не нормализованный).
         int normalizedBitrate = NormalizeBitrate(bitrate);
         return $"{trackId}_{format}_{normalizedBitrate}";
     }
@@ -92,10 +61,6 @@ public static class AudioSourceFactory
     /// <summary>
     /// Ищет полностью закэшированный трек любого формата/битрейта.
     /// </summary>
-    /// <returns>
-    /// Кортеж (Path, CacheEntry) где CacheEntry.Bitrate — **реальный** битрейт
-    /// из метаданных кэша (например, 134), не нормализованный.
-    /// </returns>
     public static (string Path, AudioCacheEntry Entry)? FindAnyCachedTrack(string trackId)
     {
         if (_globalCacheManager == null) return null;
@@ -110,13 +75,136 @@ public static class AudioSourceFactory
     }
 
     /// <summary>
-    /// Создаёт аудио источник.
-    /// <para>
-    /// Для YouTube CDN URL автоматически запускает спекулятивный прогрев TCP+TLS-соединения
-    /// через <see cref="CdnConnectionPreWarmer.PreWarmHost"/> перед созданием
-    /// <see cref="CachingStreamSource"/>. Это позволяет перекрыть часть TLS-рукопожатия
-    /// с setup-логикой фабрики.
-    /// </para>
+    /// Создаёт аудио источник из <see cref="ResolvedStreamDescriptor"/>.
+    /// </summary>
+    /// <param name="descriptor">Дескриптор resolved потока.</param>
+    /// <param name="httpClient">HTTP-клиент с общим connection pool.</param>
+    /// <param name="urlAcquirer">Callback для первичного continuation acquire.</param>
+    /// <param name="urlRefresher">Callback для forced URL refresh при 403.</param>
+    /// <param name="config">Конфигурация стриминга.</param>
+    /// <param name="ct">Токен отмены.</param>
+    /// <returns>Готовый к инициализации аудио источник.</returns>
+    public static Task<IAudioSource> CreateAsync(
+        ResolvedStreamDescriptor descriptor,
+        HttpClient httpClient,
+        Func<CancellationToken, Task<string?>>? urlAcquirer = null,
+        Func<CancellationToken, Task<string?>>? urlRefresher = null,
+        StreamingConfig? config = null,
+        CancellationToken ct = default)
+    {
+        if (_globalCacheManager == null)
+        {
+            throw new InvalidOperationException(
+                "AudioSourceFactory.InitializeGlobalCache() must be called before creating sources");
+        }
+
+        Log.Info($"[AudioSourceFactory] CreateAsync -> {descriptor}");
+
+        config ??= _currentConfig;
+        string trackId = descriptor.TrackId;
+        string url = descriptor.Url;
+        var format = descriptor.Format;
+        var codec = descriptor.Codec;
+        int bitrateKbps = descriptor.BitrateKbps;
+        long contentLength = descriptor.ContentLengthBytes;
+
+        // Cache-only or empty URL path
+        if (string.IsNullOrEmpty(url))
+        {
+            var cached = FindAnyCachedTrack(trackId);
+            if (cached != null)
+            {
+                Log.Info($"[AudioSourceFactory] Source decision: LocalFileSource, track={trackId}, reason=full-cache");
+                return Task.FromResult<IAudioSource>(new LocalFileSource(
+                    cached.Value.Path,
+                    cached.Value.Entry.TotalSize,
+                    trackId,
+                    _globalCacheManager,
+                    cached.Value.Entry.CacheKey));
+            }
+
+            int bootstrapBytes = Math.Min(config.InitialPrebufferBytes, int.MaxValue);
+            var startupEntry = _globalCacheManager.FindBestStartupCache(trackId, bootstrapBytes);
+            if (startupEntry != null)
+            {
+                Log.Info($"[AudioSourceFactory] Source decision: CachingStreamSource, track={trackId}, reason=partial-cache-bootstrap, cacheKey={startupEntry.CacheKey}, prefix={startupEntry.GetContiguousDownloadedBytesFrom(0)}");
+
+                return Task.FromResult<IAudioSource>(new CachingStreamSource(
+                    startupEntry.CacheKey,
+                    trackId,
+                    url: string.Empty,
+                    contentLength: startupEntry.TotalSize,
+                    format: startupEntry.Format,
+                    codec: startupEntry.Codec,
+                    bitrate: startupEntry.Bitrate > 0 ? startupEntry.Bitrate : bitrateKbps,
+                    httpClient: httpClient,
+                    cacheManager: _globalCacheManager,
+                    config: config,
+                    urlAcquirer: urlAcquirer,
+                    urlRefresher: urlRefresher));
+            }
+
+            throw new ArgumentException("No URL provided and no cache available", nameof(descriptor));
+        }
+
+        // CDN Connection Pre-Warming
+        CdnConnectionPreWarmer.PreWarmHost(httpClient, url, ct);
+
+        // Format and codec come from descriptor — no HTTP detect needed
+        if (format == AudioFormat.Unknown)
+        {
+            format = DetectFormat(url);
+            if (format == AudioFormat.Unknown)
+                throw new NotSupportedException($"Could not detect audio format for descriptor: {trackId}");
+        }
+
+        if (codec == AudioCodec.Unknown)
+            codec = GetCodecForFormat(format);
+
+        if (contentLength <= 0)
+        {
+            contentLength = ExtractContentLengthFromUrl(url);
+            if (contentLength <= 0)
+                contentLength = 100 * 1024 * 1024;
+        }
+
+        string cacheKey = BuildCacheKey(trackId, format, bitrateKbps);
+
+        if (_globalCacheManager.IsFullyCached(cacheKey))
+        {
+            var cachePath = _globalCacheManager.GetCachePath(cacheKey);
+            if (File.Exists(cachePath))
+            {
+                var exactEntry = _globalCacheManager.GetCacheInfo(cacheKey);
+                Log.Info($"[AudioSourceFactory] Source decision: LocalFileSource, track={trackId}, reason=full-cache");
+                return Task.FromResult<IAudioSource>(new LocalFileSource(
+                    cachePath,
+                    exactEntry?.TotalSize ?? 0,
+                    trackId,
+                    _globalCacheManager,
+                    cacheKey));
+            }
+        }
+
+        Log.Info($"[AudioSourceFactory] Source decision: CachingStreamSource, track={trackId}, reason=live-stream, cacheKey={cacheKey}, hasLiveUrl={descriptor.HasLiveUrl}");
+
+        return Task.FromResult<IAudioSource>(new CachingStreamSource(
+            cacheKey,
+            trackId,
+            url,
+            contentLength,
+            format,
+            codec,
+            bitrateKbps,
+            httpClient,
+            _globalCacheManager,
+            config,
+            urlAcquirer,
+            urlRefresher));
+    }
+
+    /// <summary>
+    /// Создаёт аудио источник (legacy overload для DownloadService и обратной совместимости).
     /// </summary>
     public static async Task<IAudioSource> CreateAsync(
           string url,
@@ -152,10 +240,7 @@ public static class AudioSourceFactory
                     cached.Value.Entry.CacheKey);
             }
 
-            int bootstrapBytes = Math.Min(
-                config.InitialPrebufferBytes,
-                int.MaxValue);
-
+            int bootstrapBytes = Math.Min(config.InitialPrebufferBytes, int.MaxValue);
             var startupEntry = _globalCacheManager.FindBestStartupCache(trackId, bootstrapBytes);
             if (startupEntry != null)
             {
@@ -173,7 +258,7 @@ public static class AudioSourceFactory
                     bitrate: startupEntry.Bitrate > 0 ? startupEntry.Bitrate : bitrateHint,
                     httpClient: httpClient,
                     cacheManager: _globalCacheManager,
-                    config: config, 
+                    config: config,
                     urlAcquirer: urlAcquirer,
                     urlRefresher: urlRefresher);
             }
@@ -181,10 +266,6 @@ public static class AudioSourceFactory
             throw new ArgumentException("No URL provided and no cache available", nameof(url));
         }
 
-        // CDN Connection Pre-Warming
-        // Запускаем TCP+TLS-рукопожатие к CDN-ноде НЕМЕДЛЕННО после получения URL,
-        // не дожидаясь завершения format detection, cache check и создания source.
-        // К моменту первого GET в InitializeAsync соединение уже будет в pool.
         CdnConnectionPreWarmer.PreWarmHost(httpClient, url, ct);
 
         var format = await DetectFormatAsync(url, httpClient, ct).ConfigureAwait(false);
@@ -232,19 +313,7 @@ public static class AudioSourceFactory
 
     /// <summary>
     /// Запускает спекулятивный прогрев TCP+TLS-соединений к последним известным CDN-хостам.
-    /// <para>
-    /// Вызывается из <c>AudioEngine</c> <b>перед</b> YouTube API call при подготовке
-    /// к воспроизведению нового трека. Пока API call выполняется (~500 мс),
-    /// TCP+TLS-рукопожатие завершается в фоне.
-    /// </para>
-    /// <para>
-    /// Best-effort: если CDN-хост нового трека совпадёт с одним из недавних —
-    /// TTFB первого GET упадёт с ~3 с до ~100 мс.
-    /// Если не совпадёт — ресурсы потрачены, но playback не затронут.
-    /// </para>
     /// </summary>
-    /// <param name="httpClient">HTTP-клиент с общим connection pool.</param>
-    /// <param name="ct">Токен отмены (lifetime плеера).</param>
     public static void PreWarmCdnConnections(HttpClient httpClient, CancellationToken ct)
     {
         CdnConnectionPreWarmer.PreWarmRecentHosts(httpClient, ct);
@@ -253,9 +322,6 @@ public static class AudioSourceFactory
     /// <summary>
     /// Возвращает информацию о кэше для трека.
     /// </summary>
-    /// <returns>
-    /// <see cref="AudioCacheEntry"/> с **реальным** битрейтом (не нормализованным).
-    /// </returns>
     public static AudioCacheEntry? GetCacheInfo(string trackId) =>
         _globalCacheManager?.FindBestCache(trackId);
 
@@ -300,10 +366,9 @@ public static class AudioSourceFactory
     }
 
     /// <summary>
-    /// <summary>
     /// Определяет формат: сначала по URL, потом по magic bytes.
     /// </summary>
-    public static async Task<AudioFormat> DetectFormatAsync(
+    internal static async Task<AudioFormat> DetectFormatAsync(
         string url, HttpClient httpClient, CancellationToken ct = default)
     {
         var urlFormat = DetectFormat(url);
@@ -324,10 +389,7 @@ public static class AudioSourceFactory
             var header = await response.Content.ReadAsByteArrayAsync(ct);
             return DetectFormatByMagic(header);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             Log.Warn($"[AudioSourceFactory] Format detection failed: {ex.Message}");
@@ -338,7 +400,7 @@ public static class AudioSourceFactory
     /// <summary>
     /// Определяет формат по magic bytes заголовка.
     /// </summary>
-    public static AudioFormat DetectFormatByMagic(ReadOnlySpan<byte> header)
+    internal static AudioFormat DetectFormatByMagic(ReadOnlySpan<byte> header)
     {
         if (header.Length < 4) return AudioFormat.Unknown;
 
@@ -377,7 +439,7 @@ public static class AudioSourceFactory
         return "cache_" + Convert.ToHexString(hash)[..16];
     }
 
-    private static async Task<(long ContentLength, AudioCodec Codec, int Bitrate)> GetStreamInfoAsync(
+    internal static async Task<(long ContentLength, AudioCodec Codec, int Bitrate)> GetStreamInfoAsync(
      string url, AudioFormat format, HttpClient httpClient, CancellationToken ct)
     {
         long contentLength = 0;
@@ -395,22 +457,15 @@ public static class AudioSourceFactory
                 if (response.IsSuccessStatusCode)
                     contentLength = response.Content.Headers.ContentLength ?? 0;
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch
-            {
-            }
+            catch (OperationCanceledException) { throw; }
+            catch { }
         }
 
         if (contentLength <= 0)
             contentLength = 100 * 1024 * 1024;
 
         var codec = GetCodecForFormat(format);
-
         int bitrate = ExtractBitrateFromUrl(url);
-
         if (bitrate == 0)
             bitrate = codec == AudioCodec.Opus ? 128 : 96;
 
@@ -432,8 +487,6 @@ public static class AudioSourceFactory
         try
         {
             var query = System.Web.HttpUtility.ParseQueryString(new Uri(url).Query);
-            // YouTube передаёт битрейт в битах/сек (например, 134000).
-            // Конвертируем в kbps БЕЗ округления: 134000 / 1000 = 134 kbps.
             return int.TryParse(query["bitrate"], out var br) ? br / 1000 : 0;
         }
         catch { return 0; }

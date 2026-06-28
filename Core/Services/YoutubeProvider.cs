@@ -13,34 +13,46 @@ using LMP.Core.Youtube.Videos.Streams;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Helpers.Extensions;
 using ReactiveUI;
-
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Bridge.PoToken;
+using LMP.Core.Audio;
 using LMP.Core.Audio.Http;
+using LMP.Core.Audio.Interfaces;
+using LMP.Core.Models;
+using LMP.Core.Audio.Cache;
+using LMP.Core.Youtube.Videos.ClosedCaptions;
 
 namespace LMP.Core.Services;
 
+/// <summary>
+/// Центральный провайдер интеграции с YouTube и YouTube Music.
+/// Координирует работу с API, расшифровку токенов, поиск, плейлисты и управление сессионным кэшем потоков.
+/// </summary>
 public partial class YoutubeProvider : IDisposable
 {
-    private const int DefaultCacheLifetimeHours = 4;
-    private const int MaxCacheSize = 200;
+    #region Fields & Dependencies
 
     private readonly NTokenDecryptor _nTokenDecryptor;
     private readonly SigCipherDecryptor _sigCipherDecryptor;
     private readonly TrackRegistry _trackRegistry;
-    public readonly CookieAuthService AuthService = null!;
     private readonly LibraryService? _libraryService;
     private readonly YoutubeUserDataService _userDataService;
     private PoTokenProvider? _poTokenProvider;
 
-    private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(DefaultCacheLifetimeHours);
-    private readonly ConcurrentDictionary<string, StreamCacheEntry> _streamCache =
-        new(StringComparer.Ordinal);
+    /// <summary>
+    /// Глобальный сервис авторизации через сессионные куки.
+    /// </summary>
+    public readonly CookieAuthService AuthService = null!;
+
+    /// <summary>
+    /// RAM-кэш полных манифестов. Ключ = trackId (с yt_ префиксом).
+    /// Дублирует дисковый SessionCacheStore для instant-access в текущей сессии.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, StreamManifest> _manifestRamCache = new(StringComparer.Ordinal);
 
     private YoutubeClient _youtube = null!;
-
     private SocketsHttpHandler? _currentHandler;
     private HttpClient? _currentHttpClient;
     private volatile bool _disposed;
@@ -48,38 +60,32 @@ public partial class YoutubeProvider : IDisposable
     private Task? _initTask;
     private readonly Lock _initLock = new();
 
-    private readonly struct StreamCacheEntry
-    {
-        public readonly string Url;
-        public readonly long Size;
-        public readonly int Bitrate;
-        public readonly string Codec;
-        public readonly string Container;
-        public readonly DateTime Obtained;
-
-        public StreamCacheEntry(string url, long size, int bitrate, string codec, string container)
-        {
-            Url = url;
-            Size = size;
-            Bitrate = bitrate;
-            Codec = codec;
-            Container = container;
-            Obtained = DateTime.UtcNow;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool IsExpired(TimeSpan lifetime) =>
-            DateTime.UtcNow - Obtained > lifetime;
-    }
-
-    public bool IsReady { get; private set; }
-
     private static readonly Regex YoutubeVideoRegex = _YoutubeVideoRegex();
     private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
     private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
 
+    #endregion
+
+    #region Properties & Events
+
+    /// <summary>
+    /// Указывает, завершена ли фоновая инициализация провайдера.
+    /// </summary>
+    public bool IsReady { get; private set; }
+
+    /// <summary>
+    /// Событие, вызываемое при старте ресурсоёмкой расшифровки n-токена.
+    /// Передаёт идентификатор видео в UI для отображения анимации прогресса.
+    /// </summary>
     public event Action<string>? OnNTokenDecryptionStarted;
 
+    #endregion
+
+    #region Constructor
+
+    /// <summary>
+    /// Создаёт экземпляр провайдера YouTube.
+    /// </summary>
     public YoutubeProvider(
         TrackRegistry trackRegistry,
         LibraryService? libraryService,
@@ -116,8 +122,13 @@ public partial class YoutubeProvider : IDisposable
         OnNTokenDecryptionStarted?.Invoke(rawVideoId);
     }
 
+    #endregion
+
     #region Bot Detection — Stateless Helpers
 
+    /// <summary>
+    /// Проверяет, доступен ли трек для оффлайн-воспроизведения без обращения к сети.
+    /// </summary>
     public static bool CanPlayOffline(TrackInfo track)
     {
         if (string.IsNullOrEmpty(track.Id))
@@ -131,14 +142,23 @@ public partial class YoutubeProvider : IDisposable
         return cached != null;
     }
 
+    /// <summary>
+    /// Проверяет, можно ли выполнять сетевые операции на YouTube без риска блокировки.
+    /// </summary>
     public static bool CanPerformNetworkOperation() => !VideoController.IsInCooldown;
 
+    /// <summary>
+    /// Выбрасывает исключение, если система находится в режиме ожидания из-за детекции автоматизированных запросов.
+    /// </summary>
     public static void ThrowIfInCooldown() => VideoController.ThrowIfInCooldown();
 
     #endregion
 
     #region Client Initialization
 
+    /// <summary>
+    /// Пересоздаёт HTTP-клиент и внутренний движок YouTubeClient с учётом актуальных кук авторизации.
+    /// </summary>
     public void ReloadClient()
     {
         DisposeCurrentClient();
@@ -188,9 +208,6 @@ public partial class YoutubeProvider : IDisposable
     {
         try
         {
-            _currentSearchSession?.Dispose();
-            _currentSearchSession = null;
-
             _currentHttpClient?.Dispose();
             _currentHttpClient = null;
 
@@ -203,7 +220,7 @@ public partial class YoutubeProvider : IDisposable
     }
 
     /// <summary>
-    /// Инициализирует провайдер YouTube (потокобезопасно, выполняется только 1 раз).
+    /// Выполняет асинхронную инициализацию провайдера. Потокобезопасно.
     /// </summary>
     public Task InitializeAsync()
     {
@@ -220,8 +237,7 @@ public partial class YoutubeProvider : IDisposable
         {
             Log.Info("[YouTube] Initiating lazy background Visitor Data resolution...");
 
-            // YoutubeClientUtils сама получит VisitorData, учтет куки и защитит таймаутом.
-            // Больше не нужно вручную пробрасывать токен в клиент Music.
+            // Получаем VisitorData, учитывая куки и защищая таймаутом
             _ = await YoutubeClientUtils.EnsureVisitorDataAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -231,10 +247,13 @@ public partial class YoutubeProvider : IDisposable
         finally
         {
             IsReady = true;
-            NotifyStatus("[YouTube] Initialized");
+            Log.Info("[YouTube] Initialized");
         }
     }
 
+    /// <summary>
+    /// Возвращает сконфигурированный экземпляр клиента YouTubeClient.
+    /// </summary>
     public YoutubeClient GetClient() =>
         _youtube ?? throw new InvalidOperationException("YouTube client not initialized");
 
@@ -242,6 +261,9 @@ public partial class YoutubeProvider : IDisposable
 
     #region Personalization
 
+    /// <summary>
+    /// Загружает персонализированную домашнюю страницу YouTube Music для авторизованного пользователя.
+    /// </summary>
     public async Task<List<HomeSection>> GetPersonalizedHomeAsync(CancellationToken ct = default)
     {
         if (AuthService?.IsAuthenticated != true) return [];
@@ -309,14 +331,17 @@ public partial class YoutubeProvider : IDisposable
 
     #endregion
 
-    #region Edit youtube
+    #region Edit YouTube Data
 
+    /// <summary>
+    /// Устанавливает статус "Мне нравится" (Like) для трека на YouTube Music.
+    /// </summary>
     public async Task LikeTrackAsync(string trackId, bool like)
     {
         if (AuthService?.IsAuthenticated != true) return;
         try
         {
-            var rawId = ExtractRawIdSpan(trackId).ToString();
+            var rawId = YoutubeIdHelper.ExtractRawId(trackId);
             await _youtube.Music.LikeTrackAsync(rawId, like);
             Log.Info($"[Music] Like={like} for {rawId}");
         }
@@ -327,13 +352,15 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>   
+    /// Создаёт новый облачный плейлист в аккаунте YouTube.
+    /// </summary>
     public async Task<string?> CreatePlaylistAsync(
         string title,
         IReadOnlyList<string>? videoIds = null)
     {
         if (AuthService?.IsAuthenticated != true)
-            throw new InvalidOperationException(
-                "Cannot create cloud playlist: user is not authenticated.");
+            throw new InvalidOperationException("Cannot create cloud playlist: user is not authenticated.");
 
         ThrowIfInCooldown();
 
@@ -351,12 +378,15 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Добавляет один трек в существующий облачный плейлист.
+    /// </summary>
     public async Task<string?> AddToPlaylistAsync(string playlistId, string trackId)
     {
         if (AuthService?.IsAuthenticated != true) return null;
         try
         {
-            var rawId = ExtractRawIdSpan(trackId).ToString();
+            var rawId = YoutubeIdHelper.ExtractRawIdSpan(trackId).ToString();
             var setVideoIds = await _youtube.Mutations.AddTracksAsync(playlistId, [rawId]);
             var result = setVideoIds.Count > 0 ? setVideoIds[0] : null;
             if (!string.IsNullOrEmpty(result))
@@ -370,6 +400,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Выполняет пакетное добавление треков в облачный плейлист.
+    /// </summary>
     public async Task<List<string?>> AddTracksToPlaylistAsync(
         string playlistId, IReadOnlyList<string> trackIds)
     {
@@ -381,7 +414,7 @@ public partial class YoutubeProvider : IDisposable
         {
             var rawIds = new List<string>(trackIds.Count);
             for (int i = 0; i < trackIds.Count; i++)
-                rawIds.Add(ExtractRawIdSpan(trackIds[i]).ToString());
+                rawIds.Add(YoutubeIdHelper.ExtractRawId(trackIds[i]));
 
             var result = await _youtube.Mutations.AddTracksAsync(playlistId, rawIds);
             Log.Info($"[Music] Batch added {trackIds.Count} tracks to {playlistId}");
@@ -395,6 +428,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Удаляет один элемент из облачного плейлиста по его внутреннему setVideoId.
+    /// </summary>
     public async Task RemoveFromPlaylistAsync(string playlistId, string setVideoId)
     {
         if (AuthService?.IsAuthenticated != true) return;
@@ -414,6 +450,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Выполняет пакетное удаление элементов из облачного плейлиста.
+    /// </summary>
     public async Task RemoveTracksFromPlaylistAsync(
         string playlistId, IReadOnlyList<string> setVideoIds)
     {
@@ -434,14 +473,16 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Редактирует текстовое описание облачного плейлиста.
+    /// </summary>
     public async Task EditPlaylistDescriptionAsync(string playlistId, string description)
     {
         if (string.IsNullOrWhiteSpace(playlistId))
             throw new ArgumentException("Playlist ID cannot be empty.", nameof(playlistId));
 
         if (AuthService?.IsAuthenticated != true)
-            throw new InvalidOperationException(
-                "Cannot edit cloud playlist: user is not authenticated.");
+            throw new InvalidOperationException("Cannot edit cloud playlist: user is not authenticated.");
 
         ThrowIfInCooldown();
 
@@ -458,6 +499,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Загружает пользовательскую обложку (изображение) для облачного плейлиста.
+    /// </summary>
     public async Task<bool> UploadPlaylistThumbnailAsync(
         string playlistId,
         byte[] imageData,
@@ -467,8 +511,7 @@ public partial class YoutubeProvider : IDisposable
             throw new ArgumentException("Playlist ID cannot be empty.", nameof(playlistId));
 
         if (AuthService?.IsAuthenticated != true)
-            throw new InvalidOperationException(
-                "Cannot upload thumbnail: user is not authenticated.");
+            throw new InvalidOperationException("Cannot upload thumbnail: user is not authenticated.");
 
         ThrowIfInCooldown();
 
@@ -492,14 +535,16 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Изменяет название облачного плейлиста.
+    /// </summary>
     public async Task RenamePlaylistAsync(string playlistId, string newTitle)
     {
         if (string.IsNullOrWhiteSpace(playlistId))
             throw new ArgumentException("Playlist ID cannot be empty.", nameof(playlistId));
 
         if (AuthService?.IsAuthenticated != true)
-            throw new InvalidOperationException(
-                "Cannot rename cloud playlist: user is not authenticated.");
+            throw new InvalidOperationException("Cannot rename cloud playlist: user is not authenticated.");
 
         ThrowIfInCooldown();
 
@@ -516,14 +561,16 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Удаляет облачный плейлист из аккаунта YouTube.
+    /// </summary>
     public async Task DeletePlaylistAsync(string playlistId)
     {
         if (string.IsNullOrWhiteSpace(playlistId))
             throw new ArgumentException("Playlist ID cannot be empty.", nameof(playlistId));
 
         if (AuthService?.IsAuthenticated != true)
-            throw new InvalidOperationException(
-                "Cannot delete cloud playlist: user is not authenticated.");
+            throw new InvalidOperationException("Cannot delete cloud playlist: user is not authenticated.");
 
         ThrowIfInCooldown();
 
@@ -540,6 +587,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Извлекает полные синхронизационные данные плейлиста YouTube, включая треки, автора и приватность.
+    /// </summary>
     public async Task<FullPlaylistSyncData?> GetFullPlaylistDataAsync(
         string youtubePlaylistId,
         CancellationToken ct = default)
@@ -591,271 +641,206 @@ public partial class YoutubeProvider : IDisposable
 
     #endregion
 
-    public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
-            TrackInfo track,
-            bool forceRefresh = false,
-            CancellationToken ct = default)
+    #region Resolve Stream (3-Tier Cache Strategy)
+
+    /// <summary>
+    /// Разрешает stream URL для трека через YouTube API.
+    /// <para><b>Высокоэффективный 3-уровневый алгоритм:</b></para>
+    /// <list type="number">
+    ///   <item>Exact full disk cache: Мгновенно возвращает локальный файл, если совпал запрошенный формат.</item>
+    ///   <item>Any full disk cache: Возвращает любой локальный файл, если пользователь не запрашивал конкретный формат.</item>
+    ///   <item>RAM manifest cache: Извлекает дескриптор из полной копии манифеста в оперативной памяти (0 сети).</item>
+    ///   <item>Disk manifest cache: Делает адаптивный HEAD-запрос к CDN. При 200/206 — восстанавливает весь манифест без обращения к YouTube API.</item>
+    ///   <item>YouTube API call: Запрашивает полный манифест со всеми медиа-вариантами, сохраняя их в RAM и на диск (1 API на все форматы).</item>
+    /// </list>
+    /// </summary>
+    public async Task<ResolvedStreamDescriptor?> RefreshStreamAsync(
+        TrackInfo track,
+        bool forceRefresh = false,
+        CancellationToken ct = default)
     {
-        var videoId = track.GetRawIdSpan().ToString();
-        if (string.IsNullOrEmpty(videoId))
-        {
-            NotifyError("[YouTube] Could not extract video ID");
-            return null;
-        }
-
-        var sw = Stopwatch.StartNew();
-
-        // АВАРИЙНОЕ САМОВОССТАНОВЛЕНИЕ ПРИ 403
-        if (forceRefresh)
-        {
-            Log.Warn($"[YouTube] [{videoId}] Force refresh requested (playback 403 recovery). Resetting bypass caches...");
-            try
-            {
-                _nTokenDecryptor.InvalidateCache();
-                _sigCipherDecryptor.InvalidateCache();
-                // Мягкая инвалидация: НЕ удаляем base.js с диска.
-                _nTokenDecryptor.PlayerManager.InvalidateContext();
-
-                // Сброс stale STS при 403-recovery
-                // _signatureTimestamp в VideoController и _cipherManifest в StreamClient
-                // кэшируются на уровне экземпляра и НЕ инвалидировались ранее.
-                // После PlayerManager.Invalidate() контекст будет загружен заново,
-                // но оба поля вернут старый (потенциально пустой) STS из field-кэша.
-                // InvalidateCipherManifest() сбрасывает оба поля через единую точку входа.
-                _youtube.Videos.Streams.InvalidateCipherManifest();
-
-                ClearCache();
-                Log.Info($"[YouTube] [{videoId}] Cache purged, bypass engine ready for fresh compilation.");
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[YouTube] [{videoId}] Cache purge during force refresh failed: {ex.Message}");
-            }
-        }
-
-        if (!forceRefresh)
-        {
-            var cached = AudioSourceFactory.FindAnyCachedTrack(videoId);
-            if (cached != null)
-            {
-                Log.Info($"[YouTube] [{videoId}] Using fully cached track ({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
-                track.StreamUrl = "";
-                return ("", cached.Value.Entry.TotalSize,
-                        cached.Value.Entry.Bitrate,
-                        cached.Value.Entry.Codec.ToString(),
-                        cached.Value.Entry.Format.ToString());
-            }
-        }
-
-        if (track.IsHlsOnly)
-        {
-            if (!string.IsNullOrEmpty(track.HlsManifestUrl) && !forceRefresh)
-            {
-                NotifyStatus($"[YouTube] [{videoId}] Using cached HLS manifest");
-                return (track.HlsManifestUrl, 0, 128, "HLS", "m3u8");
-            }
-
-            ThrowIfInCooldown();
-
-            var freshHls = await GetHlsManifestAsync(videoId, ct);
-            if (freshHls != null)
-            {
-                track.HlsManifestUrl = freshHls;
-                return (freshHls, 0, 128, "HLS", "m3u8");
-            }
-
-            throw new StreamUnavailableException(
-                $"HLS manifest unavailable for {videoId}",
-                videoId,
-                StreamUnavailableReason.AllClientsFailed,
-                wasHlsFallback: true);
-        }
-
-        ThrowIfInCooldown();
-
-        NotifyStatus(forceRefresh
-            ? $"[YouTube] [{videoId}] Forcing URL refresh..."
-            : $"[YouTube] [{videoId}] Getting stream URL...");
+        var rawVideoId = track.GetRawIdSpan().ToString();
+        if (string.IsNullOrEmpty(rawVideoId)) return null;
 
         string? targetContainer = track.TransientContainer;
         int targetBitrate = track.TransientBitrate;
 
-        if (string.IsNullOrEmpty(targetContainer))
+        Log.Info($"[YouTube] RefreshStreamAsync start: track={track.Id}, force={forceRefresh}, target={targetContainer ?? "-"}/{targetBitrate}");
+
+        if (forceRefresh)
         {
-            var settings = _libraryService?.Settings;
-            if (settings?.RememberTrackFormat == true)
+            PerformForceRefreshReset(rawVideoId, track.Id);
+        }
+
+        // 1) EXACT FULL DISK CACHE (0 сети)
+        if (!forceRefresh && !string.IsNullOrEmpty(targetContainer) && targetBitrate > 0)
+        {
+            var format = YoutubeIdHelper.MapContainerToFormat(targetContainer);
+            if (format != AudioFormat.Unknown)
             {
-                targetContainer = track.PreferredContainer;
-                targetBitrate = track.PreferredBitrate;
+                string cacheKey = AudioSourceFactory.BuildCacheKey(track.Id, format, targetBitrate);
+                var cache = AudioSourceFactory.GlobalCache;
+                if (cache != null && cache.IsFullyCached(cacheKey))
+                {
+                    var entry = cache.GetCacheInfo(cacheKey);
+                    if (entry != null)
+                    {
+                        var d = CreateDescriptorFromCacheEntry(track.Id, entry);
+                        Log.Info($"[YouTube] RefreshStreamAsync FULL CACHE (exact) -> {d}");
+                        return d;
+                    }
+                }
             }
         }
 
-        string cacheKey = GenerateCacheKeyFromString(videoId, targetContainer, targetBitrate);
-
-        if (!forceRefresh && TryGetFromCache(cacheKey, out var cachedUrl))
+        // 2) ANY FULL DISK CACHE (0 сети, если формат не важен)
+        if (!forceRefresh && string.IsNullOrEmpty(targetContainer))
         {
-            track.StreamUrl = cachedUrl.Url;
-            NotifyStatus($"[YouTube] [{videoId}] Cached ({cachedUrl.Codec}/{cachedUrl.Bitrate}kbps)");
-            return (cachedUrl.Url, cachedUrl.Size, cachedUrl.Bitrate, cachedUrl.Codec, cachedUrl.Container);
+            var anyCache = AudioSourceFactory.FindAnyCachedTrack(rawVideoId);
+            if (anyCache != null)
+            {
+                var d = CreateDescriptorFromCacheEntry(track.Id, anyCache.Value.Entry);
+                Log.Info($"[YouTube] RefreshStreamAsync FULL CACHE (any) -> {d}");
+                return d;
+            }
         }
+
+        // 3) RAM MANIFEST CACHE (0 сети, все форматы)
+        if (!forceRefresh && _manifestRamCache.TryGetValue(track.Id, out var ramManifest))
+        {
+            var d = SelectFromManifest(ramManifest, track.Id, targetContainer, targetBitrate);
+            if (d != null)
+            {
+                Log.Info($"[YouTube] RefreshStreamAsync RAM MANIFEST -> {d}");
+                return d;
+            }
+        }
+
+        // 4) DISK MANIFEST CACHE с probe (1 HEAD, 0 API)
+        if (!forceRefresh)
+        {
+            var diskEntry = await SessionCacheStore
+                .TryGetManifestAndProbeAsync(track.Id, Audio.Http.SharedHttpClient.Instance, ct)
+                .ConfigureAwait(false);
+
+            if (diskEntry is { Variants.Count: > 0 })
+            {
+                var diskManifest = ReconstructManifest(diskEntry);
+                _manifestRamCache[track.Id] = diskManifest;
+
+                var d = SelectFromManifest(diskManifest, track.Id, targetContainer, targetBitrate);
+                if (d != null)
+                {
+                    Log.Info($"[YouTube] RefreshStreamAsync DISK MANIFEST ({diskEntry.Variants.Count} variants) -> {d}");
+                    return d;
+                }
+            }
+        }
+
+        // 5) YOUTUBE API (1 запрос = полный список)
+        ThrowIfInCooldown();
 
         try
         {
-            var vId = VideoId.Parse(videoId);
+            var vId = VideoId.Parse(rawVideoId);
+            var manifest = await _youtube.Videos.Streams
+                .GetManifestAsync(vId, ct)
+                .ConfigureAwait(false);
 
-            try
-            {
-                var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId, ct);
-                var audioStreams = manifest.GetAudioOnlyStreams()
-                    .OrderByDescending(s => s.Bitrate)
-                    .ToList();
+            var audioStreams = manifest.GetAudioOnlyStreams()
+                .OrderByDescending(s => s.Bitrate)
+                .ToList();
 
-                if (audioStreams.Count > 0)
-                {
-                    var selectedStream = SelectBestStream(audioStreams, targetContainer, targetBitrate);
-                    if (selectedStream != null)
-                    {
-                        var url = selectedStream.Url;
-                        var size = selectedStream.Size.Bytes;
-                        var bitrate = (int)Math.Round(selectedStream.Bitrate.KiloBitsPerSecond);
-                        var container = selectedStream.Container.Name;
-                        var codec = DetermineCodec(container, selectedStream);
+            if (audioStreams.Count == 0)
+                throw new StreamUnavailableException($"No audio streams for {rawVideoId}", rawVideoId, StreamUnavailableReason.AllClientsFailed);
 
-                        sw.Stop();
+            // Сохраняем полный манифест в RAM и на диск
+            _manifestRamCache[track.Id] = manifest;
+            SessionCacheStore.RecordManifest(track.Id, audioStreams);
 
-                        NotifyStatus($"[YouTube] [{videoId}] Stream: {codec}/{bitrate}kbps in {sw.ElapsedMilliseconds}ms");
+            var descriptor = SelectFromManifest(manifest, track.Id, targetContainer, targetBitrate);
+            if (descriptor == null)
+                throw new StreamUnavailableException($"No matching stream for {rawVideoId}", rawVideoId, StreamUnavailableReason.AllClientsFailed);
 
-                        CacheStreamUrl(cacheKey, url, size, bitrate, codec, container);
-
-                        track.StreamUrl = url;
-                        track.TransientContainer = container;
-                        track.TransientSize = size;
-                        track.CachedCodec = codec;
-                        track.CachedBitrate = bitrate;
-                        track.CachedContainer = container;
-                        track.IsHlsOnly = false;
-                        track.HlsManifestUrl = null;
-
-                        track.TrySetGainFromLoudness(selectedStream.LoudnessDb);
-
-                        return (url, size, bitrate, codec, container);
-                    }
-                }
-                else
-                {
-                    Log.Warn($"[YouTube] [{videoId}] No audio-only streams available");
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (BotDetectionException)
-            {
-                throw;
-            }
-            catch (VideoUnplayableException ex)
-            {
-                Log.Warn($"[YouTube] [{videoId}] Video unplayable: {ex.Message}");
-
-                if (IsBotDetectionError(ex.Message))
-                    throw new BotDetectionException(ex.Message, VideoController.GetRemainingCooldown());
-            }
-            catch (StreamUnavailableException ex) when (ex.HttpStatusCode == 403)
-            {
-                Log.Error($"[YouTube] [{videoId}] HTTP 403 Forbidden");
-                HandlePlayback403Fatal();
-                throw;
-            }
-            catch (StreamUnavailableException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[YouTube] [{videoId}] Stream manifest failed: {ex.Message}");
-            }
-
-            Log.Info($"[YouTube] [{videoId}] Falling back to HLS (IOS priority)...");
-
-            try
-            {
-                var hlsUrl = await GetHlsManifestAsync(videoId, ct);
-
-                if (!string.IsNullOrEmpty(hlsUrl))
-                {
-                    track.IsHlsOnly = true;
-                    track.HlsManifestUrl = hlsUrl;
-                    track.StreamUrl = hlsUrl;
-                    track.TransientContainer = "m3u8";
-                    track.CachedCodec = "HLS";
-                    track.CachedBitrate = 128;
-                    track.CachedContainer = "m3u8";
-
-                    sw.Stop();
-                    NotifyStatus($"[YouTube] [{videoId}] HLS-only track in {sw.ElapsedMilliseconds}ms");
-                    Log.Warn($"[YouTube] [{videoId}] Track marked as HLS-only — normal streams unavailable");
-
-                    return (hlsUrl, 0, 128, "HLS", "m3u8");
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (StreamUnavailableException ex) when (ex.WasHlsFallback)
-            {
-                Log.Error($"[YouTube] [{videoId}] HLS fallback also failed with 403");
-                HandlePlayback403Fatal(); // Сброс при ошибке HLS-манифеста
-                throw;
-            }
-            catch (BotDetectionException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[YouTube] [{videoId}] HLS fallback failed: {ex.Message}");
-            }
-
-            Log.Error($"[YouTube] [{videoId}] No streams available (including HLS)");
-
-            throw new StreamUnavailableException(
-                $"Could not get any stream for video {videoId}",
-                videoId,
-                StreamUnavailableReason.AllClientsFailed);
+            Log.Info($"[YouTube] RefreshStreamAsync YOUTUBE API ({audioStreams.Count} variants) -> {descriptor}");
+            return descriptor;
         }
-        catch (BotDetectionException)
+        catch (OperationCanceledException) { throw; }
+        catch (StreamUnavailableException) { throw; }
+        catch (BotDetectionException) { throw; }
+        catch (LoginRequiredException) { throw; }
+        catch (Exception ex)
         {
+            Log.Error($"[YouTube] RefreshStreamAsync error: {ex.Message}");
             throw;
         }
-        catch (StreamUnavailableException)
+    }
+
+    #endregion
+
+    #region Quality Options (Menu UI Support)
+
+    /// <summary>
+    /// Возвращает список доступных форматов стрима для указанного видео с поддержкой отмены операции.
+    /// Предотвращает лишние сетевые вызовы за счёт чтения сохранённых ранее манифестов.
+    /// </summary>
+    public async Task<List<StreamOption>> GetStreamOptionsAsync(string videoId, CancellationToken ct = default)
+    {
+        if (!IsReady || string.IsNullOrWhiteSpace(videoId)) return [];
+
+        string trackId = videoId.StartsWith("yt_", StringComparison.Ordinal) ? videoId : $"yt_{videoId}";
+        string rawId = videoId.StartsWith("yt_", StringComparison.Ordinal) ? videoId[3..] : videoId;
+
+        // 1. RAM cache
+        if (_manifestRamCache.TryGetValue(trackId, out var ramManifest))
         {
-            throw;
+            var options = MapManifestToOptions(ramManifest);
+            Log.Debug($"[YouTube] StreamOptions RAM cache hit: {trackId} ({options.Count} formats)");
+            return options;
         }
-        catch (LoginRequiredException)
+
+        // 2. Disk cache (без probe — для UI не критично если ссылки протухли, при клике перекачаем)
+        var diskEntry = SessionCacheStore.GetManifest(trackId);
+        if (diskEntry is { Variants.Count: > 0 })
         {
-            throw;
+            var diskManifest = ReconstructManifest(diskEntry);
+            _manifestRamCache[trackId] = diskManifest;
+
+            var options = MapManifestToOptions(diskManifest);
+            Log.Debug($"[YouTube] StreamOptions DISK cache hit: {trackId} ({options.Count} formats)");
+            return options;
         }
-        catch (OperationCanceledException)
+
+        // 3. Network fallback
+        try
         {
-            throw;
+            var vId = VideoId.Parse(rawId);
+            var manifest = await _youtube.Videos.Streams
+                .GetManifestAsync(vId, ct)
+                .ConfigureAwait(false);
+
+            var audioStreams = manifest.GetAudioOnlyStreams()
+                .OrderByDescending(s => s.Bitrate)
+                .ToList();
+
+            if (audioStreams.Count > 0)
+            {
+                _manifestRamCache[trackId] = manifest;
+                SessionCacheStore.RecordManifest(trackId, audioStreams);
+            }
+
+            return MapManifestToOptions(manifest);
         }
         catch (Exception ex)
         {
-            NotifyError($"[YouTube] [{videoId}] Error: {ex.Message}");
+            Log.Error($"[YouTube] GetStreamOptions error: {ex.Message}");
             throw;
         }
     }
 
-    /// <summary>
-    /// Проверяет, вызвана ли ошибка механизмами обнаружения ботов на стороне YouTube.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsBotDetectionError(string error)
-    {
-        return VideoController.IsBotDetectionError(error);
-    }
+    #endregion
+
+    #region Support Helpers (Formatting & Fallback)
 
     private async Task<string?> GetHlsManifestAsync(string videoId, CancellationToken ct)
     {
@@ -865,22 +850,10 @@ public partial class YoutubeProvider : IDisposable
             var controller = new VideoController(_currentHttpClient!, _nTokenDecryptor.PlayerManager);
             return await controller.GetHlsManifestUrlAsync(vId, ct);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (BotDetectionException)
-        {
-            throw;
-        }
-        catch (StreamUnavailableException)
-        {
-            throw;
-        }
-        catch (LoginRequiredException)
-        {
-            throw;
-        }
+        catch (OperationCanceledException) { throw; }
+        catch (BotDetectionException) { throw; }
+        catch (StreamUnavailableException) { throw; }
+        catch (LoginRequiredException) { throw; }
         catch (Exception ex)
         {
             Log.Error($"[YouTube] [{videoId}] GetHlsManifest failed: {ex.Message}");
@@ -938,12 +911,8 @@ public partial class YoutubeProvider : IDisposable
     }
 
     /// <summary>
-    /// Выполняет точечный запрос к InnerTube API для получения только громкости видео.
-    /// Использует ту же fallback-цепочку player-клиентов, что и основной playback path.
+    /// Выполняет точечный запрос к InnerTube API для получения громкости трека (loudnessDb).
     /// </summary>
-    /// <param name="videoId">Уникальный идентификатор видео.</param>
-    /// <param name="ct">Токен отмены операции.</param>
-    /// <returns>Значение громкости в dB, либо <c>float.NaN</c> в случае ошибки.</returns>
     public async ValueTask<float> GetLoudnessDbOnlyAsync(string videoId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(videoId))
@@ -961,10 +930,7 @@ public partial class YoutubeProvider : IDisposable
 
             return loudnessDb;
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             Log.Debug($"[YouTube] GetLoudnessDbOnlyAsync failed for {videoId}: {ex.Message}");
@@ -993,133 +959,13 @@ public partial class YoutubeProvider : IDisposable
         };
     }
 
-    /// <summary>
-    /// Возвращает список доступных форматов стрима для указанного видео с поддержкой отмены операции.
-    /// Исключает устаревшие HLS-манифесты и возвращает только физические аудиопотоки.
-    /// </summary>
-    /// <param name="videoId">Идентификатор видео YouTube.</param>
-    /// <param name="ct">Токен отмены операции.</param>
-    /// <returns>Список доступных вариантов стрима.</returns>
-    public async Task<List<StreamOption>> GetStreamOptionsAsync(string videoId, CancellationToken ct = default)
-    {
-        if (!IsReady || string.IsNullOrWhiteSpace(videoId)) return [];
-
-        try
-        {
-            var vId = VideoId.Parse(videoId);
-            var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId, ct);
-
-            var audioStreams = manifest.GetAudioOnlyStreams()
-                .OrderByDescending(s => s.Bitrate)
-                .ToList();
-
-            if (audioStreams.Count == 0) return [];
-
-            var result = new List<StreamOption>(audioStreams.Count);
-            for (int i = 0; i < audioStreams.Count; i++)
-            {
-                var s = audioStreams[i];
-                result.Add(new StreamOption
-                {
-                    Container = s.Container.Name,
-                    Bitrate = s.Bitrate.KiloBitsPerSecond,
-                    Codec = DetermineCodec(s.Container.Name, s),
-                    SizeMb = s.Size.MegaBytes
-                });
-            }
-            return result;
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[YouTube] GetStreamOptions error: {ex.Message}");
-            throw; // Пробрасываем для обработки во ViewModel
-        }
-    }
-
-    #region Cache
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string GenerateCacheKey(ReadOnlySpan<char> videoId, string? container, int bitrate = 0)
-    {
-        if (string.IsNullOrEmpty(container))
-            return videoId.ToString();
-
-        if (bitrate > 0)
-        {
-            var bitrateStr = bitrate.ToString();
-            return string.Create(
-                videoId.Length + 1 + container.Length + 1 + bitrateStr.Length,
-                (videoId: videoId.ToString(), container, bitrateStr),
-                static (span, state) =>
-                {
-                    int pos = 0;
-                    state.videoId.AsSpan().CopyTo(span);
-                    pos += state.videoId.Length;
-                    span[pos++] = '_';
-                    state.container.AsSpan().CopyTo(span[pos..]);
-                    pos += state.container.Length;
-                    span[pos++] = '_';
-                    state.bitrateStr.AsSpan().CopyTo(span[pos..]);
-                });
-        }
-
-        return string.Create(
-            videoId.Length + 1 + container.Length,
-            (videoId: videoId.ToString(), container),
-            static (span, state) =>
-            {
-                int pos = 0;
-                state.videoId.AsSpan().CopyTo(span);
-                pos += state.videoId.Length;
-                span[pos++] = '_';
-                state.container.AsSpan().CopyTo(span[pos..]);
-            });
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TryGetFromCache(string cacheKey, out StreamCacheEntry result)
-    {
-        if (_streamCache.TryGetValue(cacheKey, out var cached) && !cached.IsExpired(_streamCacheLifetime))
-        {
-            result = cached;
-            return true;
-        }
-
-        if (!cached.Equals(default(StreamCacheEntry)))
-            _streamCache.TryRemove(cacheKey, out _);
-
-        result = default;
-        return false;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void CacheStreamUrl(string cacheKey, string url, long size, int bitrate, string codec, string container)
-    {
-        _streamCache[cacheKey] = new StreamCacheEntry(url, size, bitrate, codec, container);
-
-        if (_streamCache.Count > MaxCacheSize)
-            CleanupExpiredCache();
-    }
-
-    private void CleanupExpiredCache()
-    {
-        foreach (var kvp in _streamCache)
-        {
-            if (kvp.Value.IsExpired(_streamCacheLifetime))
-                _streamCache.TryRemove(kvp.Key, out _);
-        }
-    }
-
-    public void ClearCache()
-    {
-        _streamCache.Clear();
-        Log.Info("[YouTube] Stream cache cleared");
-    }
-
     #endregion
 
-    #region Search
+    #region Search Base
 
+    /// <summary>
+    /// Определяет тип переданного поискового запроса (ссылка, плейлист или обычный текст).
+    /// </summary>
     public static QueryType DetectQueryType(string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return QueryType.None;
@@ -1136,23 +982,15 @@ public partial class YoutubeProvider : IDisposable
         return QueryType.Search;
     }
 
+    /// <summary>
+    /// Извлекает 11-значный YouTube ID видео из любого URL-адреса.
+    /// </summary>
     public static string? ExtractVideoId(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
         var match = YoutubeVideoRegex.Match(url);
         if (match.Success) return match.Groups[1].Value;
         try { return VideoId.TryParse(url)?.Value; } catch { return null; }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ReadOnlySpan<char> ExtractRawIdSpan(string trackId)
-    {
-        var span = trackId.AsSpan().Trim();
-        if (span.StartsWith("yt_pl_".AsSpan()))
-            return span[6..];
-        if (span.StartsWith("yt_".AsSpan()))
-            return span[3..];
-        return span;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1167,6 +1005,9 @@ public partial class YoutubeProvider : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Загружает подробные метаданные трека по его прямой ссылке.
+    /// </summary>
     public async Task<TrackInfo?> GetTrackByUrlAsync(string url)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(url)) return null;
@@ -1183,6 +1024,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Выполняет стриминговый (потоковый) поиск музыкального контента на YouTube.
+    /// </summary>
     public async IAsyncEnumerable<List<TrackInfo>> SearchStreamingAsync(
      string query,
      int maxResults = 300,
@@ -1206,7 +1050,7 @@ public partial class YoutubeProvider : IDisposable
         int count = 0;
         bool isMusicFilter = filter.IsMusicContext();
 
-        NotifyStatus($"[YouTube] Streaming search '{query}' (Filter: {filter})...");
+        Log.Info($"[YouTube] Streaming search '{query}' (Filter: {filter})...");
 
         await foreach (var batch in _youtube.Search.GetResultBatchesAsync(query, filter, ct))
         {
@@ -1233,7 +1077,7 @@ public partial class YoutubeProvider : IDisposable
 
             if (tracks.Count > 0)
             {
-                NotifyStatus($"[YouTube] +{tracks.Count} (total: {count}) in {sw.ElapsedMilliseconds}ms");
+                Log.Info($"[YouTube] +{tracks.Count} (total: {count}) in {sw.ElapsedMilliseconds}ms");
                 yield return tracks;
             }
 
@@ -1241,9 +1085,12 @@ public partial class YoutubeProvider : IDisposable
         }
 
         sw.Stop();
-        NotifyStatus($"[YouTube] Search done: {count} results in {sw.ElapsedMilliseconds}ms");
+        Log.Info($"[YouTube] Search done: {count} results in {sw.ElapsedMilliseconds}ms");
     }
 
+    /// <summary>
+    /// Облегчённый быстрый метод поиска без пошагового стриминга пакетов.
+    /// </summary>
     public async Task<List<TrackInfo>> SearchFastAsync(
      string query,
      int maxResults = 100,
@@ -1272,11 +1119,9 @@ public partial class YoutubeProvider : IDisposable
         }
         catch (OperationCanceledException)
         {
-            NotifyStatus($"[YouTube] Search cancelled after {results.Count} results");
+            Log.Info($"[YouTube] Search cancelled after {results.Count} results");
         }
-        catch (BotDetectionException)
-        {
-        }
+        catch (BotDetectionException) { }
         catch (Exception ex)
         {
             NotifyError($"[YouTube] SearchFastAsync error: {ex.Message}");
@@ -1285,6 +1130,9 @@ public partial class YoutubeProvider : IDisposable
         return results;
     }
 
+    /// <summary>
+    /// Обычный поиск YouTube.
+    /// </summary>
     public Task<List<TrackInfo>> SearchAsync(
         string query,
         int maxResults = 100,
@@ -1295,8 +1143,11 @@ public partial class YoutubeProvider : IDisposable
 
     #endregion
 
-    #region Search Session
+    #region Search Session Nested Type
 
+    /// <summary>
+    /// Итеративная сессия постраничного поиска с авто-дедупликацией и защитой от утечек памяти.
+    /// </summary>
     public sealed class SearchSession : IDisposable
     {
         private readonly YoutubeClient _youtube;
@@ -1311,17 +1162,28 @@ public partial class YoutubeProvider : IDisposable
         private readonly Queue<TrackInfo> _buffer = new();
         private readonly SemaphoreSlim _disposeLock = new(1, 1);
 
+        /// <summary>
+        /// Указывает, есть ли ещё результаты для загрузки.
+        /// </summary>
         public bool HasMore => (_hasMore || _buffer.Count > 0) && !_disposed && _seenIds.Count < _maxResults;
+
+        /// <summary>
+        /// Количество загруженных уникальных треков в текущей сессии.
+        /// </summary>
         public int LoadedCount => _seenIds.Count;
+
+        /// <summary>
+        /// Применяемый поисковый фильтр.
+        /// </summary>
         public SearchFilter Filter { get; }
 
         internal SearchSession(
-            YoutubeClient youtube,
-            TrackRegistry registry,
-            string query,
-            int maxResults = 300,
-            SearchFilter filter = SearchFilter.Video,
-            IEnumerable<string>? skipTrackIds = null)
+           YoutubeClient youtube,
+           TrackRegistry registry,
+           string query,
+           int maxResults = 300,
+           SearchFilter filter = SearchFilter.Video,
+           IEnumerable<string>? skipTrackIds = null)
         {
             _youtube = youtube;
             _registry = registry;
@@ -1334,10 +1196,7 @@ public partial class YoutubeProvider : IDisposable
             {
                 foreach (var id in skipTrackIds)
                 {
-                    var cleanId = id.AsSpan();
-                    if (cleanId.StartsWith("yt_".AsSpan()))
-                        cleanId = cleanId[3..];
-                    _seenIds.Add(cleanId.ToString());
+                    _seenIds.Add(YoutubeIdHelper.ExtractRawId(id));
                 }
             }
         }
@@ -1381,8 +1240,7 @@ public partial class YoutubeProvider : IDisposable
 
                         if (batch.Items[i] is TrackInfo tInfo)
                         {
-                            var rawIdSpan = tInfo.GetRawIdSpan();
-                            var rawId = rawIdSpan.ToString();
+                            var rawId = tInfo.GetRawId();
 
                             if (!_seenIds.Add(rawId)) continue;
 
@@ -1397,8 +1255,6 @@ public partial class YoutubeProvider : IDisposable
                 }
                 catch (OperationCanceledException)
                 {
-                    // Не замалчиваем отмену задачи. Пробрасываем исключение 
-                    // для корректного завершения асинхронного конвейера.
                     throw;
                 }
                 catch (Exception ex)
@@ -1412,6 +1268,9 @@ public partial class YoutubeProvider : IDisposable
             return results;
         }
 
+        /// <summary>
+        /// Освобождает ресурсы, используемые сессией поиска.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed) return;
@@ -1444,6 +1303,9 @@ public partial class YoutubeProvider : IDisposable
 
     private SearchSession? _currentSearchSession;
 
+    /// <summary>
+    /// Создаёт новую сессию итеративного поиска.
+    /// </summary>
     public SearchSession CreateSearchSession(
         string query,
         int maxResults = 300,
@@ -1452,10 +1314,13 @@ public partial class YoutubeProvider : IDisposable
     {
         _currentSearchSession?.Dispose();
         _currentSearchSession = new SearchSession(_youtube, _trackRegistry, query, maxResults, filter, skipTrackIds);
-        NotifyStatus($"[YouTube] Search session: '{query}' (max:{maxResults}, filter:{filter})");
+        Log.Info($"[YouTube] Search session: '{query}' (max:{maxResults}, filter:{filter})");
         return _currentSearchSession;
     }
 
+    /// <summary>
+    /// Запускает поиск с возвратом как треков первого пакета, так и объекта активной сессии для дозагрузки.
+    /// </summary>
     public async Task<(List<TrackInfo> Tracks, SearchSession Session)> SearchWithSessionAsync(
         string query,
         int initialCount = 50,
@@ -1471,15 +1336,18 @@ public partial class YoutubeProvider : IDisposable
         var tracks = await session.FetchNextBatchAsync(initialCount, ct);
 
         sw.Stop();
-        NotifyStatus($"[YouTube] Initial '{query}': {tracks.Count} in {sw.ElapsedMilliseconds}ms (Filter: {filter})");
+        Log.Info($"[YouTube] Initial '{query}': {tracks.Count} in {sw.ElapsedMilliseconds}ms (Filter: {filter})");
 
         return (tracks, session);
     }
 
     #endregion
 
-    #region Playlist, Channel, Radio, Download
+    #region Playlists, Channels, Radio & Downloads
 
+    /// <summary>
+    /// Получает название и список треков из внешнего плейлиста YouTube.
+    /// </summary>
     public async Task<(string Name, List<TrackInfo> Tracks)?> GetPlaylistAsync(string url)
     {
         if (!IsReady) return null;
@@ -1505,7 +1373,7 @@ public partial class YoutubeProvider : IDisposable
             for (int i = 0; i < tracks.Count; i++)
                 _trackRegistry.RegisterOrUpdate(tracks[i]);
 
-            NotifyStatus($"[YouTube] Playlist '{playlist.Name}': {tracks.Count} tracks");
+            Log.Info($"[YouTube] Playlist '{playlist.Name}': {tracks.Count} tracks");
             return (playlist.Name, tracks.ToList());
         }
         catch (BotDetectionException)
@@ -1519,6 +1387,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Загружает метаданные всех плейлистов канала для последующей синхронизации.
+    /// </summary>
     public async Task<(string ChannelName, List<PlaylistSearchResult> Playlists)?> GetChannelPlaylistsForSyncAsync(
      string channelUrl, CancellationToken ct = default)
     {
@@ -1535,7 +1406,7 @@ public partial class YoutubeProvider : IDisposable
         var channel = await GetChannelFromUrlAsync(channelUrl, ct);
         if (channel is null) return null;
 
-        NotifyStatus($"[YouTube] Fetching playlists from: {channel.Title}...");
+        Log.Info($"[YouTube] Fetching playlists from: {channel.Title}...");
 
         try
         {
@@ -1564,7 +1435,7 @@ public partial class YoutubeProvider : IDisposable
                     pl.Name, auth, thumbs));
             }
 
-            NotifyStatus($"[YouTube] Found {results.Count} playlists.");
+            Log.Info($"[YouTube] Found {results.Count} playlists.");
             return (channel.Title, results);
         }
         catch (BotDetectionException)
@@ -1578,6 +1449,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Получает список облачных плейлистов текущего авторизованного пользователя.
+    /// </summary>
     public async Task<List<Playlist>> GetUserPlaylistsByAuthAsync()
     {
         return await _userDataService.GetMyPlaylistsAsync();
@@ -1648,9 +1522,6 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    /// <summary>
-    /// Определяет ownership и задаёт fallback-visibility, если YouTube не отдал privacy явно.
-    /// </summary>
     private void ResolveOwnershipAndVisibility(Playlist playlist, bool isAccountSync)
     {
         if (!isAccountSync)
@@ -1689,6 +1560,9 @@ public partial class YoutubeProvider : IDisposable
             playlist.Visibility = PlaylistVisibility.Public;
     }
 
+    /// <summary>
+    /// Загружает информацию об авторе канала (название и ссылка на аватар максимального разрешения).
+    /// </summary>
     public async Task<(string Name, string AvatarUrl)?> GetChannelInfoAsync(
         string url, CancellationToken ct = default)
     {
@@ -1764,6 +1638,9 @@ public partial class YoutubeProvider : IDisposable
         return result.Length > 0;
     }
 
+    /// <summary>
+    /// Генерирует бесконечное радио-микс на основе переданного трека (RD-список).
+    /// </summary>
     public async Task<List<TrackInfo>> GetRadioAsync(TrackInfo sourceTrack, int count = 25)
     {
         if (!IsReady || string.IsNullOrEmpty(sourceTrack.Url))
@@ -1812,6 +1689,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Загружает список популярных треков (тренды) в текущем регионе.
+    /// </summary>
     public async Task<List<TrackInfo>> GetTrendingAsync(int count = 20)
     {
         try
@@ -1848,6 +1728,10 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Скачивает аудиодорожку трека на локальный диск в максимальном качестве.
+    /// После успешной загрузки регистрирует файл в дисковом кэше LMP.
+    /// </summary>
     public async Task<string?> DownloadTrackAsync(
       TrackInfo track,
       IProgress<float>? progress = null,
@@ -1884,7 +1768,7 @@ public partial class YoutubeProvider : IDisposable
                 : null;
 
             await _youtube.Videos.Streams.DownloadAsync(stream, filePath, progress: prog, cancellationToken: ct);
-            NotifyStatus($"[YouTube] Downloaded: {fileName}");
+            Log.Info($"[YouTube] Downloaded: {fileName}");
 
             var cacheManager = AudioSourceFactory.GlobalCache;
             if (cacheManager != null)
@@ -1932,7 +1816,147 @@ public partial class YoutubeProvider : IDisposable
 
     #endregion
 
-    #region Helpers
+    #region Manifest Mapping Helpers
+
+    private ResolvedStreamDescriptor? SelectFromManifest(
+        StreamManifest manifest,
+        string trackId,
+        string? targetContainer,
+        int targetBitrate)
+    {
+        var streams = manifest.GetAudioOnlyStreams()
+            .OrderByDescending(s => s.Bitrate)
+            .ToList();
+
+        var selected = SelectBestStream(streams, targetContainer, targetBitrate);
+        if (selected == null) return null;
+
+        return CreateDescriptorFromStream(trackId, selected);
+    }
+
+    private ResolvedStreamDescriptor CreateDescriptorFromStream(string trackId, AudioOnlyStreamInfo stream)
+    {
+        var url = stream.Url;
+        var container = stream.Container.Name;
+        var codecStr = DetermineCodec(container, stream);
+        var format = YoutubeIdHelper.MapContainerToFormat(container);
+
+        DateTime expireUtc = DateTime.MaxValue;
+        var expireStr = UrlEx.TryGetQueryParameterValue(url, "expire");
+        if (expireStr != null && long.TryParse(expireStr, out var unix))
+            expireUtc = DateTimeOffset.FromUnixTimeSeconds(unix).UtcDateTime;
+
+        string cdnHost = "";
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            cdnHost = uri.Host;
+
+        return new ResolvedStreamDescriptor
+        {
+            TrackId = trackId,
+            Itag = stream.Itag,
+            Url = url,
+            Format = format,
+            Codec = Enum.TryParse<AudioCodec>(codecStr, true, out var c)
+                ? c : AudioSourceFactory.GetCodecForFormat(format),
+            BitrateKbps = (int)Math.Round(stream.Bitrate.KiloBitsPerSecond),
+            ContentLengthBytes = stream.Size.Bytes,
+            CdnHost = cdnHost,
+            ExpireUtc = expireUtc,
+            LoudnessDb = stream.LoudnessDb,
+            LanguageCode = stream.AudioLanguage?.Code,
+            IsDefaultLanguage = stream.IsAudioLanguageDefault ?? false,
+            Origin = StreamSource.YouTubeApi
+        };
+    }
+
+    private static ResolvedStreamDescriptor CreateDescriptorFromCacheEntry(
+        string trackId, AudioCacheEntry entry)
+    {
+        return new ResolvedStreamDescriptor
+        {
+            TrackId = trackId,
+            Url = "",
+            Format = entry.Format,
+            Codec = entry.Codec,
+            BitrateKbps = entry.Bitrate,
+            ContentLengthBytes = entry.TotalSize,
+            Origin = StreamSource.DiskCacheFull
+        };
+    }
+
+    /// <summary>
+    /// Реконструирует <see cref="StreamManifest"/> из дисковой записи кэша манифеста.
+    /// </summary>
+    private static StreamManifest ReconstructManifest(TrackManifestEntry entry)
+    {
+        var streams = new List<IStreamInfo>(entry.Variants.Count);
+        for (int i = 0; i < entry.Variants.Count; i++)
+        {
+            var v = entry.Variants[i];
+            Language? lang = !string.IsNullOrEmpty(v.LanguageCode)
+                ? new Language(v.LanguageCode, v.LanguageCode)
+                : null;
+
+            streams.Add(new AudioOnlyStreamInfo(
+                v.Itag,
+                v.Url,
+                new Container(v.Container),
+                new FileSize(v.Clen),
+                new Bitrate(v.Bitrate),
+                v.Codec,
+                lang,
+                v.IsDefaultLanguage,
+                hasEncryptedNToken: false,
+                v.LoudnessDb));
+        }
+
+        return new StreamManifest(streams);
+    }
+
+    private static List<StreamOption> MapManifestToOptions(StreamManifest manifest)
+    {
+        var streams = manifest.GetAudioOnlyStreams()
+            .OrderByDescending(s => s.Bitrate)
+            .ToList();
+
+        var result = new List<StreamOption>(streams.Count);
+        for (int i = 0; i < streams.Count; i++)
+        {
+            var s = streams[i];
+            result.Add(new StreamOption
+            {
+                Container = s.Container.Name,
+                Bitrate = s.Bitrate.KiloBitsPerSecond,
+                Codec = DetermineCodec(s.Container.Name, s),
+                SizeMb = s.Size.MegaBytes
+            });
+        }
+
+        return result;
+    }
+
+    private void PerformForceRefreshReset(string rawVideoId, string trackId)
+    {
+        Log.Warn($"[YouTube] [{rawVideoId}] Force refresh. Resetting caches...");
+        try
+        {
+            _nTokenDecryptor.InvalidateCache();
+            _sigCipherDecryptor.InvalidateCache();
+            _nTokenDecryptor.PlayerManager.InvalidateContext();
+            _youtube.Videos.Streams.InvalidateCipherManifest();
+            SessionCacheStore.Invalidate(trackId);
+            _manifestRamCache.TryRemove(trackId, out _);
+            Log.Info($"[YouTube] [{rawVideoId}] Caches purged for force refresh.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[YouTube] [{rawVideoId}] Force refresh cache purge failed: {ex.Message}");
+        }
+    }
+
+    #endregion
+
+    #region Diagnostic Logging & Cache Clear
 
     private static string SanitizeFileName(string name)
     {
@@ -1954,29 +1978,50 @@ public partial class YoutubeProvider : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void NotifyStatus(string message)
-    {
-        Log.Info(message);
-    }
+    private static void NotifyStatus(string message) => Log.Info(message);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void NotifyError(string message)
+    private static void NotifyError(string message) => Log.Error(message);
+
+    /// <summary>
+    /// Пытается быстро получить дескриптор потока из RAM-кэша манифестов без дисковых или сетевых запросов.
+    /// Поддерживает как полный trackId (с yt_ префиксом), так и чистый 11-значный videoId.
+    /// </summary>
+    /// <param name="videoId">Идентификатор видео или трека.</param>
+    /// <param name="container">Желаемый контейнер.</param>
+    /// <param name="bitrate">Желаемый битрейт.</param>
+    public ResolvedStreamDescriptor? TryGetCachedStreamDescriptor(string videoId, string? container, int bitrate)
     {
-        Log.Error(message);
+        string trackId = videoId.StartsWith("yt_", StringComparison.Ordinal) ? videoId : $"yt_{videoId}";
+        if (_manifestRamCache.TryGetValue(trackId, out var manifest))
+        {
+            return SelectFromManifest(manifest, trackId, container, bitrate);
+        }
+        return null;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string GenerateCacheKeyFromString(string videoId, string? container, int bitrate = 0)
+    /// <summary>
+    /// Очищает оперативную память от кэша манифестов.
+    /// </summary>
+    public void ClearCache()
     {
-        return GenerateCacheKey(videoId.AsSpan(), container, bitrate);
+        _manifestRamCache.Clear();
+        Log.Info("[YouTube] RAM manifest cache cleared");
     }
 
+    #endregion
+
+    #region Dispose
+
+    /// <summary>
+    /// Освобождает все управляемые ресурсы провайдера YouTube.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
 
-        AuthService?.OnAuthStateChanged -= ReloadClient;
+        AuthService.OnAuthStateChanged -= ReloadClient;
         DisposeCurrentClient();
 
         _currentHandler?.Dispose();
@@ -1985,7 +2030,7 @@ public partial class YoutubeProvider : IDisposable
         _poTokenProvider?.Dispose();
         _poTokenProvider = null;
 
-        _streamCache.Clear();
+        _manifestRamCache.Clear();
 
         GC.SuppressFinalize(this);
         Log.Info("[YouTube] Provider disposed");

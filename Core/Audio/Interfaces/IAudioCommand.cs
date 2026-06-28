@@ -16,9 +16,10 @@ public interface IAudioCommand
 /// <summary>
 /// Команда воспроизведения.
 /// </summary>
-/// <param name="Url">URL аудио потока.</param>
-/// <param name="TrackId">ID трека для обновления URL (опционально).</param>
-/// <param name="BitrateHint">Битрейт (kbps). 0 = определить автоматически.</param>
+/// <param name="Descriptor">
+/// Единый дескриптор resolved аудио потока, содержащий URL, trackId, bitrate,
+/// format, codec, contentLength, loudnessDb и другие метаданные.
+/// </param>
 /// <param name="SessionId">Уникальный ID сессии.</param>
 /// <param name="SeekPosition">
 /// Позиция для seek ПЕРЕД стартом воспроизведения (atomic seek-before-play).
@@ -32,10 +33,9 @@ public interface IAudioCommand
 /// Токен отмены пользовательской сессии воспроизведения.
 /// Позволяет мгновенно прервать запуск устаревшего трека, если пользователь уже переключился.
 /// </param>
+// BREAKING: PlayCommand больше не содержит отдельные Url/TrackId/BitrateHint — все данные в Descriptor
 public sealed record PlayCommand(
-    string Url,
-    string? TrackId,
-    int BitrateHint,
+    ResolvedStreamDescriptor Descriptor,
     int SessionId,
     TimeSpan? SeekPosition = null,
     CancellationToken ExternalCancellationToken = default) : IAudioCommand;

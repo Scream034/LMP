@@ -3,7 +3,7 @@ namespace LMP.Core.Youtube.Videos.Streams;
 /// <summary>
 /// Describes media streams available for a YouTube video.
 /// </summary>
-public class StreamManifest(IReadOnlyList<IStreamInfo> streams)
+public sealed class StreamManifest(IReadOnlyList<IStreamInfo> streams)
 {
     /// <summary>
     /// Available streams.

@@ -6,7 +6,7 @@ namespace LMP.Core.Youtube.Search;
 /// <summary>
 /// Metadata associated with a YouTube video returned by a search query.
 /// </summary>
-public class VideoSearchResult(
+public sealed class VideoSearchResult(
     VideoId id,
     string title,
     Author author,

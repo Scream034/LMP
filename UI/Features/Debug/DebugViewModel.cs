@@ -151,17 +151,22 @@ public sealed partial class DebugViewModel : ViewModelBase, IDisposable
                 AppendLog($"  ⚠️ Track info error: {ex.Message}");
             }
 
-            var streamInfo = await Youtube.RefreshStreamUrlAsync(track, forceRefresh: true, _audioTestCts.Token);
-            if (streamInfo == null)
+            var resolved = await Youtube.RefreshStreamAsync(
+                track,
+                forceRefresh: true,
+                ct: _audioTestCts.Token);
+
+            if (resolved == null)
             {
                 AppendLog($"  ❌ Failed to get stream URL");
                 return;
             }
 
-            var (url, size, bitrate, codec, container) = streamInfo.Value;
-            AppendLog($"  ✓ Codec: {codec}, Bitrate: {bitrate}kbps");
-            AppendLog($"  ✓ Container: {container}, Size: {size / 1024.0 / 1024.0:F1}MB");
-            AppendLog($"  ✓ HLS: {track.IsHlsOnly}");
+            var descriptor = resolved.Value;
+
+            AppendLog($"  ✓ Codec: {descriptor.Codec}, Bitrate: {descriptor.BitrateKbps}kbps");
+            AppendLog($"  ✓ Container: {descriptor.Format}, Size: {descriptor.ContentLengthBytes / 1024.0 / 1024.0:F1}MB");
+            AppendLog($"  ✓ HLS: {descriptor.Format == AudioFormat.Hls}");
 
             AppendLog($"  → Creating AudioPlayer...");
 
@@ -174,32 +179,17 @@ public sealed partial class DebugViewModel : ViewModelBase, IDisposable
 
             var options = new AudioPlayerOptions
             {
-                UrlRefreshCallback = async (trackId, ct) =>
+                UrlRefreshCallback = async (_, ct) =>
                 {
-                    var newStream = await Youtube.RefreshStreamUrlAsync(track, forceRefresh: true, ct);
-                    return newStream?.Url;
+                    var refreshed = await Youtube.RefreshStreamAsync(track, forceRefresh: true, ct: ct);
+                    return refreshed?.Url;
                 }
             };
 
             _testPlayer = new AudioPlayer(options);
 
-            // _testPlayer.StateChanged += state =>
-            //     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-            //         AppendLog($"  State: {state}"));
-
-            // _testPlayer.ErrorOccurred += ex =>
-            //     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-            //         AppendLog($"  ❌ Error: {ex.Message}"));
-
-            // _testPlayer.TrackEnded += () =>
-            //     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-            //     {
-            //         AppendLog($"  🏁 Track ended");
-            //         IsAudioPlaying = false;
-            //     });
-
             AppendLog($"  → Starting playback...");
-            await _testPlayer.PlayAsync(url, track.Id, ct: _audioTestCts.Token);
+            await _testPlayer.PlayAsync(descriptor, ct: _audioTestCts.Token);
 
             AppendLog($"  ▶️ Playing for {AudioTestDuration}s...");
 

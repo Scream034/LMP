@@ -1,4 +1,5 @@
-﻿using ReactiveUI;
+﻿using LMP.Core.Youtube.Utils;
+using ReactiveUI;
 
 namespace LMP.Core.Services;
 
@@ -128,7 +129,6 @@ public class MusicLibraryManager : ReactiveObject
         {
             try
             {
-                // Extract raw video IDs for YouTube API
                 List<string>? rawVideoIds = null;
                 if (initialTrackIds is { Count: > 0 })
                 {
@@ -136,8 +136,10 @@ public class MusicLibraryManager : ReactiveObject
                     for (int i = 0; i < initialTrackIds.Count; i++)
                     {
                         var id = initialTrackIds[i];
-                        if (id.StartsWith("yt_"))
-                            rawVideoIds.Add(id[3..]);
+                        if (id.StartsWith("yt_", StringComparison.Ordinal))
+                        {
+                            rawVideoIds.Add(YoutubeIdHelper.ExtractRawId(id));
+                        }
                     }
                     if (rawVideoIds.Count == 0) rawVideoIds = null;
                 }
@@ -186,7 +188,7 @@ public class MusicLibraryManager : ReactiveObject
     #region Playlist Operations
 
     public async Task UploadPlaylistToAccountAsync(
-    string localPlaylistId, CancellationToken ct = default)
+  string localPlaylistId, CancellationToken ct = default)
     {
         if (!_auth.IsAuthenticated) return;
 
@@ -201,10 +203,11 @@ public class MusicLibraryManager : ReactiveObject
             var localTrackIds = new List<string>(trackIds.Count);
             for (int i = 0; i < trackIds.Count; i++)
             {
-                if (trackIds[i].StartsWith("yt_", StringComparison.Ordinal))
+                var id = trackIds[i];
+                if (id.StartsWith("yt_", StringComparison.Ordinal))
                 {
-                    rawVideoIds.Add(trackIds[i][3..]);
-                    localTrackIds.Add(trackIds[i]);
+                    rawVideoIds.Add(YoutubeIdHelper.ExtractRawId(id));
+                    localTrackIds.Add(id);
                 }
             }
 

@@ -650,9 +650,7 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
         }
     }
 
-    /// <summary>
-    /// Токен для получения следующей страницы видео.
-    /// </summary>
+    /// <inheritdoc />
     public string? ContinuationToken
     {
         get
@@ -699,11 +697,7 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
     /// <summary>
     /// Данные о сессии пользователя для отслеживания контекста.
     /// </summary>
-    public string? VisitorData =>
-        content
-            .GetPropertyOrNull("responseContext")
-            ?.GetPropertyOrNull("visitorData")
-            ?.GetStringOrNull();
+    public string? VisitorData => content.GetVisitorData();
 
     #region High-Performance JSON Helpers
 

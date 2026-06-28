@@ -1132,6 +1132,8 @@ public sealed partial class CachingStreamSource
         if (!string.IsNullOrWhiteSpace(_currentUrl))
             return true;
 
+        Log.Debug($"[CachingSource] EnsureUrlAvailableAsync: track={_trackId}, hasUrl=false, hasAcquirer={_urlAcquirer != null}");
+
         Task<string?> waitTask;
         bool isInitiator = false;
 
@@ -1156,8 +1158,6 @@ public sealed partial class CachingStreamSource
 
         // Если источник настроен на самостоятельное получение URL (acquirer != null), 
         // инициатор запускает фоновый процесс.
-        // Если acquirer == null (например, при Partial-Cache Fast Start), 
-        // источник просто спокойно ждёт, пока внешний AudioEngine не вызовет TryAttachContinuationUrl.
         if (isInitiator && _urlAcquirer != null)
         {
             _ = ResolveContinuationUrlSingleFlightAsync(ct);
@@ -1166,13 +1166,14 @@ public sealed partial class CachingStreamSource
         try
         {
             // Ждём разрешение URL (изнутри или снаружи).
-            // Не возвращаем false мгновенно, предотвращая retry storm и fatal crash.
             await waitTask.WaitAsync(ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             return !string.IsNullOrWhiteSpace(_currentUrl);
         }
+
+        Log.Info($"[CachingSource] EnsureUrlAvailableAsync resolved: track={_trackId}, hasUrl={!string.IsNullOrWhiteSpace(_currentUrl)}");
 
         // ЗАЩИТА ОТ RETRY-ШТОРМА: Если ссылка так и не была получена (API упал / вернул null),
         // делаем принудительную задержку, чтобы предотвратить Infinite Loop в вызывающем preload-цикле.
@@ -1217,8 +1218,7 @@ public sealed partial class CachingStreamSource
             if (!string.IsNullOrEmpty(resolvedUrl) && string.IsNullOrWhiteSpace(_currentUrl))
             {
                 _currentUrl = resolvedUrl;
-                if (_cacheEntry != null)
-                    _cacheEntry.OriginalUrl = resolvedUrl;
+                _cacheEntry?.OriginalUrl = resolvedUrl;
 
                 Log.Info("[CachingSource] Continuation URL resolved via single-flight");
             }

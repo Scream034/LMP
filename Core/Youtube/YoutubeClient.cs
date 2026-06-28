@@ -12,7 +12,7 @@ namespace LMP.Core.Youtube;
 /// <summary>
 /// Фасад над всеми субклиентами YouTube InnerTube API.
 /// </summary>
-public class YoutubeClient : IDisposable
+public sealed class YoutubeClient : IDisposable
 {
     private readonly HttpClient _youtubeHttp;
     private readonly bool _ownsHttpClient;

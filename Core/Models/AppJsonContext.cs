@@ -26,8 +26,10 @@ namespace LMP.Core.Models;
 [JsonSerializable(typeof(CdnClusterStats))]
 [JsonSerializable(typeof(List<CdnClusterStats>))]
 [JsonSerializable(typeof(SessionCacheEnvelope))]
-[JsonSerializable(typeof(SessionEntry))]
-[JsonSerializable(typeof(List<SessionEntry>))]
+[JsonSerializable(typeof(TrackManifestEntry))]
+[JsonSerializable(typeof(List<TrackManifestEntry>))]
+[JsonSerializable(typeof(VariantEntry))]
+[JsonSerializable(typeof(List<VariantEntry>))]
 [JsonSerializable(typeof(ThemeSettings))]
 [JsonSerializable(typeof(BootstrapSettings))]
 [JsonSerializable(typeof(AuthState))]
@@ -39,15 +41,17 @@ namespace LMP.Core.Models;
 [JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSourceGenerationOptions(
-    WriteIndented = false, 
+    WriteIndented = false,
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
-    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals)]
 public sealed partial class AppJsonContext : JsonSerializerContext
 {
     public static AppJsonContext DefaultCompact { get; } = new(new JsonSerializerOptions
     {
         WriteIndented = false,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
     });
 }

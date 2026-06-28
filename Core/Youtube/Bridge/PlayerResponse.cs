@@ -287,7 +287,7 @@ internal partial class PlayerResponse(JsonElement content)
 
 internal partial class PlayerResponse
 {
-    public class ClosedCaptionTrackData(JsonElement content)
+    public sealed class ClosedCaptionTrackData(JsonElement content)
     {
         /// <inheritdoc/>
         public string? Url => content.GetPropertyOrNull("baseUrl")?.GetStringOrNull();
@@ -322,7 +322,7 @@ internal partial class PlayerResponse
     /// Поддерживает как прямые URL (ANDROID_VR, авторизованный WEB_REMIX),
     /// так и зашифрованные через <c>signatureCipher</c> (WEB_REMIX без авторизации, WEB).
     /// </summary>
-    public class StreamData : IStreamData
+    public sealed class StreamData : IStreamData
     {
         private readonly JsonElement _content;
 

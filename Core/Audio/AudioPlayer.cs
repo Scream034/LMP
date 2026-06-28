@@ -191,10 +191,9 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     /// <summary>
     /// Инициирует запуск воспроизведения.
     /// </summary>
+    // BREAKING: Принимает ResolvedStreamDescriptor вместо string url + string? trackId + int bitrateHint
     private void Play(
-        string url,
-        string? trackId = null,
-        int bitrateHint = 0,
+        ResolvedStreamDescriptor descriptor,
         TimeSpan? seekPosition = null,
         CancellationToken ct = default)
     {
@@ -204,20 +203,19 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         CancelActiveSeek();
 
         int session = _session.BeginNew();
-        _currentTrackId = trackId;
+        _currentTrackId = descriptor.TrackId;
         _lastRawPlayedSamples = -1;
 
         _commandChannel.Writer.TryWrite(
-            new PlayCommand(url, trackId, bitrateHint, session, seekPosition, ct));
+            new PlayCommand(descriptor, session, seekPosition, ct));
     }
 
     /// <summary>
     /// Запускает воспроизведение и ожидает Playing.
     /// </summary>
+    // BREAKING: Принимает ResolvedStreamDescriptor вместо string url + string? trackId + int bitrateHint
     public Task PlayAsync(
-        string url,
-        string? trackId = null,
-        int bitrateHint = 0,
+        ResolvedStreamDescriptor descriptor,
         CancellationToken ct = default,
         TimeSpan? seekPosition = null)
     {
@@ -255,7 +253,7 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         TaskContinuationOptions.ExecuteSynchronously,
         TaskScheduler.Default);
 
-        Play(url, trackId, bitrateHint, seekPosition, ct);
+        Play(descriptor, seekPosition, ct);
         return tcs.Task;
     }
 
@@ -438,8 +436,7 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         StopTimers();
 
         var pipeline = _activePipeline;
-        if (pipeline != null)
-            pipeline.Stop();
+        pipeline?.Stop();
 
         if (_state is not (PlayerState.Idle or PlayerState.Disposed))
             SetState(PlayerState.Paused);
@@ -633,8 +630,13 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
             CreateErrorCallback(cmd.SessionId, pipeline));
     }
 
+    /// <summary>
+    /// Выполняет воспроизведение нового дескриптора потока в контексте сессии.
+    /// </summary>
     private async Task HandlePlayAsync(PlayCommand cmd)
     {
+        Log.Info($"[AudioPlayer] HandlePlayAsync -> {cmd.Descriptor}, seek={cmd.SeekPosition?.TotalMilliseconds ?? 0}ms");
+
         SetPlaybackIntent(PlaybackIntent.Play);
         SetState(PlayerState.Loading);
         CancelActiveSeek();
@@ -645,23 +647,16 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
             _lifetimeCts.Token, cmd.ExternalCancellationToken);
         var ct = linkedCts.Token;
 
-        var oldPipeline = Interlocked.Exchange(ref _activePipeline, null);
-        float previousGain = oldPipeline?.GetLockedNormalizationGain() ?? 1.0f;
+        // Безопасно считываем gain из текущего пайплайна, пока он еще играет в фоне
+        float previousGain = _activePipeline?.GetLockedNormalizationGain() ?? 1.0f;
 
-        if (oldPipeline != null)
-            TrackAndFirePipelineDispose(oldPipeline);
-
-        StopTimers();
-        _lastRawPlayedSamples = -1;
-
+        // Старый пайплайн не трогаем — он бесшовно поет в фоне, пока создается новый
         try
         {
             ct.ThrowIfCancellationRequested();
 
             var pipeline = await AudioPipeline.CreateAsync(
-                cmd.Url,
-                cmd.TrackId,
-                cmd.BitrateHint,
+                cmd.Descriptor,
                 CreateUrlAcquirer(),
                 CreateUrlRefresher(),
                 _options,
@@ -676,21 +671,32 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
 
             ct.ThrowIfCancellationRequested();
 
-            _events.RaiseStreamInfo(pipeline.StreamInfo);
+            // ТОЧКА БЕСШОВНОЙ ПОДМЕНЫ: останавливаем UI-таймеры только сейчас
+            StopTimers();
 
-            var replaced = Interlocked.Exchange(ref _activePipeline, pipeline);
-            if (replaced != null)
-                await replaced.DisposeAsync().ConfigureAwait(false);
+            // Делаем единственный атомарный обмен пайплайнов
+            var oldPipeline = Interlocked.Exchange(ref _activePipeline, pipeline);
+            if (oldPipeline != null)
+            {
+                TrackAndFirePipelineDispose(oldPipeline);
+            }
+
+            // Очищаем C#-очередь, оставляя только 300мс системного буфера Windows для кроссфейда
+            _sharedBackend.Flush();
+            _lastRawPlayedSamples = -1;
+
+            _events.RaiseStreamInfo(pipeline.StreamInfo);
 
             int capturedSession = cmd.SessionId;
             pipeline.SetDeviceLostHandler(() => OnPipelineDeviceLost(pipeline, capturedSession));
             pipeline.SetDeviceAvailableHandler(() => OnPipelineDeviceAvailable(pipeline, capturedSession));
             pipeline.SetStarvationHandler(() => OnPipelineStarvation(pipeline, capturedSession));
 
+            // Устанавливаем сохраненный gain в новый пайплайн
             pipeline.SetInitialNormalizationGain(previousGain);
-            _options.OnPipelineConfiguring?.Invoke(pipeline, cmd.TrackId);
+            _options.OnPipelineConfiguring?.Invoke(pipeline, cmd.Descriptor.TrackId);
 
-            var lockedTrackId = cmd.TrackId;
+            var lockedTrackId = cmd.Descriptor.TrackId;
             if (lockedTrackId != null && _options.OnGainLocked != null)
             {
                 var cb = _options.OnGainLocked;

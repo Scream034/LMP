@@ -40,7 +40,7 @@ public sealed class AudioPlayerOptions
     /// <list type="bullet">
     ///   <item><c>AudioPipeline</c> — конфигурируемый pipeline.</item>
     ///   <item><c>string?</c> — trackId трека, для которого создан pipeline.
-    ///     Передаётся из <see cref="AudioPlayer.HandlePlayAsync"/> через <c>cmd.TrackId</c>.
+    ///     Передаётся из <see cref="AudioPlayer.HandlePlayAsync"/> через <c>cmd.Descriptor.TrackId</c>.
     ///     Гарантирует привязку gain к конкретному pipeline при rapid next/prev.</item>
     /// </list>
     /// </remarks>

@@ -6,7 +6,7 @@ namespace LMP.Core.Youtube.Channels;
 /// <summary>
 /// Metadata associated with a YouTube channel.
 /// </summary>
-public class Channel(ChannelId id, string title, IReadOnlyList<Thumbnail> thumbnails) : IChannel
+public sealed class Channel(ChannelId id, string title, IReadOnlyList<Thumbnail> thumbnails) : IChannel
 {
     /// <inheritdoc />
     public ChannelId Id { get; } = id;

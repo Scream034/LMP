@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace LMP.Core.Youtube.Music;
 
-public class MusicClient(HttpClient http)
+public sealed class MusicClient(HttpClient http)
 {
     private readonly MusicController _controller = new(http);
 
@@ -91,9 +91,10 @@ public class MusicClient(HttpClient http)
 
                 targetList.Add(new TrackInfo
                 {
-                    Id = string.Concat("yt_", item.Id),
+                    // Идентификатор передается без ручного добавления префикса "yt_",
+                    // так как свойство Id класса TrackInfo гарантирует его автоматическое добавление.
+                    Id = item.Id,
                     Title = item.Title,
-                    // Используем локализацию вместо "Unknown"
                     Author = item.Author ?? item.Album ?? LocalizationService.Instance["Track_UnknownAuthor"],
                     Duration = item.Duration ?? TimeSpan.Zero,
                     ThumbnailUrl = bestThumb,

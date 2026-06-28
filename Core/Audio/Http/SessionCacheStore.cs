@@ -1,47 +1,74 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LMP.Core.Audio.Interfaces;
 using LMP.Core.Models;
+using LMP.Core.Models.Json;
+using LMP.Core.Youtube.Videos.Streams;
 
 namespace LMP.Core.Audio.Http;
 
 // --- Section: Public Models ---
 
 /// <summary>
-/// Одна закэшированная сессия воспроизведения YouTube CDN.
+/// Один вариант аудиопотока внутри закэшированного манифеста.
 /// </summary>
-public sealed class SessionEntry
+public sealed class VariantEntry
 {
-    /// <summary>Идентификатор трека (с префиксом <c>yt_</c>).</summary>
-    public required string TrackId { get; set; }
-
-    /// <summary>Полный videoplayback URL.</summary>
-    public required string VideoplaybackUrl { get; set; }
-
-    /// <summary>CDN hostname, извлечённый из <see cref="VideoplaybackUrl"/>.</summary>
-    public required string CdnHost { get; set; }
-
-    /// <summary>
-    /// Время истечения URL (из параметра <c>&amp;expire=</c>, UTC).
-    /// За 30 минут до этого времени запись считается устаревшей.
-    /// </summary>
-    public required DateTime ExpireUtc { get; set; }
-
-    /// <summary>Размер контента в байтах (<c>&amp;clen=</c>).</summary>
-    public long Clen { get; set; }
-
-    /// <summary>itag потока (<c>&amp;itag=</c>).</summary>
+    /// <summary>YouTube itag потока.</summary>
     public int Itag { get; set; }
 
-    /// <summary>Битрейт в bps (<c>&amp;bitrate=</c>).</summary>
+    /// <summary>Полный videoplayback URL.</summary>
+    public required string Url { get; set; }
+
+    /// <summary>Контейнер (webm, mp4).</summary>
+    public string Container { get; set; } = "";
+
+    /// <summary>Кодек (opus, aac).</summary>
+    public string Codec { get; set; } = "";
+
+    /// <summary>Битрейт в bps.</summary>
     public int Bitrate { get; set; }
 
-    /// <summary>Кодек потока (например, <c>opus</c>).</summary>
-    public string Codec { get; set; } = string.Empty;
+    /// <summary>Размер контента в байтах.</summary>
+    public long Clen { get; set; }
 
-    /// <summary>Контейнер потока (например, <c>webm</c>).</summary>
-    public string Container { get; set; } = string.Empty;
+    /// <summary>
+    /// Сырое значение loudnessDb из YouTube API.
+    /// <see cref="float.NaN"/> = отсутствует.
+    /// </summary>
+    [JsonConverter(typeof(NaNFloatJsonConverter))]
+    public float LoudnessDb { get; set; } = float.NaN;
 
-    /// <summary>Время записи в кэш (UTC). Используется для LRU eviction.</summary>
+    /// <summary>Код языка аудиодорожки.</summary>
+    public string? LanguageCode { get; set; }
+
+    /// <summary>Язык по умолчанию.</summary>
+    public bool IsDefaultLanguage { get; set; }
+}
+
+/// <summary>
+/// Закэшированный полный манифест для одного трека.
+/// Содержит все доступные аудио-варианты с живыми URL.
+/// </summary>
+public sealed class TrackManifestEntry
+{
+    /// <summary>Идентификатор трека (с префиксом yt_).</summary>
+    public required string TrackId { get; set; }
+
+    /// <summary>CDN hostname первого варианта.</summary>
+    public string CdnHost { get; set; } = "";
+
+    /// <summary>
+    /// Время истечения URL (из &amp;expire= первого варианта, UTC).
+    /// Используется как hint для probe-bypass, но НЕ как жёсткий TTL.
+    /// Реальная инвалидация — по HTTP 403/410 при probe.
+    /// </summary>
+    public DateTime ExpireUtc { get; set; }
+
+    /// <summary>Все доступные аудио-варианты.</summary>
+    public List<VariantEntry> Variants { get; set; } = [];
+
+    /// <summary>Время записи в кэш (UTC).</summary>
     public DateTime SavedAtUtc { get; set; }
 }
 
@@ -50,39 +77,43 @@ public sealed class SessionEntry
 /// </summary>
 public sealed class SessionCacheEnvelope
 {
-    /// <summary>Закэшированные сессии (LRU, max 30 записей).</summary>
-    public List<SessionEntry> Sessions { get; set; } = [];
+    /// <summary>Закэшированные манифесты (LRU, max записей).</summary>
+    public List<TrackManifestEntry> Manifests { get; set; } = [];
 
-    /// <summary>Время последней очистки устаревших записей (UTC).</summary>
+    /// <summary>Время последней очистки (UTC).</summary>
     public DateTime LastCleanupUtc { get; set; }
 }
 
 // --- Section: Store ---
 
 /// <summary>
-/// Персистентный кэш videoplayback URL YouTube CDN с TTL и probe-based валидацией.
+/// Персистентный дисковый кэш полных YouTube аудио-манифестов.
 /// <para>
-/// <b>Flow:</b>
+/// <b>Архитектура «храним пока работает»:</b>
 /// </para>
 /// <list type="number">
 ///   <item>
-///     После каждого успешного YouTube API resolve вызывается <see cref="Record"/>
-///     для сохранения URL и метаданных потока.
+///     После каждого успешного YouTube API resolve вызывается <see cref="RecordManifest"/>
+///     для сохранения <b>всех</b> аудио-вариантов (URL, itag, codec, bitrate, loudness).
 ///   </item>
 ///   <item>
-///     При следующем воспроизведении того же трека <see cref="TryGetAndProbeAsync"/>
-///     проверяет TTL и делает HTTP HEAD к cached URL. Если CDN отвечает 200/206 —
-///     YouTube API call пропускается (~500–3000 мс экономии).
+///     При следующем воспроизведении <see cref="TryGetManifestAndProbeAsync"/>
+///     проверяет наличие записи и делает HTTP HEAD к одному из URL.
+///     Если CDN отвечает 200/206 — YouTube API call пропускается полностью.
+///   </item>
+///   <item>
+///     При HTTP 403/410 запись инвалидируется целиком — все варианты
+///     получены в одном API call и протухают одновременно.
 ///   </item>
 /// </list>
 /// <para>
-/// Probe-timeout адаптируется к реальному TTFB CDN-ноды через
-/// <see cref="CdnHostStatsStore.GetAvgTtfbMs"/>.
+/// <b>Экономия сети:</b> Один manifest fetch обслуживает playback, quality switch
+/// И UI quality menu без дополнительных запросов — как в RAM, так и после рестарта приложения.
 /// </para>
 /// </summary>
 internal static class SessionCacheStore
 {
-    private const int MaxSessions = 30;
+    private const int MaxManifests = 50;
     private const int TtlSafetyMarginMinutes = 30;
     private const int MinProbeTimeoutMs = 1000;
     private const int MaxProbeTimeoutMs = 3000;
@@ -91,6 +122,7 @@ internal static class SessionCacheStore
     private const double ProbeTtfbMultiplier = 4.0;
 
     private static readonly Lock _lock = new();
+    private static readonly Lock _saveIoLock = new();
     private static SessionCacheEnvelope _data = new();
     private static bool _dirty;
 
@@ -98,7 +130,6 @@ internal static class SessionCacheStore
 
     /// <summary>
     /// Загружает session-кэш с диска. Вызывается однократно при старте.
-    /// Автоматически очищает устаревшие записи при загрузке.
     /// </summary>
     public static void Load()
     {
@@ -122,7 +153,14 @@ internal static class SessionCacheStore
                 EvictExpiredMustHoldLock();
             }
 
-            Log.Debug($"[SessionCache] Loaded {_data.Sessions.Count} session(s)");
+            int totalVariants = 0;
+            lock (_lock)
+            {
+                for (int i = 0; i < _data.Manifests.Count; i++)
+                    totalVariants += _data.Manifests[i].Variants.Count;
+            }
+
+            Log.Debug($"[SessionCache] Loaded {_data.Manifests.Count} manifest(s), {totalVariants} variant(s)");
         }
         catch (Exception ex)
         {
@@ -132,7 +170,7 @@ internal static class SessionCacheStore
     }
 
     /// <summary>
-    /// Сохраняет session-кэш на диск. Вызывается при graceful shutdown.
+    /// Сохраняет session-кэш на диск.
     /// </summary>
     public static void Save()
     {
@@ -150,153 +188,139 @@ internal static class SessionCacheStore
 
         try
         {
-            var json = JsonSerializer.Serialize(
+            string json;
+            // Сериализуем вне I/O лока, чтобы не держать файловый лок дольше нужного
+            json = JsonSerializer.Serialize(
                 snapshot,
                 AppJsonContext.DefaultCompact.SessionCacheEnvelope);
-            File.WriteAllText(G.FilePath.SessionCache, json);
-            Log.Debug($"[SessionCache] Saved {snapshot.Sessions.Count} session(s)");
+
+            // Эксклюзивный лок только на работу с файловой системой
+            lock (_saveIoLock)
+            {
+                File.WriteAllText(G.FilePath.SessionCache, json);
+            }
+
+            int totalVariants = 0;
+            for (int i = 0; i < snapshot.Manifests.Count; i++)
+                totalVariants += snapshot.Manifests[i].Variants.Count;
+
+            Log.Debug($"[SessionCache] Saved {snapshot.Manifests.Count} manifest(s), {totalVariants} variant(s)");
         }
         catch (Exception ex)
         {
             Log.Warn($"[SessionCache] Save failed: {ex.Message}");
-            lock (_lock) { _dirty = true; }
+            lock (_lock) { _dirty = true; } // Возвращаем флаг, если запись сорвалась
         }
     }
 
     // --- Section: Record ---
 
     /// <summary>
-    /// Возвращает дефолтный битрейт для заданного itag, если точные данные отсутствуют.
+    /// Сохраняет полный манифест после успешного YouTube API resolve.
+    /// Заменяет предыдущую запись для этого трека целиком.
     /// </summary>
-    private static int GetDefaultBitrateForItag(int itag) => itag switch
+    /// <param name="trackId">ID трека (с префиксом yt_).</param>
+    /// <param name="streams">Все аудио-варианты из манифеста.</param>
+    public static void RecordManifest(string trackId, IReadOnlyList<AudioOnlyStreamInfo> streams)
     {
-        140 => 128000,
-        249 => 50000,
-        250 => 70000,
-        251 => 160000,
-        _ => 128000
-    };
-
-    /// <summary>
-    /// Сохраняет videoplayback URL после успешного YouTube API resolve.
-    /// </summary>
-    public static void Record(
-        string trackId,
-        string url,
-        string codec,
-        string container,
-        int bitrateKbps = 0,
-        long clen = 0)
-    {
-        if (string.IsNullOrEmpty(trackId) || string.IsNullOrEmpty(url))
+        if (string.IsNullOrEmpty(trackId) || streams.Count == 0)
             return;
 
-        if (!TryExtractCdnHost(url, out var host))
-            return;
+        string firstUrl = streams[0].Url;
 
-        var expireUtc = ParseExpireFromUrl(url);
-        if (expireUtc <= DateTime.UtcNow)
-            return;
+        if (!TryExtractCdnHost(firstUrl, out var cdnHost))
+            cdnHost = "";
 
-        int itag = (int)ParseLongParam(url, "itag");
-        int finalBitrate = bitrateKbps > 0
-            ? bitrateKbps * 1000
-            : (int)ParseLongParam(url, "bitrate");
+        var expireUtc = ParseExpireFromUrl(firstUrl);
 
-        if (finalBitrate <= 0)
+        var variants = new List<VariantEntry>(streams.Count);
+        for (int i = 0; i < streams.Count; i++)
         {
-            finalBitrate = GetDefaultBitrateForItag(itag);
+            var s = streams[i];
+            variants.Add(new VariantEntry
+            {
+                Itag = s.Itag,
+                Url = s.Url,
+                Container = s.Container.Name,
+                Codec = s.AudioCodec ?? "",
+                Bitrate = (int)s.Bitrate.BitsPerSecond,
+                Clen = s.Size.Bytes,
+                LoudnessDb = s.LoudnessDb,
+                LanguageCode = s.AudioLanguage?.Code,
+                IsDefaultLanguage = s.IsAudioLanguageDefault ?? false
+            });
         }
 
-        var entry = new SessionEntry
+        var entry = new TrackManifestEntry
         {
             TrackId = trackId,
-            VideoplaybackUrl = url,
-            CdnHost = host,
+            CdnHost = cdnHost,
             ExpireUtc = expireUtc,
-            Clen = clen > 0 ? clen : ParseLongParam(url, "clen"),
-            Itag = itag,
-            Bitrate = finalBitrate,
-            Codec = codec,
-            Container = container ?? string.Empty,
+            Variants = variants,
             SavedAtUtc = DateTime.UtcNow
         };
 
         lock (_lock)
         {
-            for (int i = _data.Sessions.Count - 1; i >= 0; i--)
+            for (int i = _data.Manifests.Count - 1; i >= 0; i--)
             {
-                if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal) &&
-                    string.Equals(_data.Sessions[i].Container, container, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(_data.Manifests[i].TrackId, trackId, StringComparison.Ordinal))
                 {
-                    _data.Sessions.RemoveAt(i);
+                    _data.Manifests.RemoveAt(i);
                     break;
                 }
             }
 
-            while (_data.Sessions.Count >= MaxSessions)
+            while (_data.Manifests.Count >= MaxManifests)
                 EvictLeastRecentlyUsedMustHoldLock();
 
-            _data.Sessions.Add(entry);
+            _data.Manifests.Add(entry);
             _dirty = true;
         }
 
+        Log.Info($"[SessionCache] RecordManifest: track={trackId}, variants={variants.Count}, cdn={cdnHost}, expire={expireUtc:O}");
         _ = Task.Run(Save);
     }
 
     // --- Section: Probe ---
 
     /// <summary>
-    /// Пытается получить и проверить cached URL для трека с учетом контейнера.
+    /// Пытается получить и проверить закэшированный манифест для трека.
     /// <para>
     /// Алгоритм:
     /// </para>
     /// <list type="number">
-    ///   <item>Поиск записи по <paramref name="trackId"/> и <paramref name="container"/>.</item>
-    ///   <item>Проверка TTL: если <c>expireUtc - 30 мин &lt; now</c> — запись дропается.</item>
-    ///   <item>
-    ///     Probe HEAD к cached URL с адаптивным timeout
-    ///     (<c>AvgTtfbMs × 4</c>, зажато в [300, 3000] мс).
-    ///   </item>
-    ///   <item>200/206 → возвращает entry. 403/404 → дропает запись.</item>
+    ///   <item>Поиск записи по <paramref name="trackId"/>.</item>
+    ///   <item>Если запись свежая (saved &lt; 10 мин назад) — bypass без probe.</item>
+    ///   <item>HTTP HEAD к первому URL с адаптивным timeout.</item>
+    ///   <item>200/206 → возвращает entry. 403/404/410 → дропает запись.</item>
     /// </list>
     /// </summary>
     /// <param name="trackId">ID трека.</param>
-    /// <param name="container">Контейнер потока (webm, mp4).</param>
-    /// <param name="httpClient">HTTP-клиент с общим connection pool.</param>
+    /// <param name="httpClient">HTTP-клиент.</param>
     /// <param name="ct">Токен отмены.</param>
-    /// <returns>
-    /// Валидная <see cref="SessionEntry"/> или <c>null</c> если кэш промахнулся/протух.
-    /// </returns>
-    public static async ValueTask<SessionEntry?> TryGetAndProbeAsync(
-      string trackId,
-      string container,
-      HttpClient httpClient,
-      CancellationToken ct)
+    /// <returns>Валидная запись или null.</returns>
+    public static async ValueTask<TrackManifestEntry?> TryGetManifestAndProbeAsync(
+        string trackId,
+        HttpClient httpClient,
+        CancellationToken ct)
     {
-        SessionEntry? entry;
+        TrackManifestEntry? entry;
 
         lock (_lock)
         {
-            entry = FindMustHoldLock(trackId, container);
-            if (entry is null) return null;
-
-            if (entry.ExpireUtc.AddMinutes(-TtlSafetyMarginMinutes) <= DateTime.UtcNow)
-            {
-                DropMustHoldLock(trackId, container);
-                Log.Debug($"[SessionCache] TTL expired for {trackId} ({container}), dropping");
+            entry = FindMustHoldLock(trackId);
+            if (entry is null || entry.Variants.Count == 0)
                 return null;
-            }
 
-            // Мгновенный возврат без сетевого зонда, если ссылка получена менее 10 минут назад.
-            // Предотвращает лаги и таймауты при быстрых перезапусках.
             if (DateTime.UtcNow - entry.SavedAtUtc < TimeSpan.FromMinutes(TtlBypassProbeMinutes))
             {
-                Log.Debug($"[SessionCache] Probe bypassed (saved {(DateTime.UtcNow - entry.SavedAtUtc).TotalSeconds:F0}s ago) for {trackId} ({container})");
+                Log.Debug($"[SessionCache] Probe bypass: track={trackId}, age={(DateTime.UtcNow - entry.SavedAtUtc).TotalSeconds:F0}s, variants={entry.Variants.Count}");
                 return entry;
             }
         }
 
+        var probeUrl = entry.Variants[0].Url;
         var probeTimeoutMs = ComputeProbeTimeout(entry.CdnHost);
 
         try
@@ -304,10 +328,10 @@ internal static class SessionCacheStore
             using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             probeCts.CancelAfter(probeTimeoutMs);
 
-            using var request = new HttpRequestMessage(HttpMethod.Head, entry.VideoplaybackUrl);
+            using var request = new HttpRequestMessage(HttpMethod.Head, probeUrl);
             request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
             request.Version = System.Net.HttpVersion.Version20;
-            SharedHttpClient.ApplyUserAgentFromUrl(request, entry.VideoplaybackUrl);
+            SharedHttpClient.ApplyUserAgentFromUrl(request, probeUrl);
 
             using var response = await httpClient
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, probeCts.Token)
@@ -317,61 +341,58 @@ internal static class SessionCacheStore
 
             if (status is 200 or 206)
             {
-                Log.Debug($"[SessionCache] Probe OK ({status}) for {trackId} ({container})");
+                Log.Info($"[SessionCache] Probe OK ({status}): track={trackId}, variants={entry.Variants.Count}");
                 return entry;
             }
 
             if (status is 401 or 403 or 404 or 410)
             {
-                Log.Debug($"[SessionCache] Probe rejected (HTTP {status}) for {trackId}, dropping");
-                lock (_lock) { DropMustHoldLock(trackId, container); }
+                Log.Debug($"[SessionCache] Probe rejected (HTTP {status}): track={trackId}, dropping manifest");
+                lock (_lock) { DropMustHoldLock(trackId); }
                 return null;
             }
 
-            Log.Warn($"[SessionCache] Probe returned HTTP {status} for {trackId}, keeping entry for safety");
+            Log.Warn($"[SessionCache] Probe returned HTTP {status} for {trackId}, keeping for safety");
             return null;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            Log.Debug($"[SessionCache] Probe timed out ({probeTimeoutMs}ms) for {trackId}, keeping entry");
+            Log.Debug($"[SessionCache] Probe timed out ({probeTimeoutMs}ms) for {trackId}");
             return null;
         }
         catch (HttpRequestException ex)
         {
-            Log.Debug($"[SessionCache] Probe network error for {trackId}: {ex.Message}, keeping entry");
+            Log.Debug($"[SessionCache] Probe network error for {trackId}: {ex.Message}");
             return null;
         }
         catch (Exception ex)
         {
-            Log.Debug($"[SessionCache] Probe failed for {trackId}: {ex.Message}, keeping entry");
+            Log.Debug($"[SessionCache] Probe failed for {trackId}: {ex.Message}");
             return null;
         }
     }
 
     /// <summary>
-    /// Возвращает список всех валидных, неистекших сессий для указанного трека.
-    /// Позволяет реконструировать манифест без обращения к сети.
+    /// Возвращает закэшированную запись манифеста без probe (для локального чтения).
     /// </summary>
-    /// <param name="trackId">Идентификатор трека.</param>
-    public static List<SessionEntry> GetValidSessions(string trackId)
+    public static TrackManifestEntry? GetManifest(string trackId)
     {
-        var result = new List<SessionEntry>();
         lock (_lock)
         {
-            var threshold = DateTime.UtcNow.AddMinutes(-TtlSafetyMarginMinutes);
-            for (int i = 0; i < _data.Sessions.Count; i++)
-            {
-                var session = _data.Sessions[i];
-                if (string.Equals(session.TrackId, trackId, StringComparison.Ordinal))
-                {
-                    if (session.ExpireUtc > threshold)
-                    {
-                        result.Add(session);
-                    }
-                }
-            }
+            return FindMustHoldLock(trackId);
         }
-        return result;
+    }
+
+    /// <summary>
+    /// Инвалидирует запись для трека (после фатальной 403 или force refresh).
+    /// </summary>
+    public static void Invalidate(string trackId)
+    {
+        lock (_lock)
+        {
+            DropMustHoldLock(trackId);
+        }
+        Log.Debug($"[SessionCache] Invalidated manifest for {trackId}");
     }
 
     // --- Section: Private Helpers ---
@@ -385,36 +406,23 @@ internal static class SessionCacheStore
         return Math.Clamp((int)(avgTtfb * ProbeTtfbMultiplier), MinProbeTimeoutMs, MaxProbeTimeoutMs);
     }
 
-    private static SessionEntry? FindMustHoldLock(string trackId, string container)
+    private static TrackManifestEntry? FindMustHoldLock(string trackId)
     {
-        // Сначала ищем точное совпадение с контейнером
-        for (int i = 0; i < _data.Sessions.Count; i++)
+        for (int i = 0; i < _data.Manifests.Count; i++)
         {
-            if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal) &&
-                string.Equals(_data.Sessions[i].Container, container, StringComparison.OrdinalIgnoreCase))
-            {
-                return _data.Sessions[i];
-            }
-        }
-        // Fallback для старых записей без указания контейнера
-        for (int i = 0; i < _data.Sessions.Count; i++)
-        {
-            if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal))
-            {
-                return _data.Sessions[i];
-            }
+            if (string.Equals(_data.Manifests[i].TrackId, trackId, StringComparison.Ordinal))
+                return _data.Manifests[i];
         }
         return null;
     }
 
-    private static void DropMustHoldLock(string trackId, string container)
+    private static void DropMustHoldLock(string trackId)
     {
-        for (int i = _data.Sessions.Count - 1; i >= 0; i--)
+        for (int i = _data.Manifests.Count - 1; i >= 0; i--)
         {
-            if (string.Equals(_data.Sessions[i].TrackId, trackId, StringComparison.Ordinal) &&
-               (string.IsNullOrEmpty(_data.Sessions[i].Container) || string.Equals(_data.Sessions[i].Container, container, StringComparison.OrdinalIgnoreCase)))
+            if (string.Equals(_data.Manifests[i].TrackId, trackId, StringComparison.Ordinal))
             {
-                _data.Sessions.RemoveAt(i);
+                _data.Manifests.RemoveAt(i);
                 _dirty = true;
                 return;
             }
@@ -423,33 +431,32 @@ internal static class SessionCacheStore
 
     private static void EvictLeastRecentlyUsedMustHoldLock()
     {
-        if (_data.Sessions.Count == 0)
-            return;
+        if (_data.Manifests.Count == 0) return;
 
         int oldestIdx = 0;
-        for (int i = 1; i < _data.Sessions.Count; i++)
+        for (int i = 1; i < _data.Manifests.Count; i++)
         {
-            if (_data.Sessions[i].SavedAtUtc < _data.Sessions[oldestIdx].SavedAtUtc)
+            if (_data.Manifests[i].SavedAtUtc < _data.Manifests[oldestIdx].SavedAtUtc)
                 oldestIdx = i;
         }
 
-        _data.Sessions.RemoveAt(oldestIdx);
+        _data.Manifests.RemoveAt(oldestIdx);
     }
 
     private static void EvictExpiredMustHoldLock()
     {
         var threshold = DateTime.UtcNow.AddMinutes(-TtlSafetyMarginMinutes);
-        for (int i = _data.Sessions.Count - 1; i >= 0; i--)
+        for (int i = _data.Manifests.Count - 1; i >= 0; i--)
         {
-            if (_data.Sessions[i].ExpireUtc <= threshold)
-                _data.Sessions.RemoveAt(i);
+            if (_data.Manifests[i].ExpireUtc <= threshold)
+                _data.Manifests.RemoveAt(i);
         }
         _data.LastCleanupUtc = DateTime.UtcNow;
     }
 
     private static bool TryExtractCdnHost(string url, out string host)
     {
-        host = string.Empty;
+        host = "";
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
             return false;
 
@@ -467,11 +474,5 @@ internal static class SessionCacheStore
             return DateTime.UtcNow.AddHours(6);
 
         return DateTimeOffset.FromUnixTimeSeconds(unixSeconds).UtcDateTime;
-    }
-
-    private static long ParseLongParam(string url, string paramName)
-    {
-        var value = UrlEx.TryGetQueryParameterValue(url, paramName);
-        return value is not null && long.TryParse(value, out var result) ? result : 0;
     }
 }

@@ -1066,8 +1066,13 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(TrackNumberTooltip));
     }
 
+    /// <summary>
+    /// Обновляет текстовую плашку информации о потоке и синхронизирует состояние кнопок качества.
+    /// </summary>
     private void UpdateStreamInfo(AudioStreamInfo info)
     {
+        Log.Debug($"[PlayerBar] StreamInfo UI update: track={CurrentTrack?.Id}, valid={info.IsValid}, display='{info.FormatDisplay}', duration={info.DurationMs}ms");
+
         if (CurrentTrack == null)
         {
             ShowStreamInfo = false;

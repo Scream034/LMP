@@ -14,6 +14,7 @@ namespace LMP.Core.Audio;
 
 /// <summary>
 /// Полный конвейер воспроизведения: Source → Decoder → PCM Buffer → Normalization → Gain → Backend.
+/// </summary>
 public sealed class AudioPipeline : IAsyncDisposable
 {
     #region Constants
@@ -24,9 +25,6 @@ public sealed class AudioPipeline : IAsyncDisposable
     private const int DrainMaxDelayMs = 500;
     private const int HResultFileNotFound = unchecked((int)0x80070002);
     private const int HResultPathNotFound = unchecked((int)0x80070003);
-    /// <summary>
-    /// Допустимое расхождение между последним timestamp источника и объявленной длительностью трека.
-    /// </summary>
     private const int PrematureEndToleranceMs = 2_000;
 
     #endregion
@@ -58,10 +56,6 @@ public sealed class AudioPipeline : IAsyncDisposable
     private volatile bool _deviceLost;
     private Action? _onDeviceLostExternal;
     private Action? _onDeviceAvailableExternal;
-    /// <summary>
-    /// Callback вызываемый при критическом опустошении аудиобуфера (starvation).
-    /// AudioPlayer переводит плеер в Buffering вместо деструктивного CancelActiveReads.
-    /// </summary>
     private Action? _onStarvationExternal;
 
     private Task? _deviceEventTask;
@@ -114,11 +108,7 @@ public sealed class AudioPipeline : IAsyncDisposable
     public EbuR128Analyzer Analyzer => _analyzer;
 
 #if DEBUG
-    /// <summary>
-    /// Количество перезапусков decoder loop с момента создания pipeline.
-    /// Значение &gt; 10 указывает на нестабильный источник или сетевые проблемы.
-    /// Доступно только в DEBUG-сборках.
-    /// </summary>
+    /// <summary>Количество перезапусков decoder loop.</summary>
     public int DecoderRestartCount => Volatile.Read(ref _decoderRestartCount);
 #endif
 
@@ -153,18 +143,18 @@ public sealed class AudioPipeline : IAsyncDisposable
     #region Factory
 
     /// <summary>
-    /// Создаёт pipeline с shared backend.
+    /// Создаёт pipeline с shared backend из <see cref="ResolvedStreamDescriptor"/>.
     /// </summary>
     public static async Task<AudioPipeline> CreateAsync(
-        string url,
-        string? trackId,
-        int bitrateHint,
+        ResolvedStreamDescriptor descriptor,
         Func<CancellationToken, Task<string?>>? urlAcquirer,
         Func<CancellationToken, Task<string?>>? urlRefresher,
         AudioPlayerOptions options,
         IPlaybackBackend sharedBackend,
         CancellationToken ct)
     {
+        Log.Info($"[AudioPipeline] CreateAsync -> {descriptor}");
+
         var lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         IAudioSource? source = null;
@@ -174,12 +164,10 @@ public sealed class AudioPipeline : IAsyncDisposable
         try
         {
             source = await AudioSourceFactory.CreateAsync(
-                url,
+                descriptor,
                 Http.SharedHttpClient.Instance,
                 urlAcquirer,
                 urlRefresher,
-                trackId,
-                bitrateHint,
                 options.StreamingConfig,
                 lifetimeCts.Token).ConfigureAwait(false);
 
@@ -197,7 +185,10 @@ public sealed class AudioPipeline : IAsyncDisposable
             var pcmBuffer = new LockFreeRingBuffer<float>(bufferSize);
 
             decodeBuffer = ArrayPool<float>.Shared.Rent(DecoderBufferFrames * decoder.Channels);
-            var streamInfo = BuildStreamInfo(source, trackId, bitrateHint);
+
+            var streamInfo = BuildStreamInfo(descriptor, source, decoder);
+
+            Log.Debug($"[AudioPipeline] StreamInfo built: track={streamInfo.TrackId}, container={streamInfo.Container}, codec={streamInfo.Codec}, bitrate={streamInfo.Bitrate}kbps, duration={streamInfo.DurationMs}ms, fromCache={streamInfo.IsFromCache}");
 
             var pipeline = new AudioPipeline(
                 source, decoder, sharedBackend, pcmBuffer, decodeBuffer, streamInfo, lifetimeCts);
@@ -257,51 +248,30 @@ public sealed class AudioPipeline : IAsyncDisposable
         return dec;
     }
 
-    private static AudioStreamInfo BuildStreamInfo(IAudioSource source, string? trackId, int bitrateHint)
+    /// <summary>
+    /// Строит <see cref="AudioStreamInfo"/> из дескриптора и runtime-параметров.
+    /// Прямое маппирование без fallback cascade и HTTP detect.
+    /// </summary>
+    private static AudioStreamInfo BuildStreamInfo(
+        ResolvedStreamDescriptor descriptor,
+        IAudioSource source,
+        IAudioDecoder decoder)
     {
-        var cacheEntry = !string.IsNullOrEmpty(trackId)
-            ? AudioSourceFactory.FindAnyCachedTrack(trackId)?.Entry
-            : null;
+        bool isFromCache = descriptor.Origin == StreamSource.DiskCacheFull
+            || (source is Sources.LocalFileSource);
 
-        string container = source is Sources.LocalFileSource && cacheEntry != null
-            ? cacheEntry.Format.ToString()
-            : source.Codec switch
-            {
-                AudioCodec.Opus => "WebM",
-                AudioCodec.Aac => "Mp4",
-                _ => "Unknown"
-            };
-
-        int bitrate = bitrateHint > 0 ? bitrateHint
-            : cacheEntry is { Bitrate: > 0 } ? cacheEntry.Bitrate
-            : source is Sources.CachingStreamSource { Bitrate: > 0 } cs ? cs.Bitrate
-            : source.Codec == AudioCodec.Opus ? 128 : 96;
-
-        return new AudioStreamInfo
-        {
-            TrackId = trackId ?? "",
-            Container = container,
-            Codec = source.Codec.ToString(),
-            Bitrate = bitrate,
-            SampleRate = source.SampleRate > 0 ? source.SampleRate : DefaultSampleRate,
-            Channels = source.Channels > 0 ? source.Channels : DefaultChannels,
-            DurationMs = source.DurationMs,
-            IsFromCache = cacheEntry?.IsComplete ?? false
-        };
+        return AudioStreamInfo.FromDescriptor(
+            descriptor,
+            sampleRate: decoder.SampleRate > 0 ? decoder.SampleRate : DefaultSampleRate,
+            channels: decoder.Channels > 0 ? decoder.Channels : DefaultChannels,
+            durationMs: source.DurationMs,
+            isFromCache: isFromCache);
     }
 
     #endregion
 
     #region Device Loss
 
-    /// <summary>
-    /// Вызывается когда аудиоустройство пропало.
-    /// Pipeline остаётся живым, decoder останавливается.
-    /// Task обработчика сохраняется в <see cref="_deviceEventTask"/>
-    /// для детерминированного ожидания в <see cref="DisposeAsync"/>:
-    /// исключает гонку между обработчиком (вызывает <c>StartDecoding</c>)
-    /// и освобождением ресурсов pipeline.
-    /// </summary>
     internal void NotifyDeviceLost()
     {
         if (_disposed || _deviceLost) return;
@@ -315,13 +285,8 @@ public sealed class AudioPipeline : IAsyncDisposable
             Volatile.Write(ref _deviceEventTask, Task.Run(handler));
     }
 
-
-    /// <summary>Регистрирует обработчик потери устройства.</summary>
     internal void SetDeviceLostHandler(Action handler) => _onDeviceLostExternal = handler;
 
-    /// <summary>
-    /// Восстанавливает pipeline после потери аудиоустройства.
-    /// </summary>
     internal async Task RecoverFromDeviceLossAsync(
         Func<CancellationToken, Task<string?>>? urlRefresher,
         AudioPlayerOptions options,
@@ -349,11 +314,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         Log.Info("[AudioPipeline] Recovered from device loss");
     }
 
-    /// <summary>
-    /// Вызывается когда аудиоустройство снова доступно.
-    /// Task обработчика сохраняется в <see cref="_deviceEventTask"/>
-    /// для детерминированного ожидания в <see cref="DisposeAsync"/>.
-    /// </summary>
     internal void NotifyDeviceAvailable()
     {
         if (_disposed || !_deviceLost) return;
@@ -362,19 +322,13 @@ public sealed class AudioPipeline : IAsyncDisposable
             Volatile.Write(ref _deviceEventTask, Task.Run(handler));
     }
 
-    /// <summary>Регистрирует обработчик появления устройства.</summary>
     internal void SetDeviceAvailableHandler(Action handler) => _onDeviceAvailableExternal = handler;
-
-    /// <summary>Регистрирует обработчик starvation для actor-based rebuffer.</summary>
     internal void SetStarvationHandler(Action handler) => _onStarvationExternal = handler;
 
     #endregion
 
     #region Decoder Loop
 
-    /// <summary>
-    /// Запускает decoder loop на ThreadPool.
-    /// </summary>
     public void StartDecoding(
      Func<CancellationToken, Task<string?>>? urlRefresher,
      AudioPlayerOptions options,
@@ -407,7 +361,6 @@ public sealed class AudioPipeline : IAsyncDisposable
 #endif
     }
 
-    /// <summary>Останавливает decoder loop.</summary>
     public async Task StopDecodingAsync(TimeSpan timeout)
     {
         var cts = _decoderCts;
@@ -416,12 +369,8 @@ public sealed class AudioPipeline : IAsyncDisposable
 
         try { cts.Cancel(); } catch (ObjectDisposedException) { }
 
-        // Мгновенно прерываем блокирующие синхронные чтения сетевого потока перед ожиданием завершения таски
-        // Без этого Read() зависнет на `.GetResult()`, дожидаясь скачивания чанка или 600мс тайм-аута.
         if (_source is Sources.CachingStreamSource cachingSource)
-        {
             cachingSource.CancelActiveReads();
-        }
 
         try { await task.WaitAsync(timeout).ConfigureAwait(false); }
         catch (TimeoutException) { Log.Warn("[AudioPipeline] Decoder stop timeout"); }
@@ -433,15 +382,12 @@ public sealed class AudioPipeline : IAsyncDisposable
         try { cts.Dispose(); } catch (ObjectDisposedException) { }
     }
 
-    /// <summary>
-    /// Основной цикл декодирования.
-    /// </summary>
     private async Task DecoderLoopAsync(
-        Func<CancellationToken, Task<string?>>? urlRefresher,
-        AudioPlayerOptions options,
-        Action? onTrackEnded,
-        Action<Exception>? onError,
-        CancellationToken ct)
+       Func<CancellationToken, Task<string?>>? urlRefresher,
+       AudioPlayerOptions options,
+       Action? onTrackEnded,
+       Action<Exception>? onError,
+       CancellationToken ct)
     {
         int retryCount = 0;
 
@@ -449,7 +395,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         {
             while (!ct.IsCancellationRequested)
             {
-                // Backpressure: если буфер полон, ждём вместо busy-spin
                 if (_pcmBuffer.Available < _decoder.MaxFrameSize * _decoder.Channels)
                 {
                     await Task.Delay(BufferFullDelayMs, ct).ConfigureAwait(false);
@@ -462,26 +407,14 @@ public sealed class AudioPipeline : IAsyncDisposable
                     frame = await _source.ReadFrameAsync(ct).ConfigureAwait(false);
                     retryCount = 0;
                 }
-                //Только НАМЕРЕННАЯ отмена (decoder CTS) завершает loop
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    break;
-                }
-                // Транзиентные OCE (HTTP timeout, epoch reset) → retry
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                 catch (OperationCanceledException) when (retryCount++ < options.MaxRetryAttempts)
                 {
                     Log.Warn($"[AudioPipeline] Read transient cancel (retry {retryCount}/{options.MaxRetryAttempts})");
-                    try
-                    {
-                        await Task.Delay(options.RetryDelay, ct).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
+                    try { await Task.Delay(options.RetryDelay, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
                     continue;
                 }
-                // Превышено число retry для транзиентных OCE — фатальная ошибка
                 catch (OperationCanceledException ex)
                 {
                     Log.Error($"[AudioPipeline] Read failed after {retryCount} transient retries: {ex.Message}");
@@ -490,17 +423,22 @@ public sealed class AudioPipeline : IAsyncDisposable
                 }
                 catch (UrlExpiredException) when (urlRefresher != null)
                 {
+                    Log.Warn($"[AudioPipeline] UrlExpiredException: track={_streamInfo.TrackId}, attempting refresh");
                     var newUrl = await urlRefresher(ct).ConfigureAwait(false);
-                    if (!string.IsNullOrEmpty(newUrl)) continue;
+                    Log.Warn($"[AudioPipeline] UrlExpiredException refresh result: track={_streamInfo.TrackId}, success={!string.IsNullOrEmpty(newUrl)}");
+                    if (!string.IsNullOrEmpty(newUrl))
+                    {
+                        if (_source is Sources.CachingStreamSource cachingSource)
+                        {
+                            cachingSource.UpdateUrl(newUrl);
+                            Log.Warn($"[AudioPipeline] Refreshed URL applied to source: track={_streamInfo.TrackId}");
+                        }
+
+                        continue;
+                    }
                     throw;
                 }
-                catch (ChunkDownloadFatalException)
-                {
-                    // Source уже исчерпал RAM/disk/network/epoch retries для конкретного диапазона.
-                    // Повторять этот же ReadFrameAsync на уровне decoder loop нельзя —
-                    // это только усилит сетевой шторм на одном и том же byte-range.
-                    throw;
-                }
+                catch (ChunkDownloadFatalException) { throw; }
                 catch (FileNotFoundException ex)
                 {
                     throw new CacheInvalidatedException(
@@ -528,17 +466,9 @@ public sealed class AudioPipeline : IAsyncDisposable
                         trackId: _streamInfo.TrackId,
                         inner: ex);
                 }
-                catch (InvalidDataException)
-                {
-                    throw;
-                }
+                catch (InvalidDataException) { throw; }
                 catch (EndOfStreamException ex)
                 {
-                    // EndOfStreamException из WebMParser означает одно из:
-                    // 1. Truncated WebM (YouTube quirk)
-                    // 2. Parser desync после cancellation-induced restart
-                    // TryResyncToNextClusterAsync внутри ReadNextBlockAsync уже попытался
-                    // восстановиться. Если мы здесь — resync не удался → пробрасываем.
                     Log.Error($"[AudioPipeline] Decoder fatal: {ex.Message}", ex);
                     throw;
                 }
@@ -566,8 +496,6 @@ public sealed class AudioPipeline : IAsyncDisposable
                             CacheInvalidationKind.ParserResync,
                             isRecoverable: true,
                             trackId: _streamInfo.TrackId);
-
-                        // throw CreatePrematureEndOfStreamException();
                     }
 
                     await DrainBufferAsync(ct).ConfigureAwait(false);
@@ -592,7 +520,14 @@ public sealed class AudioPipeline : IAsyncDisposable
                     long seekTarget = Volatile.Read(ref _seekTargetMs);
                     if (seekTarget >= 0)
                     {
-                        if (frame.Value.TimestampMs < seekTarget) continue;
+                        if (frame.Value.TimestampMs < seekTarget)
+                        {
+                            // Мы обязаны "прокрутить" сжатый фрейм через декодер,
+                            // чтобы не сломать его внутренний state (overlap-add для Opus/AAC).
+                            // Иначе при достижении seekTarget мы получим звуковые артефакты.
+                            _decoder.Decode(frame.Value.Data.Span, _decodeBuffer);
+                            continue;
+                        }
                         Volatile.Write(ref _seekTargetMs, -1L);
                     }
 
@@ -604,7 +539,6 @@ public sealed class AudioPipeline : IAsyncDisposable
                         _pcmBuffer.Write(_decodeBuffer.AsSpan(0, totalSamples));
                         Interlocked.Add(ref _decodedSamples, totalSamples);
 
-                        // РЕАКТИВНЫЙ СИГНАЛ ПРОГРЕВА:
                         int threshold = Volatile.Read(ref _warmupThreshold);
                         if (threshold > 0 && _pcmBuffer.Count >= threshold)
                         {
@@ -632,9 +566,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Ожидает опустошения ring buffer перед завершением трека.
-    /// </summary>
     private async Task DrainBufferAsync(CancellationToken ct)
     {
         while (!_pcmBuffer.IsEmpty && !ct.IsCancellationRequested)
@@ -649,10 +580,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Вооружает decoder loop на post-seek warm-up.
-    /// </summary>
-    /// <param name="targetMs">Целевая временная отметка seek, либо -1 для отключения timestamp gating.</param>
     private void ArmDecoderWarmupAfterSeek(long targetMs)
     {
         int skipFrames = GetSkipFramesAfterSeek(_source.Codec);
@@ -662,11 +589,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         Volatile.Write(ref _seekTargetMs, targetMs);
     }
 
-    /// <summary>
-    /// Возвращает количество warm-up skip-фреймов после seek для заданного кодека.
-    /// </summary>
-    /// <param name="codec">Кодек активного источника.</param>
-    /// <returns>Количество фреймов, которые должны быть декодированы и отброшены.</returns>
     private static int GetSkipFramesAfterSeek(AudioCodec codec)
     {
         return codec switch
@@ -681,22 +603,12 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Playback Control
 
-    /// <summary>Активирует fill loop backend.</summary>
     public void ActivateFillLoop()
     {
         if (_disposed) return;
         _backend.ActivateFillLoop();
     }
 
-    /// <summary>
-    /// Переводит pipeline в режим активной буферизации без воспроизведения.
-    /// </summary>
-    /// <remarks>
-    /// <para>Используется при переходе в <c>PlayerState.Buffering</c> после seek.
-    /// Source preload продолжает работать, decoder остаётся активным, backend fill loop
-    /// включён, но gate остаётся закрытым.</para>
-    /// <para>Это гарантирует накопление данных в ring buffer без немедленного старта звука.</para>
-    /// </remarks>
     public void ActivateBufferingMode()
     {
         if (_disposed) return;
@@ -704,14 +616,12 @@ public sealed class AudioPipeline : IAsyncDisposable
         _backend.ActivateFillLoop();
     }
 
-    /// <summary>Блокирующее ожидание прогрева backend.</summary>
     public bool WaitForBackendWarmup(int timeoutMs = 100)
     {
         if (_disposed) return false;
         return _backend.WaitForWarmup(timeoutMs);
     }
 
-    /// <summary>Запускает воспроизведение и открывает сетевой буфер.</summary>
     public void Start()
     {
         if (_disposed) return;
@@ -719,7 +629,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         _backend.Start();
     }
 
-    /// <summary>Приостанавливает воспроизведение и замораживает сетевой буфер.</summary>
     public void Stop()
     {
         if (_disposed) return;
@@ -727,7 +636,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         _backend.Stop();
     }
 
-    /// <summary>Очищает все буферы.</summary>
     public void Flush()
     {
         if (_disposed) return;
@@ -741,20 +649,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         Log.Debug("[AudioPipeline] Flushed");
     }
 
-    /// <summary>
-    /// Уведомляет о критическом опустошении аудиобуфера.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Критически важно:</b> этот метод НЕ вызывает <c>CancelActiveReads</c>
-    /// и НЕ дёргает <c>SetPlaybackActive</c>.</para>
-    /// <para>На медленной сети (250ms+ lag) единственный живой HTTP-запрос может идти
-    /// 5–16 секунд. <c>CancelActiveReads</c> убивает этот запрос, после чего parser
-    /// видит "truncated cache" и эскалирует до fatal error — контрпродуктивно.</para>
-    /// <para>Вместо этого уведомляем AudioPlayer через actor command.
-    /// Player переведёт плеер в Buffering (закроет gate, оставит decoder/source активными)
-    /// и запустит deferred resume, который автоматически откроет gate
-    /// когда ring buffer наполнится.</para>
-    /// </remarks>
     internal void NotifyStarvation()
     {
         if (_disposed) return;
@@ -767,9 +661,6 @@ public sealed class AudioPipeline : IAsyncDisposable
             Volatile.Write(ref _deviceEventTask, Task.Run(handler));
     }
 
-    /// <summary>
-    /// Подготавливает pipeline к seek.
-    /// </summary>
     public void PrepareForSeek(long targetMs = -1)
     {
         ArmDecoderWarmupAfterSeek(targetMs);
@@ -780,28 +671,16 @@ public sealed class AudioPipeline : IAsyncDisposable
         float normGain = _analyzer.IsEnabled ? _analyzer.GetLockedGain() : 1.0f;
         _gainCrossfader.Reset(normGain);
 
-        // Безопасный сброс триггера прогрева 
         Volatile.Write(ref _warmupThreshold, 0);
         var tcs = Interlocked.Exchange(ref _warmupTcs, null);
         tcs?.TrySetResult();
     }
 
-    /// <summary>
-    /// Выполняет pre-scan нормализации.
-    /// <para>
-    /// <b>Пропускается</b> для сетевых источников (<see cref="Sources.CachingStreamSource"/>),
-    /// которые ещё не полностью буферизированы: pre-scan через HTTP скачает весь файл
-    /// (20+ range requests), блокируя playback на 5–10 секунд.
-    /// В этом случае используется real-time анализ (~3 сек) или deferred gain lock.
-    /// </para>
-    /// </summary>
     public async Task PreScanNormalizationAsync(CancellationToken ct)
     {
         if (!_analyzer.IsEnabled || !_source.CanSeek) return;
         if (_analyzer.IsGainLocked) return;
 
-        // Сетевой source, не полностью буферизирован → pre-scan скачает весь файл.
-        // Real-time анализ (3 сек) справится без блокировки playback.
         if (_source is Sources.CachingStreamSource { IsFullyBuffered: false })
         {
             Log.Debug("[AudioPipeline] Pre-scan skipped: CachingStreamSource not fully buffered, " +
@@ -822,21 +701,17 @@ public sealed class AudioPipeline : IAsyncDisposable
         catch (Exception ex) { Log.Warn($"[AudioPipeline] Pre-scan failed: {ex.Message}"); }
     }
 
-    /// <summary>Устанавливает абсолютную позицию decoded samples.</summary>
     public void SetDecodedSamplesPosition(long samples) =>
         Interlocked.Exchange(ref _decodedSamples, samples);
 
-    /// <summary>Возвращает locked gain нормализации.</summary>
     public float GetLockedNormalizationGain() => _analyzer.GetLockedGain();
 
-    /// <summary>Устанавливает начальный gain от предыдущего трека.</summary>
     public void SetInitialNormalizationGain(float gain)
     {
         if (_disposed) return;
         _analyzer.SetInitialGain(gain);
     }
 
-    /// <summary>Снапирует crossfader на текущий normGain до первого AudioCallback.</summary>
     public void SnapCrossfaderToGain()
     {
         if (_disposed) return;
@@ -844,17 +719,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         _gainCrossfader.Reset(normGain);
     }
 
-    /// <summary>
-    /// Определяет, является ли достигнутый source EOF преждевременным.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>v2 (resync-aware):</b> Если парсер уже выполнял resync
-    /// (перепрыгнул через повреждённые кластеры), повторный EOF означает
-    /// не "premature end" — а реальное усечение файла. В этом случае
-    /// вместо <see cref="InvalidDataException"/> бросается
-    /// <see cref="CacheInvalidatedException"/> для перехода на
-    /// свежий HTTP-стриминг.</para>
-    /// </remarks>
     private bool IsPrematureEndOfStream()
     {
         long durationMs = _streamInfo.DurationMs;
@@ -870,11 +734,6 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Audio Callback
 
-    /// <summary>
-    /// Callback из fill thread backend'а.
-    /// Читает PCM, анализирует LUFS, применяет normalization gain через crossfader и limiter.
-    /// Volume gain НЕ применяется здесь — он в <see cref="GainWaveProvider"/>.
-    /// </summary>
     private int AudioCallback(Span<float> buffer)
     {
         if (_disposed) { buffer.Clear(); return 0; }
@@ -892,11 +751,6 @@ public sealed class AudioPipeline : IAsyncDisposable
 
             _gainCrossfader.SetTarget(normGain, _decoder.SampleRate, _decoder.Channels);
 
-            // ZERO-ALLOC HOT PATH / LIMITER BYPASS:
-            // Лимитер математически избыточен, если целевое усиление normGain <= 1.0f (ослабление/аттенуация)
-            // и огибающая лимитера полностью восстановилась (EnvelopeGain >= 0.999f).
-            // В этом случае мы полностью обходим сложный per-sample envelope follower лимитера
-            // и применяем громкость через высокоскоростной аппаратный векторный цикл (SIMD).
             bool canBypassLimiter = normGain <= 1.0f && _truePeakLimiter!.EnvelopeGain >= 0.999f;
 
             if (canBypassLimiter)
@@ -909,7 +763,6 @@ public sealed class AudioPipeline : IAsyncDisposable
                 {
                     ApplyConstantGain(samples, normGain);
                 }
-                // Если normGain == 1.0f и кроссфейдер неактивен — чистый No-Op bypass (0% нагрузки на CPU)
             }
             else
             {
@@ -920,10 +773,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         return read / _decoder.Channels;
     }
 
-    /// <summary>
-    /// Применяет константный множитель громкости к аудиоданным с использованием аппаратного SIMD-ускорения.
-    /// Автоматически векторизуется под AVX2/SSE/Neon в зависимости от архитектуры CPU.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ApplyConstantGain(Span<float> samples, float gain)
     {
@@ -940,44 +789,23 @@ public sealed class AudioPipeline : IAsyncDisposable
             }
         }
 
-        // Хвостовой цикл для остатка массива
         for (; i < samples.Length; i++)
-        {
             samples[i] *= gain;
-        }
     }
 
-    /// <summary>
-    /// Применяет плавное изменение громкости (crossfade) напрямую к буферу без накладных расходов лимитера.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ApplyGainWithCrossfade(Span<float> samples, ref GainCrossfader crossfader)
     {
         ref float samplesRef = ref MemoryMarshal.GetReference(samples);
         int len = samples.Length;
         for (int i = 0; i < len; i++)
-        {
             Unsafe.Add(ref samplesRef, i) *= crossfader.Advance();
-        }
     }
 
     #endregion
 
     #region Buffer Info
 
-    /// <summary>
-    /// Ожидает минимального заполнения ring buffer реактивно (Lock-Free).
-    /// </summary>
-    /// <param name="minSamples">Минимальный порог заполнения (количество float-сэмплов).</param>
-    /// <param name="maxWaitMs">Максимальное время ожидания (мс).</param>
-    /// <param name="ct">
-    /// Внешний токен отмены. При отмене пробрасывает <see cref="OperationCanceledException"/>,
-    /// а не возвращает <c>false</c>.
-    /// </param>
-    /// <returns>
-    /// <c>true</c> — порог достигнут;
-    /// <c>false</c> — внутренний таймаут истёк, данных пока недостаточно.
-    /// </returns>
     public async Task<bool> WaitForBufferAsync(int minSamples, int maxWaitMs, CancellationToken ct)
     {
         if (_disposed || _pcmBuffer.Count >= minSamples) return true;
@@ -986,7 +814,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         Interlocked.Exchange(ref _warmupTcs, tcs);
         Volatile.Write(ref _warmupThreshold, minSamples);
 
-        // Повторная проверка после установки threshold, чтобы исключить race condition
         if (_pcmBuffer.Count >= minSamples)
         {
             Volatile.Write(ref _warmupThreshold, 0);
@@ -998,20 +825,16 @@ public sealed class AudioPipeline : IAsyncDisposable
 
         try
         {
-            // Exception-free ожидание по таймауту.
-            // Передаем timeoutCts.Token в Delay, чтобы отменить таймер, если данные придут раньше.
             var delayTask = Task.Delay(maxWaitMs, timeoutCts.Token);
             var completedTask = await Task.WhenAny(tcs.Task, delayTask).ConfigureAwait(false);
 
             if (completedTask == tcs.Task)
             {
-                // Данные пришли быстрее таймаута: отменяем Task.Delay для мгновенного освобождения таймера
                 timeoutCts.Cancel();
                 return true;
             }
             else
             {
-                // Сработал Task.Delay. Либо это таймаут, либо отмена внешнего ct.
                 ct.ThrowIfCancellationRequested();
                 return false;
             }
@@ -1027,7 +850,6 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Dispose
 
-    /// <summary>Освобождает все ресурсы pipeline.</summary>
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
@@ -1036,7 +858,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         try { _lifetimeCts.Cancel(); } catch (ObjectDisposedException) { }
         try { _decoderCts?.Cancel(); } catch (ObjectDisposedException) { }
 
-        // Ожидаем device-event handler: он может держать ссылку на pipeline
         var deviceTask = Volatile.Read(ref _deviceEventTask);
         if (deviceTask != null && !deviceTask.IsCompleted)
         {
@@ -1070,7 +891,7 @@ public sealed class AudioPipeline : IAsyncDisposable
 #if DEBUG
         Log.Debug($"[AudioPipeline] Disposed (decoder restarts: {_decoderRestartCount})");
 #else
-    Log.Info("[AudioPipeline] Disposed");
+        Log.Info("[AudioPipeline] Disposed");
 #endif
     }
 

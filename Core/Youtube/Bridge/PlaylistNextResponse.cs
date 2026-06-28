@@ -60,11 +60,10 @@ internal partial class PlaylistNextResponse(JsonElement content) : IPlaylistData
             .Select(static j => new PlaylistVideoData(j))
             .ToArray() ?? [];
 
-    public string? VisitorData =>
-        content
-            .GetPropertyOrNull("responseContext")
-            ?.GetPropertyOrNull("visitorData")
-            ?.GetStringOrNull();
+    /// <summary>
+    /// Данные о сессии пользователя.
+    /// </summary>
+    public string? VisitorData => content.GetVisitorData();
 }
 
 internal partial class PlaylistNextResponse

@@ -11,18 +11,13 @@ internal partial class DashManifest(XElement content)
     public IReadOnlyList<IStreamData> Streams =>
         [.. content
             .Descendants("Representation")
-            // Skip non-media representations (like "rawcc")
-            // https://github.com/Tyrrrz/YoutubeExplode/issues/546
             .Where(x => x.Attribute("id")?.Value.All(char.IsDigit) == true)
-            // Skip segmented streams
-            // https://github.com/Tyrrrz/YoutubeExplode/issues/159
             .Where(x =>
                 x.Descendants("Initialization")
                     .FirstOrDefault()
                     ?.Attribute("sourceURL")
                     ?.Value.Contains("sq/") != true
             )
-            // Skip streams without codecs
             .Where(x => !string.IsNullOrWhiteSpace(x.Attribute("codecs")?.Value))
             .Select(x => new StreamData(x))];
 }
@@ -35,21 +30,19 @@ internal partial class DashManifest
 
         public string? Url => (string?)content.Element("BaseURL");
 
-        // DASH streams don't have signatures
         public string? Signature => null;
 
-        // DASH streams don't have signatures
         public string? SignatureParameter => null;
 
         public long? ContentLength =>
-            (long?)content.Attribute("contentLength")
-            ?? Url?.Pipe(s => MyRegex().Match(s).Groups[1].Value)
-                .NullIfWhiteSpace()
-                ?.Pipe(s =>
-                    long.TryParse(s, CultureInfo.InvariantCulture, out var result)
-                        ? result
-                        : (long?)null
-                );
+                    (long?)content.Attribute("contentLength")
+                    ?? Url?.Pipe(static s => UrlEx.TryGetQueryParameterValue(s, "clen"))
+                        ?.NullIfWhiteSpace()
+                        ?.Pipe(static s =>
+                            long.TryParse(s, CultureInfo.InvariantCulture, out var result)
+                                ? result
+                                : (long?)null
+                        );
 
         public long? Bitrate => (long?)content.Attribute("bandwidth");
 
@@ -70,8 +63,6 @@ internal partial class DashManifest
 
         public bool? IsAudioLanguageDefault => null;
 
-        /// <inheritdoc cref="IStreamData.LoudnessDb"/>
-        /// <remarks>DASH manifest does not carry loudness metadata.</remarks>
         public float LoudnessDb => float.NaN;
 
         public string? VideoCodec => IsAudioOnly ? null : (string?)content.Attribute("codecs");
@@ -84,8 +75,6 @@ internal partial class DashManifest
 
         public int? VideoFramerate => (int?)content.Attribute("frameRate");
 
-        [GeneratedRegex(@"[/\?]clen[/=](\d+)")]
-        private static partial Regex MyRegex();
         [GeneratedRegex(@"mime[/=]\w*%2F([\w\d]*)")]
         private static partial Regex MyRegex1();
     }

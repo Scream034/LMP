@@ -30,6 +30,11 @@ namespace LMP;
 /// </summary>
 public sealed class AppEntry
 {
+#if DEBUG
+    private static bool _disableAvaloniaLogging;
+    private static Avalonia.Logging.LogEventLevel _avaloniaLogLevel = Avalonia.Logging.LogEventLevel.Debug;
+#endif
+
     /// <summary>
     /// Глобальный провайдер служб внедрения зависимостей.
     /// </summary>
@@ -40,11 +45,45 @@ public sealed class AppEntry
     /// </summary>
     public static bool WasMigratedFromLegacy { get; private set; }
 
+    /// <summary>
+    /// Главный метод запуска приложения.
+    /// </summary>
+    /// <param name="args">Аргументы командной строки.</param>
     [STAThread]
     public static void Main(string[] args)
     {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.InputEncoding = System.Text.Encoding.UTF8;
+
+#if DEBUG
+        // Низкоаллокационный, быстрый парсинг аргументов командной строки без LINQ
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (string.IsNullOrEmpty(arg)) continue;
+
+            if (string.Equals(arg, "--no-avalonia-logs", StringComparison.OrdinalIgnoreCase))
+            {
+                _disableAvaloniaLogging = true;
+            }
+            else if (arg.StartsWith("--avalonia-log-level=", StringComparison.OrdinalIgnoreCase))
+            {
+                var levelStr = arg.AsSpan(21);
+                if (levelStr.Equals("Verbose".AsSpan(), StringComparison.OrdinalIgnoreCase))
+                    _avaloniaLogLevel = Avalonia.Logging.LogEventLevel.Verbose;
+                else if (levelStr.Equals("Debug".AsSpan(), StringComparison.OrdinalIgnoreCase))
+                    _avaloniaLogLevel = Avalonia.Logging.LogEventLevel.Debug;
+                else if (levelStr.Equals("Information".AsSpan(), StringComparison.OrdinalIgnoreCase))
+                    _avaloniaLogLevel = Avalonia.Logging.LogEventLevel.Information;
+                else if (levelStr.Equals("Warning".AsSpan(), StringComparison.OrdinalIgnoreCase))
+                    _avaloniaLogLevel = Avalonia.Logging.LogEventLevel.Warning;
+                else if (levelStr.Equals("Error".AsSpan(), StringComparison.OrdinalIgnoreCase))
+                    _avaloniaLogLevel = Avalonia.Logging.LogEventLevel.Error;
+                else if (levelStr.Equals("Fatal".AsSpan(), StringComparison.OrdinalIgnoreCase))
+                    _avaloniaLogLevel = Avalonia.Logging.LogEventLevel.Fatal;
+            }
+        }
+#endif
 
         SetupGlobalExceptionHandlers();
 
@@ -78,6 +117,59 @@ public sealed class AppEntry
         {
             Log.Shutdown();
         }
+    }
+
+    /// <summary>
+    /// Настраивает конфигурацию сборщика приложения Avalonia.
+    /// Выполняет условную настройку графического стека в зависимости от версии ОС.
+    /// </summary>
+    public static AppBuilder BuildAvaloniaApp()
+    {
+        BootstrapSettings.Initialize();
+        var gpuCacheBytes = BootstrapSettings.Current.GpuTextureCacheMb * 1024L * 1024L;
+
+        var builder = AppBuilder.Configure<App>()
+            .UsePlatformDetect()
+            .WithInterFont()
+            .With(new SkiaOptions
+            {
+                MaxGpuResourceSizeBytes = gpuCacheBytes
+            });
+
+        // Windows 11 начинается со сборки 22000.
+        // Если это Windows, но версия сборки ниже 22000 — значит это Windows 10 или старше.
+        if (OperatingSystem.IsWindows() && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
+        {
+            Log.Info("[AppEntry] Windows 10 detected. Using RedirectionSurface to prevent dcomp.dll compositor crashes.");
+
+            builder.With(new Win32PlatformOptions
+            {
+                // Исключаем DirectComposition на Windows 10.
+                // RedirectionSurface рендерит окно через стандартный GDI-backbuffer, что обходит баги нативных аниматоров ОС.
+                CompositionMode =
+                [
+                    Win32CompositionMode.RedirectionSurface
+                ]
+            });
+        }
+
+#if DEBUG
+        // Настройка диагностического логирования Avalonia в зависимости от переданных аргументов командной строки
+        builder.AfterSetup(_ =>
+        {
+            if (!_disableAvaloniaLogging)
+            {
+                Avalonia.Logging.Logger.Sink = new AvaloniaCustomLogSink(_avaloniaLogLevel);
+            }
+            else
+            {
+                Log.Info("[AppEntry] Avalonia diagnostic logs are completely disabled.");
+                Avalonia.Logging.Logger.Sink = null;
+            }
+        });
+#endif
+
+        return builder.UseReactiveUI(_ => { });
     }
 
     /// <summary>
@@ -311,51 +403,6 @@ public sealed class AppEntry
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// Настраивает конфигурацию сборщика приложения Avalonia.
-    /// Выполняет условную настройку графического стека в зависимости от версии ОС.
-    /// </summary>
-    public static AppBuilder BuildAvaloniaApp()
-    {
-        BootstrapSettings.Initialize();
-        var gpuCacheBytes = BootstrapSettings.Current.GpuTextureCacheMb * 1024L * 1024L;
-
-        var builder = AppBuilder.Configure<App>()
-            .UsePlatformDetect()
-            .WithInterFont()
-            .With(new SkiaOptions
-            {
-                MaxGpuResourceSizeBytes = gpuCacheBytes
-            });
-
-        // Windows 11 начинается со сборки 22000.
-        // Если это Windows, но версия сборки ниже 22000 — значит это Windows 10 или старше.
-        if (OperatingSystem.IsWindows() && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
-        {
-            Log.Info("[AppEntry] Windows 10 detected. Using RedirectionSurface to prevent dcomp.dll compositor crashes.");
-
-            builder.With(new Win32PlatformOptions
-            {
-                // Исключаем DirectComposition на Windows 10.
-                // RedirectionSurface рендерит окно через стандартный GDI-backbuffer, что обходит баги нативных аниматоров ОС.
-                CompositionMode =
-                [
-                    Win32CompositionMode.RedirectionSurface
-                ]
-            });
-        }
-
-#if DEBUG
-        // Инициализируем наш Sink после создания приложения
-        builder.AfterSetup(_ =>
-        {
-            Avalonia.Logging.Logger.Sink = new AvaloniaCustomLogSink(Avalonia.Logging.LogEventLevel.Debug);
-        });
-#endif
-
-        return builder.UseReactiveUI(_ => { });
     }
 
     private static void ConfigureServices(IServiceCollection services)

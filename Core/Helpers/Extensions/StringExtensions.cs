@@ -1,9 +1,17 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace LMP.Core.Helpers.Extensions;
 
 internal static class StringExtensions
 {
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static string Truncate(this string? s, int len = 20)
+    {
+        if (s is null) return "null";
+        return s.Length <= len ? s : string.Concat(s.AsSpan(0, len), "...");
+    }
+
     public static string? NullIfWhiteSpace(this string str) =>
         !string.IsNullOrWhiteSpace(str) ? str : null;
 
@@ -31,7 +39,6 @@ internal static class StringExtensions
 
     public static string StripNonDigit(this string str)
     {
-        // Zero-allocation check
         var allDigits = true;
         foreach (var c in str)
         {
@@ -45,24 +52,9 @@ internal static class StringExtensions
         if (allDigits)
             return str;
 
-        return string.Create(str.Length, str, static (span, state) =>
-        {
-            var pos = 0;
-            foreach (var c in state)
-            {
-                if (char.IsDigit(c))
-                    span[pos++] = c;
-            }
-            // We can't resize the span, but string.Create returns a string of strict length.
-            // Since strict length calculation requires two passes or a resize, 
-            // and string.Create expects exact length, fallback to StringBuilder 
-            // is safer unless we do two passes. 
-            // Given the context, StringBuilder is acceptable, but let's optimize capacity.
-        });
+        return StripNonDigitOptimized(str);
     }
 
-    // Optimized StripNonDigit replacing the broken string.Create logic above
-    // to actually work correctly without double-pass complexity.
     public static string StripNonDigitOptimized(this string str)
     {
         var builder = new StringBuilder(str.Length);
@@ -95,6 +87,5 @@ internal static class StringExtensions
         });
     }
 
-    /// <summary>Повторяет символ N раз.</summary>
     public static string Repeat(this char c, int count) => new(c, count);
 }

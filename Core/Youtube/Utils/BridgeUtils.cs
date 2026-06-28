@@ -22,18 +22,14 @@ internal static class BridgeUtils
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string? ExtractContinuationToken(JsonElement renderer)
     {
-        // 1. Проверяем наличие endpoint
         if (renderer.TryGetProperty("continuationEndpoint", out var endpoint))
         {
-            // Вариант А: Прямой путь (continuationCommand -> token)
             if (endpoint.TryGetProperty("continuationCommand", out var directCommand) &&
                 directCommand.TryGetProperty("token", out var directToken))
             {
                 return directToken.GetStringOrNull();
             }
 
-            // Вариант Б: Вложенный путь (commandExecutorCommand -> commands -> continuationCommand)
-            // Это актуально для системных плейлистов типа "Понравившиеся" (Liked Videos).
             if (endpoint.TryGetProperty("commandExecutorCommand", out var executor) &&
                 executor.TryGetProperty("commands", out var commands) &&
                 commands.ValueKind == JsonValueKind.Array)
@@ -49,7 +45,6 @@ internal static class BridgeUtils
             }
         }
 
-        // 2. Проверяем старый формат (nextContinuationData -> continuation)
         if (renderer.TryGetProperty("nextContinuationData", out var nextData) &&
             nextData.TryGetProperty("continuation", out var oldToken))
         {
@@ -69,9 +64,8 @@ internal static class BridgeUtils
         if (contents.ValueKind != JsonValueKind.Array || contents.GetArrayLength() == 0)
             return null;
 
-        // Берем последний элемент, так как токен пагинации всегда находится в конце списка
         var lastItem = contents.EnumerateArray().LastOrDefault();
-        
+
         if (lastItem.ValueKind == JsonValueKind.Undefined)
             return null;
 
@@ -82,4 +76,14 @@ internal static class BridgeUtils
 
         return null;
     }
+
+    /// <summary>
+    /// Выполняет рекурсивный поиск токена продолжения по всему документу в случае нестандартного лейаута.
+    /// </summary>
+    /// <param name="root">Корневой элемент JSON.</param>
+    /// <returns>Строка токена или null.</returns>
+    public static string? FindContinuationTokenFallback(JsonElement root) =>
+        root.FindFirstDescendantProperty("continuationCommand"u8)
+            ?.GetPropertyOrNull("token"u8)
+            ?.GetStringOrNull();
 }

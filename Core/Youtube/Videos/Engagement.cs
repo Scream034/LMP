@@ -5,7 +5,7 @@ namespace LMP.Core.Youtube.Videos;
 /// <summary>
 /// Engagement statistics.
 /// </summary>
-public class Engagement(long viewCount, long likeCount, long dislikeCount)
+public sealed class Engagement(long viewCount, long likeCount, long dislikeCount)
 {
     /// <summary>
     /// View count.

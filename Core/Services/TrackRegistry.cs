@@ -114,20 +114,7 @@ public sealed class TrackRegistry
         if (metadataEntry == null)
             return;
 
-        if (!track.HasCachedNormalizationGain
-            && metadataEntry.CachedNormalizationGain is float cachedGain
-            && float.IsFinite(cachedGain)
-            && cachedGain > 0f)
-        {
-            track.SetGain(cachedGain);
-        }
-
-        if (!track.HasYoutubeLoudnessDb
-            && metadataEntry.YoutubeIntegratedLoudnessDb is float loudnessDb
-            && float.IsFinite(loudnessDb))
-        {
-            track.TrySetGainFromLoudness(loudnessDb);
-        }
+        TrackNormalizationHydrator.HydrateNormalization(track, metadataEntry);
     }
 
     /// <summary>

@@ -7,7 +7,7 @@ namespace LMP.Core.Youtube.Search;
 /// <summary>
 /// Metadata associated with a YouTube channel returned by a search query.
 /// </summary>
-public class ChannelSearchResult(ChannelId id, string title, IReadOnlyList<Thumbnail> thumbnails)
+public sealed class ChannelSearchResult(ChannelId id, string title, IReadOnlyList<Thumbnail> thumbnails)
     : ISearchResult,
         IChannel
 {

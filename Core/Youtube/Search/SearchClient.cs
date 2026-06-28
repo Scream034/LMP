@@ -5,10 +5,13 @@ using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Youtube.Search;
 
-public class SearchClient(HttpClient http)
+public sealed class SearchClient(HttpClient http)
 {
     private readonly SearchController _controller = new(http);
 
+    /// <summary>
+    /// Возвращает батчи результатов поиска.
+    /// </summary>
     public async IAsyncEnumerable<Batch<ISearchResult>> GetResultBatchesAsync(
         string searchQuery,
         SearchFilter searchFilter,
@@ -17,10 +20,9 @@ public class SearchClient(HttpClient http)
         var encounteredIds = new HashSet<string>(64, StringComparer.Ordinal);
         string? continuationToken = null;
 
-        bool isMusicContext = searchFilter is SearchFilter.Music
-            or SearchFilter.MusicSong
-            or SearchFilter.MusicVideo
-            or SearchFilter.MusicAlbum;
+        // Проверка музыкального контекста переведена на существующий метод расширения,
+        // исключая дублирование логики маппинга энума.
+        bool isMusicContext = searchFilter.IsMusicContext();
 
         bool processVideos = ShouldProcessVideos(searchFilter);
         bool processPlaylists = ShouldProcessPlaylists(searchFilter);
