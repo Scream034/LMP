@@ -1102,41 +1102,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         {
             var entry = fullCache.Value.Entry;
             TrackNormalizationHydrator.HydrateNormalization(track, entry);
-
-            if (!track.HasCachedNormalizationGain && !track.HasYoutubeLoudnessDb)
-            {
-                var profileStr = _library.Settings.InternetProfile.ToString();
-                bool isDataSaving = profileStr.Contains("Cellular", StringComparison.OrdinalIgnoreCase) ||
-                                    profileStr.Contains("Mobile", StringComparison.OrdinalIgnoreCase) ||
-                                    profileStr.Contains("Low", StringComparison.OrdinalIgnoreCase);
-
-                if (!isDataSaving)
-                {
-                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(1.2));
-
-                    try
-                    {
-                        Log.Debug($"[AudioEngine] Local cache for {track.Id} has no gain metadata. Performing fast online loudness lookup...");
-                        float loudness = await _youtube.GetLoudnessDbOnlyAsync(rawId, timeoutCts.Token).ConfigureAwait(false);
-
-                        if (!float.IsNaN(loudness))
-                        {
-                            track.TrySetGainFromLoudness(loudness);
-                            AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(track.Id, loudness);
-                            Log.Info($"[AudioEngine] Resolved online loudness for cached track {track.Id}: {loudness:F2}dB");
-                        }
-                    }
-                    catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
-                    {
-                        Log.Warn($"[AudioEngine] Loudness lookup for cached track {track.Id} timed out.");
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warn($"[AudioEngine] Loudness lookup failed for {track.Id}: {ex.Message}.");
-                    }
-                }
-            }
+            TryEnrichLoudnessFromLocalSources(track);
 
             var descriptor = new ResolvedStreamDescriptor
             {
@@ -1158,6 +1124,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         if (bootstrapCache != null)
         {
             TrackNormalizationHydrator.HydrateNormalization(track, bootstrapCache);
+            TryEnrichLoudnessFromLocalSources(track);
 
             if (TryGetCompatibleContinuationUrl(track, bootstrapCache, out var eagerUrl))
             {
@@ -1263,6 +1230,33 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
         Log.Info($"[AudioEngine] ResolveStreamAsync YOUTUBE API -> {freshDescriptor}");
         return freshDescriptor;
+    }
+
+    /// <summary>
+    /// Пытается обогатить трек YouTube loudness из локальных источников (без сети).
+    /// Проверяет SessionCacheStore (RAM) на наличие манифеста с loudnessDb.
+    /// </summary>
+    private static void TryEnrichLoudnessFromLocalSources(TrackInfo track)
+    {
+        if (track.HasYoutubeLoudnessDb)
+            return;
+
+        var manifest = SessionCacheStore.GetManifest(track.Id);
+        if (manifest is not { Variants.Count: > 0 })
+            return;
+
+        for (int i = 0; i < manifest.Variants.Count; i++)
+        {
+            if (float.IsFinite(manifest.Variants[i].LoudnessDb))
+            {
+                track.TrySetGainFromLoudness(manifest.Variants[i].LoudnessDb);
+                AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(
+                    track.Id, manifest.Variants[i].LoudnessDb);
+                Log.Debug($"[AudioEngine] Enriched loudness from SessionCache: " +
+                          $"{track.Id} → {manifest.Variants[i].LoudnessDb:F2}dB");
+                return;
+            }
+        }
     }
 
     #endregion
