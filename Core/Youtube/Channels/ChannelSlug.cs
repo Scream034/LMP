@@ -20,29 +20,23 @@ public readonly partial struct ChannelSlug(string value)
 
 public readonly partial struct ChannelSlug
 {
-    private static bool IsValid(string channelSlug) => channelSlug.All(char.IsLetterOrDigit);
+    private static bool IsValid(string channelSlug)
+    {
+        foreach (var c in channelSlug.AsSpan())
+            if (!char.IsLetterOrDigit(c)) return false;
+        return true;
+    }
+
 
     private static string? TryNormalize(string? channelSlugOrUrl)
     {
-        if (string.IsNullOrWhiteSpace(channelSlugOrUrl))
-            return null;
+        if (string.IsNullOrWhiteSpace(channelSlugOrUrl)) return null;
 
-        // Check if already passed a slug
-        // Tyrrrz
-        if (IsValid(channelSlugOrUrl))
-            return channelSlugOrUrl;
+        if (IsValid(channelSlugOrUrl)) return channelSlugOrUrl;
 
-        // Try to extract the slug from the URL
-        // https://www.youtube.com/c/Tyrrrz
-        var slug = MyRegex().Match(channelSlugOrUrl)
-            .Groups[1]
-            .Value.Pipe(WebUtility.UrlDecode);
-
-        if (!string.IsNullOrWhiteSpace(slug) && IsValid(slug))
-            return slug;
-
-        // Invalid input
-        return null;
+        var raw = MyRegex().Match(channelSlugOrUrl).Groups[1].Value;
+        var slug = WebUtility.UrlDecode(raw);
+        return !string.IsNullOrWhiteSpace(slug) && IsValid(slug) ? slug : null;
     }
 
     /// <summary>
@@ -50,7 +44,7 @@ public readonly partial struct ChannelSlug
     /// Returns null in case of failure.
     /// </summary>
     public static ChannelSlug? TryParse(string? channelSlugOrUrl) =>
-        TryNormalize(channelSlugOrUrl)?.Pipe(static slug => new ChannelSlug(slug));
+        TryNormalize(channelSlugOrUrl) is { } slug ? new ChannelSlug(slug) : default;
 
     /// <summary>
     /// Parses the specified string as a YouTube channel slug or legacy custom url.

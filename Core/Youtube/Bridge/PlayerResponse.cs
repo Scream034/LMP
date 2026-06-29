@@ -4,12 +4,29 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Helpers.Extensions;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Youtube.Bridge;
 
 internal partial class PlayerResponse(JsonElement content)
 {
-    private JsonElement? Playability => content.GetPropertyOrNull("playabilityStatus");
+    private JsonElement? _details;
+    private bool _detailsCached;
+    private JsonElement? _playability;
+    private bool _playabilityCached;
+
+    private JsonElement? Playability
+    {
+        get
+        {
+            if (!_playabilityCached)
+            {
+                _playability = content.GetPropertyOrNull("playabilityStatus");
+                _playabilityCached = true;
+            }
+            return _playability;
+        }
+    }
 
     /// <inheritdoc/>
     private string? PlayabilityStatus =>
@@ -85,7 +102,18 @@ internal partial class PlayerResponse(JsonElement content)
         string.Equals(PlayabilityStatus, "ok", StringComparison.OrdinalIgnoreCase);
 
     /// <inheritdoc/>
-    private JsonElement? Details => content.GetPropertyOrNull("videoDetails");
+    private JsonElement? Details
+    {
+        get
+        {
+            if (!_detailsCached)
+            {
+                _details = content.GetPropertyOrNull("videoDetails");
+                _detailsCached = true;
+            }
+            return _details;
+        }
+    }
 
     /// <inheritdoc/>
     public string? Title => Details?.GetPropertyOrNull("title")?.GetStringOrNull();
@@ -105,48 +133,78 @@ internal partial class PlayerResponse(JsonElement content)
             ?.GetDateTimeOffset();
 
     /// <inheritdoc/>
-    public TimeSpan? Duration =>
-        Details
-            ?.GetPropertyOrNull("lengthSeconds")
-            ?.GetStringOrNull()
-            ?.Pipe(static s =>
-                double.TryParse(s, CultureInfo.InvariantCulture, out var result)
-                    ? result
-                    : (double?)null
-            )
-            ?.Pipe(TimeSpan.FromSeconds);
+    public TimeSpan? Duration
+    {
+        get
+        {
+            var s = Details?.GetPropertyOrNull("lengthSeconds")?.GetStringOrNull();
+            if (s is null) return null;
+            return double.TryParse(s, CultureInfo.InvariantCulture, out var seconds)
+                ? TimeSpan.FromSeconds(seconds)
+                : null;
+        }
+    }
 
     /// <inheritdoc/>
-    public IReadOnlyList<ThumbnailData> Thumbnails =>
-        Details
-            ?.GetPropertyOrNull("thumbnail")
-            ?.GetPropertyOrNull("thumbnails")
-            ?.EnumerateArrayOrNull()
-            ?.Select(static j => new ThumbnailData(j))
-            .ToArray() ?? [];
+    public IReadOnlyList<ThumbnailData> Thumbnails
+    {
+        get
+        {
+            var thumbsArray = Details
+                ?.GetPropertyOrNull("thumbnail")
+                ?.GetPropertyOrNull("thumbnails");
+
+            if (thumbsArray is null || thumbsArray.Value.ValueKind != JsonValueKind.Array)
+                return [];
+
+            var array = thumbsArray.Value;
+            int len = array.GetArrayLength();
+            if (len == 0) return [];
+
+            var result = new ThumbnailData[len];
+            for (int i = 0; i < len; i++)
+                result[i] = new ThumbnailData(array[i]);
+            return result;
+        }
+    }
 
     /// <inheritdoc/>
-    public IReadOnlyList<string> Keywords =>
-        Details
-            ?.GetPropertyOrNull("keywords")
-            ?.EnumerateArrayOrNull()
-            ?.Select(static j => j.GetStringOrNull())
-            .WhereNotNull()
-            .ToArray() ?? [];
+    public IReadOnlyList<string> Keywords
+    {
+        get
+        {
+            var keywordsArray = Details?.GetPropertyOrNull("keywords");
+            if (keywordsArray is null || keywordsArray.Value.ValueKind != JsonValueKind.Array)
+                return [];
+
+            var array = keywordsArray.Value;
+            int len = array.GetArrayLength();
+            if (len == 0) return [];
+
+            var result = new List<string>(len);
+            for (int i = 0; i < len; i++)
+            {
+                var s = array[i].GetStringOrNull();
+                if (s is not null) result.Add(s);
+            }
+
+            return result.Count > 0 ? result : [];
+        }
+    }
 
     /// <inheritdoc/>
     public string? Description => Details?.GetPropertyOrNull("shortDescription")?.GetStringOrNull();
 
     /// <inheritdoc/>
-    public long? ViewCount =>
-        Details
-            ?.GetPropertyOrNull("viewCount")
-            ?.GetStringOrNull()
-            ?.Pipe(static s =>
-                long.TryParse(s, CultureInfo.InvariantCulture, out var result)
-                    ? result
-                    : (long?)null
-            );
+    public long? ViewCount
+    {
+        get
+        {
+            var s = Details?.GetPropertyOrNull("viewCount")?.GetStringOrNull();
+            if (s is null) return null;
+            return long.TryParse(s, CultureInfo.InvariantCulture, out var result) ? result : null;
+        }
+    }
 
     /// <inheritdoc/>
     public string? PreviewVideoId =>
@@ -155,26 +213,20 @@ internal partial class PlayerResponse(JsonElement content)
             ?.GetPropertyOrNull("playerLegacyDesktopYpcTrailerRenderer")
             ?.GetPropertyOrNull("trailerVideoId")
             ?.GetStringOrNull()
-        ?? Playability
+        ?? (Playability
             ?.GetPropertyOrNull("errorScreen")
             ?.GetPropertyOrNull("ypcTrailerRenderer")
             ?.GetPropertyOrNull("playerVars")
-            ?.GetStringOrNull()
-            ?.Pipe(UrlEx.GetQueryParameters)
-            .GetValueOrDefault("video_id")
-        ?? Playability
+            ?.GetStringOrNull() is { } playerVars
+                ? UrlEx.GetQueryParameters(playerVars).GetValueOrDefault("video_id")
+                : null)
+        ?? (Playability
             ?.GetPropertyOrNull("errorScreen")
             ?.GetPropertyOrNull("ypcTrailerRenderer")
             ?.GetPropertyOrNull("playerResponse")
-            ?.GetStringOrNull()
-            ?
-            // YouTube uses weird base64-like encoding here.
-            .Replace('-', '+')
-            .Replace('_', '/')
-            .Pipe(Convert.FromBase64String)
-            .Pipe(Encoding.UTF8.GetString)
-            .Pipe(static s => MyRegex().Match(s).Groups[1].Value)
-            .NullIfWhiteSpace();
+            ?.GetStringOrNull() is { } encoded
+                ? DecodePreviewVideoId(encoded)
+                : null);
 
     private JsonElement? StreamingData => content.GetPropertyOrNull("streamingData");
 
@@ -281,6 +333,17 @@ internal partial class PlayerResponse(JsonElement content)
         }
     }
 
+    /// <summary>
+    /// Декодирует YouTube-специфичную base64-строку PlayerResponse и извлекает video_id.
+    /// YouTube использует URL-safe base64 (- вместо +, _ вместо /).
+    /// </summary>
+    private static string? DecodePreviewVideoId(string encoded)
+    {
+        var bytes = Convert.FromBase64String(encoded.Replace('-', '+').Replace('_', '/'));
+        var decoded = Encoding.UTF8.GetString(bytes);
+        return MyRegex().Match(decoded).Groups[1].Value.NullIfWhiteSpace();
+    }
+
     [GeneratedRegex(@"video_id=(.{11})")]
     private static partial Regex MyRegex();
 }
@@ -296,15 +359,17 @@ internal partial class PlayerResponse
         public string? LanguageCode => content.GetPropertyOrNull("languageCode")?.GetStringOrNull();
 
         /// <inheritdoc/>
-        public string? LanguageName =>
-            content.GetPropertyOrNull("name")?.GetPropertyOrNull("simpleText")?.GetStringOrNull()
-            ?? content
-                .GetPropertyOrNull("name")
-                ?.GetPropertyOrNull("runs")
-                ?.EnumerateArrayOrNull()
-                ?.Select(j => j.GetPropertyOrNull("text")?.GetStringOrNull())
-                .WhereNotNull()
-                .Pipe(string.Concat);
+        public string? LanguageName
+        {
+            get
+            {
+                var name = content.GetPropertyOrNull("name");
+                if (name is null) return null;
+
+                return name.Value.GetPropertyOrNull("simpleText")?.GetStringOrNull()
+                    ?? YoutubeParsingHelpers.ConcatTextRuns(name.Value.GetPropertyOrNull("runs"));
+            }
+        }
 
         /// <inheritdoc/>
         public bool IsAutoGenerated =>

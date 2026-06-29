@@ -8,27 +8,26 @@ internal static class XElementExtensions
     {
         public XElement StripNamespaces()
         {
-            // Adapted from http://stackoverflow.com/a/1147012
-
             var result = new XElement(element);
 
             foreach (var descendantElement in result.DescendantsAndSelf())
             {
-                descendantElement.Name = XNamespace.None.GetName(descendantElement.Name.LocalName);
+                descendantElement.Name = XNamespace.None.GetName(
+                    descendantElement.Name.LocalName);
 
-                descendantElement.ReplaceAttributes(
-                    descendantElement
-                        .Attributes()
-                        .Where(static a => !a.IsNamespaceDeclaration)
-                        .Where(static a =>
-                            a.Name.Namespace != XNamespace.Xml
-                            && a.Name.Namespace != XNamespace.Xmlns
-                        )
-                        .Select(static a => new XAttribute(
-                            XNamespace.None.GetName(a.Name.LocalName),
-                            a.Value
-                        ))
-                );
+                var filtered = new List<XAttribute>();
+                foreach (var a in descendantElement.Attributes())
+                {
+                    if (a.IsNamespaceDeclaration) continue;
+                    if (a.Name.Namespace == XNamespace.Xml
+                        || a.Name.Namespace == XNamespace.Xmlns) continue;
+
+                    filtered.Add(new XAttribute(
+                        XNamespace.None.GetName(a.Name.LocalName),
+                        a.Value));
+                }
+
+                descendantElement.ReplaceAttributes(filtered);
             }
 
             return result;

@@ -61,7 +61,7 @@ public sealed class VideoClient
         var channelId = playerResponse.ChannelId
                         ?? throw new YoutubeExplodeException("Failed to extract video channel ID.");
 
-        var thumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(
+        var thumb = ThumbnailUtils.GetBestUrl(
             playerResponse.Thumbnails, videoId.Value);
 
         return new TrackInfo

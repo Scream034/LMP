@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using LMP.Core.Helpers.Extensions;
@@ -8,18 +9,46 @@ namespace LMP.Core.Youtube.Bridge;
 
 internal partial class DashManifest(XElement content)
 {
-    public IReadOnlyList<IStreamData> Streams =>
-        [.. content
-            .Descendants("Representation")
-            .Where(x => x.Attribute("id")?.Value.All(char.IsDigit) == true)
-            .Where(x =>
-                x.Descendants("Initialization")
-                    .FirstOrDefault()
-                    ?.Attribute("sourceURL")
-                    ?.Value.Contains("sq/") != true
-            )
-            .Where(x => !string.IsNullOrWhiteSpace(x.Attribute("codecs")?.Value))
-            .Select(x => new StreamData(x))];
+    public IReadOnlyList<IStreamData> Streams
+    {
+        get
+        {
+            var result = new List<IStreamData>();
+
+            foreach (var x in content.Descendants("Representation"))
+            {
+                var idValue = x.Attribute("id")?.Value;
+                if (string.IsNullOrEmpty(idValue) || !IsAllDigits(idValue.AsSpan()))
+                    continue;
+
+                bool hasSqInit = false;
+                foreach (var init in x.Descendants("Initialization"))
+                {
+                    if (init.Attribute("sourceURL")?.Value.Contains("sq/") == true)
+                    {
+                        hasSqInit = true;
+                        break;
+                    }
+                }
+                if (hasSqInit) continue;
+
+                if (string.IsNullOrWhiteSpace(x.Attribute("codecs")?.Value))
+                    continue;
+
+                result.Add(new StreamData(x));
+            }
+
+            return result;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsAllDigits(ReadOnlySpan<char> span)
+    {
+        for (int i = 0; i < span.Length; i++)
+            if (!char.IsAsciiDigit(span[i])) return false;
+        return true;
+    }
 }
 
 internal partial class DashManifest

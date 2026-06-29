@@ -222,10 +222,10 @@ public sealed class StreamClient
             var contentLength = streamData.ContentLength ?? 0;
             if (contentLength == 0) continue;
 
-            var container = streamData.Container?.Pipe(static s => new Container(s));
+            var container = streamData.Container is { } c ? new Container(c) : (Container?)null;
             if (container is null) continue;
 
-            var bitrate = streamData.Bitrate?.Pipe(static s => new Bitrate(s));
+            var bitrate = streamData.Bitrate is { } b ? new Bitrate(b) : (Bitrate?)null;
             if (bitrate is null) continue;
 
             Language? audioLanguage = null;

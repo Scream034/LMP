@@ -73,7 +73,7 @@ public sealed class SearchClient(HttpClient http)
             if (string.IsNullOrEmpty(videoId) || !encounteredIds.Add(videoId))
                 continue;
 
-            string thumbUrl = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(videoData.Thumbnails, videoId);
+            string thumbUrl = ThumbnailUtils.GetBestUrl(videoData.Thumbnails, videoId);
             bool isMusic = isMusicContext || videoData.IsMusicItem;
 
             batchItems.Add(new TrackInfo
@@ -106,7 +106,7 @@ public sealed class SearchClient(HttpClient http)
             if (string.IsNullOrEmpty(playlistId) || !encounteredIds.Add(playlistId))
                 continue;
 
-            string thumbUrl = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(playlistData.Thumbnails);
+            string thumbUrl = ThumbnailUtils.GetBestUrl(playlistData.Thumbnails);
 
             batchItems.Add(new Playlist
             {

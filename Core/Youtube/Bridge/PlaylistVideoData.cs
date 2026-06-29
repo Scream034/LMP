@@ -7,6 +7,9 @@ namespace LMP.Core.Youtube.Bridge;
 
 internal class PlaylistVideoData(JsonElement content)
 {
+    private bool _authorDetailsCached;
+    private JsonElement? _cachedAuthorDetails;
+
     public int? Index =>
         content
             .GetPropertyOrNull("navigationEndpoint")
@@ -16,27 +19,39 @@ internal class PlaylistVideoData(JsonElement content)
 
     public string? Id => content.GetPropertyOrNull("videoId")?.GetStringOrNull();
 
-    public string? Title =>
-        content.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull()
-        ?? content
-            .GetPropertyOrNull("title")
-            ?.GetPropertyOrNull("runs")
-            ?.EnumerateArrayOrNull()
-            ?.Select(j => j.GetPropertyOrNull("text")?.GetStringOrNull())
-            .WhereNotNull()
-            .Pipe(string.Concat);
+    /// <summary>
+    /// Текст заголовка видео.
+    /// </summary>
+    public string? Title
+    {
+        get
+        {
+            var titleEl = content.GetPropertyOrNull("title");
+            if (titleEl is null) return null;
 
-    private JsonElement? AuthorDetails =>
-        content
-            .GetPropertyOrNull("longBylineText")
-            ?.GetPropertyOrNull("runs")
-            ?.EnumerateArrayOrNull()
-            ?.ElementAtOrNull(0)
-        ?? content
-            .GetPropertyOrNull("shortBylineText")
-            ?.GetPropertyOrNull("runs")
-            ?.EnumerateArrayOrNull()
-            ?.ElementAtOrNull(0);
+            return titleEl.Value.GetPropertyOrNull("simpleText")?.GetStringOrNull()
+                ?? YoutubeParsingHelpers.ConcatTextRuns(titleEl.Value.GetPropertyOrNull("runs"));
+        }
+    }
+
+    private JsonElement? AuthorDetails
+    {
+        get
+        {
+            if (_authorDetailsCached) return _cachedAuthorDetails;
+
+            _cachedAuthorDetails =
+                content.GetPropertyOrNull("longBylineText")
+                    ?.GetPropertyOrNull("runs")
+                    ?.GetArrayElementOrNull(0)
+                ?? content.GetPropertyOrNull("shortBylineText")
+                    ?.GetPropertyOrNull("runs")
+                    ?.GetArrayElementOrNull(0);
+
+            _authorDetailsCached = true;
+            return _cachedAuthorDetails;
+        }
+    }
 
     public string? Author => AuthorDetails?.GetPropertyOrNull("text")?.GetStringOrNull();
 
@@ -71,35 +86,47 @@ internal class PlaylistVideoData(JsonElement content)
     /// <summary>
     /// Длительность видеоролика.
     /// </summary>
-    public TimeSpan? Duration =>
-        content
-            .GetPropertyOrNull("lengthSeconds")
-            ?.GetStringOrNull()
-            ?.Pipe(s =>
-                double.TryParse(s, CultureInfo.InvariantCulture, out var result)
-                    ? result
-                    : (double?)null
-            )
-            ?.Pipe(TimeSpan.FromSeconds)
-        ?? content
-            .GetPropertyOrNull("lengthText")
-            ?.GetPropertyOrNull("simpleText")
-            ?.GetStringOrNull()
-            ?.Pipe(YoutubeClientUtils.DurationParser.Parse)
-        ?? content
-            .GetPropertyOrNull("lengthText")
-            ?.GetPropertyOrNull("runs")
-            ?.EnumerateArrayOrNull()
-            ?.Select(j => j.GetPropertyOrNull("text")?.GetStringOrNull())
-            .WhereNotNull()
-            .Pipe(string.Concat)
-            ?.Pipe(YoutubeClientUtils.DurationParser.Parse);
+    public TimeSpan? Duration
+    {
+        get
+        {
+            var raw = content.GetPropertyOrNull("lengthSeconds")?.GetStringOrNull();
+            if (raw is not null && double.TryParse(raw, CultureInfo.InvariantCulture, out var seconds))
+                return TimeSpan.FromSeconds(seconds);
 
-    public IReadOnlyList<ThumbnailData> Thumbnails =>
-        content
-            .GetPropertyOrNull("thumbnail")
-            ?.GetPropertyOrNull("thumbnails")
-            ?.EnumerateArrayOrNull()
-            ?.Select(j => new ThumbnailData(j))
-            .ToArray() ?? [];
+            var simpleText = content
+                .GetPropertyOrNull("lengthText")
+                ?.GetPropertyOrNull("simpleText")
+                ?.GetStringOrNull();
+            if (simpleText is not null)
+                return YoutubeClientUtils.DurationParser.Parse(simpleText);
+
+            var text = YoutubeParsingHelpers.ConcatTextRuns(
+                content.GetPropertyOrNull("lengthText")?.GetPropertyOrNull("runs"));
+
+            return text is not null ? YoutubeClientUtils.DurationParser.Parse(text) : null;
+        }
+    }
+
+    public IReadOnlyList<ThumbnailData> Thumbnails
+    {
+        get
+        {
+            var thumbsArray = content
+                .GetPropertyOrNull("thumbnail")
+                ?.GetPropertyOrNull("thumbnails");
+
+            if (thumbsArray is null || thumbsArray.Value.ValueKind != JsonValueKind.Array)
+                return [];
+
+            var array = thumbsArray.Value;
+            int len = array.GetArrayLength();
+            if (len == 0) return [];
+
+            var result = new ThumbnailData[len];
+            for (int i = 0; i < len; i++)
+                result[i] = new ThumbnailData(array[i]);
+            return result;
+        }
+    }
 }

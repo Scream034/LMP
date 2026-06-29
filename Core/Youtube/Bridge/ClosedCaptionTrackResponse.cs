@@ -37,10 +37,18 @@ internal sealed class ClosedCaptionTrackResponse(XElement content)
             ((double?)content.Attribute("d"))?.Pipe(TimeSpan.FromMilliseconds);
 
         /// <summary>
-        /// Детализированные пословесные части (слова/буквы) внутри фрагмента.
+        /// Детализированные пословесные части (слова/буквы) внутри фрагмента субтитров.
         /// </summary>
-        public IReadOnlyList<PartData> Parts =>
-            [.. content.Elements("s").Select(x => new PartData(x))];
+        public IReadOnlyList<PartData> Parts
+        {
+            get
+            {
+                var result = new List<PartData>();
+                foreach (var x in content.Elements("s"))
+                    result.Add(new PartData(x));
+                return result;
+            }
+        }
     }
 
     /// <summary>

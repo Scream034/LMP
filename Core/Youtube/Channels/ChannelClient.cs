@@ -27,22 +27,22 @@ public partial class ChannelClient(HttpClient http)
             channelPage.LogoUrl
             ?? throw new YoutubeExplodeException("Failed to extract the channel logo URL.");
 
-        var logoSize =
-            MyRegex().Matches(logoUrl)
-                .ToArray()
-                .LastOrDefault()
-                ?.Groups[1]
-                .Value.NullIfWhiteSpace()
-                ?.Pipe(s =>
-                    int.TryParse(s, CultureInfo.InvariantCulture, out var result)
-                        ? result
-                        : (int?)null
-                )
-            ?? 100;
+        var logoSize = 100;
+        var matches = MyRegex().Matches(logoUrl);
+        if (matches.Count > 0)
+        {
+            var raw = matches[^1].Groups[1].Value;
+            if (!string.IsNullOrWhiteSpace(raw)
+                && int.TryParse(raw, CultureInfo.InvariantCulture, out var parsed))
+            {
+                logoSize = parsed;
+            }
+        }
 
-        var thumbnails = new[] { new Thumbnail(logoUrl, new Resolution(logoSize, logoSize)) };
-
-        return new Channel(new ChannelId(channelId), title, thumbnails);
+        return new Channel(
+            new ChannelId(channelId),
+            title,
+            [new Thumbnail(logoUrl, new Resolution(logoSize, logoSize))]);
     }
 
     public async ValueTask<Channel> GetAsync(

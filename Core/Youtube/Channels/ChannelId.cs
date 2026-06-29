@@ -20,32 +20,24 @@ public readonly partial struct ChannelId(string value)
 
 public partial struct ChannelId
 {
-    private static bool IsValid(string channelId) =>
-        channelId.StartsWith("UC", StringComparison.Ordinal)
-        && channelId.Length == 24
-        && channelId.All(static c => char.IsLetterOrDigit(c) || c is '_' or '-');
+    private static bool IsValid(string channelId)
+    {
+        if (!channelId.StartsWith("UC", StringComparison.Ordinal) || channelId.Length != 24)
+            return false;
+        foreach (var c in channelId.AsSpan())
+            if (!char.IsLetterOrDigit(c) && c is not ('_' or '-')) return false;
+        return true;
+    }
 
     private static string? TryNormalize(string? channelIdOrUrl)
     {
-        if (string.IsNullOrWhiteSpace(channelIdOrUrl))
-            return null;
+        if (string.IsNullOrWhiteSpace(channelIdOrUrl)) return null;
 
-        // Check if already passed an ID
-        // UC3xnGqlcL3y-GXz5N3wiTJQ
-        if (IsValid(channelIdOrUrl))
-            return channelIdOrUrl;
+        if (IsValid(channelIdOrUrl)) return channelIdOrUrl;
 
-        // Try to extract the ID from the URL
-        // https://www.youtube.com/channel/UC3xnGqlcL3y-GXz5N3wiTJQ
-        var id = MyRegex().Match(channelIdOrUrl)
-            .Groups[1]
-            .Value.Pipe(WebUtility.UrlDecode);
-
-        if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-            return id;
-
-        // Invalid input
-        return null;
+        var raw = MyRegex().Match(channelIdOrUrl).Groups[1].Value;
+        var id = WebUtility.UrlDecode(raw);
+        return !string.IsNullOrWhiteSpace(id) && IsValid(id) ? id : null;
     }
 
     /// <summary>
@@ -53,7 +45,7 @@ public partial struct ChannelId
     /// Returns null in case of failure.
     /// </summary>
     public static ChannelId? TryParse(string? channelIdOrUrl) =>
-        TryNormalize(channelIdOrUrl)?.Pipe(static id => new ChannelId(id));
+        TryNormalize(channelIdOrUrl) is { } id ? new ChannelId(id) : default;
 
     /// <summary>
     /// Parses the specified string as a YouTube channel ID or URL.

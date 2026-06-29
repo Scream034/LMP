@@ -20,66 +20,41 @@ public readonly partial struct PlaylistId(string value)
 
 public partial struct PlaylistId
 {
-    private static bool IsValid(string playlistId) =>
-        // Playlist IDs vary greatly in length, but they are at least 2 characters long
-        playlistId.Length >= 2
-        && playlistId.All(static c => char.IsLetterOrDigit(c) || c is '_' or '-');
+    private static bool IsValid(string playlistId)
+    {
+        if (playlistId.Length < 2) return false;
+        foreach (var c in playlistId.AsSpan())
+            if (!char.IsLetterOrDigit(c) && c is not ('_' or '-')) return false;
+        return true;
+    }
 
     private static string? TryNormalize(string? playlistIdOrUrl)
     {
-        if (string.IsNullOrWhiteSpace(playlistIdOrUrl))
-            return null;
+        if (string.IsNullOrWhiteSpace(playlistIdOrUrl)) return null;
 
-        // Check if already passed an ID
-        // PLOU2XLYxmsIJGErt5rrCqaSGTMyyqNt2H
-        if (IsValid(playlistIdOrUrl))
-            return playlistIdOrUrl;
+        if (IsValid(playlistIdOrUrl)) return playlistIdOrUrl;
 
-        // Try to extract the ID from the URL
-        // https://www.youtube.com/playlist?list=PLOU2XLYxmsIJGErt5rrCqaSGTMyyqNt2H
         {
-            var id = MyRegex().Match(playlistIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
+            var raw = MyRegex().Match(playlistIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
+        }
+        {
+            var raw = MyRegex1().Match(playlistIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
+        }
+        {
+            var raw = MyRegex2().Match(playlistIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
+        }
+        {
+            var raw = MyRegex3().Match(playlistIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
         }
 
-        // Try to extract the ID from the URL (playlist + video)
-        // https://www.youtube.com/watch?v=b8m9zhNAgKs&list=PL9tY0BWXOZFuFEG_GtOBZ8-8wbkH-NVAr
-        {
-            var id = MyRegex1().Match(playlistIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
-        }
-
-        // Try to extract the ID from the URL (playlist + video, shortened)
-        // https://youtu.be/b8m9zhNAgKs/?list=PL9tY0BWXOZFuFEG_GtOBZ8-8wbkH-NVAr
-        {
-            var id = MyRegex2().Match(playlistIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
-        }
-
-        // Try to extract the ID from the URL (playlist + video, embedded)
-        // https://www.youtube.com/embed/b8m9zhNAgKs/?list=PL9tY0BWXOZFuFEG_GtOBZ8-8wbkH-NVAr
-        {
-            var id = MyRegex3().Match(playlistIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
-        }
-
-        // Invalid input
         return null;
     }
 
@@ -88,7 +63,7 @@ public partial struct PlaylistId
     /// Returns null in case of failure.
     /// </summary>
     public static PlaylistId? TryParse(string? playlistIdOrUrl) =>
-        TryNormalize(playlistIdOrUrl)?.Pipe(static id => new PlaylistId(id));
+        TryNormalize(playlistIdOrUrl) is { } id ? new PlaylistId(id) : default;
 
     /// <summary>
     /// Parses the specified string as a YouTube playlist ID or URL.

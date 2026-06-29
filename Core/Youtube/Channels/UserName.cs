@@ -20,30 +20,23 @@ public readonly partial struct UserName(string value)
 
 public partial struct UserName
 {
-    private static bool IsValid(string userName) =>
-        userName.Length <= 20 && userName.All(char.IsLetterOrDigit);
+    private static bool IsValid(string userName)
+    {
+        if (userName.Length > 20) return false;
+        foreach (var c in userName.AsSpan())
+            if (!char.IsLetterOrDigit(c)) return false;
+        return true;
+    }
 
     private static string? TryNormalize(string? userNameOrUrl)
     {
-        if (string.IsNullOrWhiteSpace(userNameOrUrl))
-            return null;
+        if (string.IsNullOrWhiteSpace(userNameOrUrl)) return null;
 
-        // Check if already passed a user name
-        // TheTyrrr
-        if (IsValid(userNameOrUrl))
-            return userNameOrUrl;
+        if (IsValid(userNameOrUrl)) return userNameOrUrl;
 
-        // Try to extract the user name from the URL
-        // https://www.youtube.com/user/TheTyrrr
-        var userName = MyRegex().Match(userNameOrUrl)
-            .Groups[1]
-            .Value.Pipe(WebUtility.UrlDecode);
-
-        if (!string.IsNullOrWhiteSpace(userName) && IsValid(userName))
-            return userName;
-
-        // Invalid input
-        return null;
+        var raw = MyRegex().Match(userNameOrUrl).Groups[1].Value;
+        var userName = WebUtility.UrlDecode(raw);
+        return !string.IsNullOrWhiteSpace(userName) && IsValid(userName) ? userName : null;
     }
 
     /// <summary>
@@ -51,7 +44,7 @@ public partial struct UserName
     /// Returns null in case of failure.
     /// </summary>
     public static UserName? TryParse(string? userNameOrUrl) =>
-        TryNormalize(userNameOrUrl)?.Pipe(static name => new UserName(name));
+        TryNormalize(userNameOrUrl) is { } name ? new UserName(name) : default;
 
     /// <summary>
     /// Parses the specified string as a YouTube user name or profile URL.

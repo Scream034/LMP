@@ -12,23 +12,6 @@ namespace LMP.Core.Youtube.Bridge;
 /// </summary>
 internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistData
 {
-    /// <summary>
-    /// Форматы строгого парсинга локализованных дат YouTube.
-    /// Покрывают русские («20 нояб. 2025 г.») и английские («Nov 20, 2025») варианты.
-    /// </summary>
-    private static readonly string[] DateFormats =
-    [
-        "d MMM yyyy 'г.'",
-        "d MMMM yyyy 'г.'",
-        "d MMM yyyy",
-        "d MMMM yyyy",
-        "MMM d, yyyy",
-        "MMMM d, yyyy",
-    ];
-
-    private static readonly CultureInfo RuCulture = CultureInfo.GetCultureInfo("ru-RU");
-    private static readonly CultureInfo EnCulture = CultureInfo.GetCultureInfo("en-US");
-
     private JsonElement? _cachedPlaylistContents;
     private bool _playlistContentsCached;
 
@@ -286,7 +269,8 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.GetPropertyOrNull("title")
             ?.GetPropertyOrNull("simpleText")
             ?.GetStringOrNull()
-        ?? GetTextFromRuns(SidebarPrimary?.GetPropertyOrNull("title")?.GetPropertyOrNull("runs"))
+        ?? YoutubeParsingHelpers.ConcatTextRuns(
+            SidebarPrimary?.GetPropertyOrNull("title")?.GetPropertyOrNull("runs"))
         ?? SidebarPrimary
             ?.GetPropertyOrNull("titleForm")
             ?.GetPropertyOrNull("inlineFormRenderer")
@@ -310,14 +294,14 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.GetPropertyOrNull("title")
             ?.GetPropertyOrNull("simpleText")
             ?.GetStringOrNull()
-        ?? GetTextFromRuns(AuthorDetails?.GetPropertyOrNull("title")?.GetPropertyOrNull("runs"))
+        ?? YoutubeParsingHelpers.ConcatTextRuns(
+            AuthorDetails?.GetPropertyOrNull("title")?.GetPropertyOrNull("runs"))
         ?? content
             .GetPropertyOrNull("header")
             ?.GetPropertyOrNull("playlistHeaderRenderer")
             ?.GetPropertyOrNull("ownerText")
             ?.GetPropertyOrNull("runs")
-            ?.EnumerateArrayOrNull()
-            ?.FirstOrNull()
+            ?.GetArrayElementOrNull(0)
             ?.GetPropertyOrNull("text")
             ?.GetStringOrNull();
 
@@ -335,7 +319,8 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.GetPropertyOrNull("description")
             ?.GetPropertyOrNull("simpleText")
             ?.GetStringOrNull()
-        ?? GetTextFromRuns(SidebarPrimary?.GetPropertyOrNull("description")?.GetPropertyOrNull("runs"))
+        ?? YoutubeParsingHelpers.ConcatTextRuns(
+            SidebarPrimary?.GetPropertyOrNull("description")?.GetPropertyOrNull("runs"))
         ?? SidebarPrimary
             ?.GetPropertyOrNull("descriptionForm")
             ?.GetPropertyOrNull("inlineFormRenderer")
@@ -355,7 +340,7 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
                 var text = GetTextFromStat(stats.Value[0]);
                 if (text != null)
                 {
-                    var val = ParseLongFromText(text);
+                    var val = YoutubeParsingHelpers.ParseLongFromText(text);
                     if (val.HasValue)
                         return (int)val.Value;
                 }
@@ -404,7 +389,7 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
                                     if (text != null && (text.Contains("view", StringComparison.OrdinalIgnoreCase) ||
                                                          text.Contains("просмотр", StringComparison.OrdinalIgnoreCase)))
                                     {
-                                        var views = ParseLongFromText(text);
+                                        var views = YoutubeParsingHelpers.ParseLongFromText(text);
                                         if (views.HasValue) return views;
                                     }
                                 }
@@ -422,7 +407,7 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
                 if (len > 1)
                 {
                     var text = GetTextFromStat(stats.Value[1]);
-                    var views = ParseLongFromText(text);
+                    var views = YoutubeParsingHelpers.ParseLongFromText(text);
                     if (views.HasValue) return views;
                 }
             }
@@ -474,7 +459,7 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
                                         ?.GetStringOrNull();
 
                                     if (text != null &&
-                                        (ParseYearFromText(text).HasValue || IsRelativeDate(text)))
+                                        (YoutubeParsingHelpers.ParseYearFromText(text).HasValue || YoutubeParsingHelpers.IsRelativeDate(text)))
                                     {
                                         return TryParseDate(text);
                                     }
@@ -521,22 +506,21 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
         var span = clean.AsSpan().Trim();
         if (span.IsEmpty) return null;
 
-        // 1. Строгий парсинг по известным форматам (RU/EN)
-        if (DateOnly.TryParseExact(clean, DateFormats, RuCulture, DateTimeStyles.AllowWhiteSpaces, out var dateRu))
+        if (DateOnly.TryParseExact(clean, YoutubeParsingHelpers.DateFormats,
+                YoutubeParsingHelpers.RuCulture, DateTimeStyles.AllowWhiteSpaces, out var dateRu))
             return dateRu;
-        if (DateOnly.TryParseExact(clean, DateFormats, EnCulture, DateTimeStyles.AllowWhiteSpaces, out var dateEn))
+        if (DateOnly.TryParseExact(clean, YoutubeParsingHelpers.DateFormats,
+                YoutubeParsingHelpers.EnCulture, DateTimeStyles.AllowWhiteSpaces, out var dateEn))
             return dateEn;
 
-        // 2. Гибкий парсинг (покрывает нестандартные локали)
-        if (DateOnly.TryParse(clean, RuCulture, DateTimeStyles.AllowWhiteSpaces, out var flexRu))
-            return flexRu;
-        if (DateOnly.TryParse(clean, EnCulture, DateTimeStyles.AllowWhiteSpaces, out var flexEn))
-            return flexEn;
-        if (DateOnly.TryParse(clean, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var flexInv))
-            return flexInv;
+        if (DateOnly.TryParse(clean, YoutubeParsingHelpers.RuCulture,
+                DateTimeStyles.AllowWhiteSpaces, out var flexRu)) return flexRu;
+        if (DateOnly.TryParse(clean, YoutubeParsingHelpers.EnCulture,
+                DateTimeStyles.AllowWhiteSpaces, out var flexEn)) return flexEn;
+        if (DateOnly.TryParse(clean, CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces, out var flexInv)) return flexInv;
 
-        // 3. Относительные даты
-        if (IsRelativeDate(clean))
+        if (YoutubeParsingHelpers.IsRelativeDate(clean))
         {
             var now = DateTime.UtcNow;
 
@@ -548,7 +532,7 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
                 span.Contains("yesterday", StringComparison.OrdinalIgnoreCase))
                 return DateOnly.FromDateTime(now.AddDays(-1));
 
-            var val = ParseLongFromText(clean);
+            var val = YoutubeParsingHelpers.ParseLongFromText(clean);
             if (val.HasValue)
             {
                 int delta = (int)val.Value;
@@ -567,17 +551,12 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
                     span.Contains("minute", StringComparison.OrdinalIgnoreCase))
                     return DateOnly.FromDateTime(now);
 
-                // Fallback для всех форм: «день», «дня», «дней», «day», «days»
                 return DateOnly.FromDateTime(now.AddDays(-delta));
             }
         }
 
-        // 4. Извлечение года
-        var year = ParseYearFromText(clean);
-        if (year.HasValue)
-            return new DateOnly(year.Value, 1, 1);
-
-        return null;
+        var year = YoutubeParsingHelpers.ParseYearFromText(clean);
+        return year.HasValue ? new DateOnly(year.Value, 1, 1) : null;
     }
 
     /// <inheritdoc />
@@ -791,135 +770,9 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string? GetTextFromStat(JsonElement stat)
-    {
-        var simpleText = stat.GetPropertyOrNull("simpleText")?.GetStringOrNull();
-        if (simpleText != null) return simpleText;
-
-        return GetTextFromRuns(stat.GetPropertyOrNull("runs"));
-    }
-
-    /// <summary>
-    /// Zero-alloc итерация по массиву runs со стек-аллокацией для сборки коротких строк (до 256 символов).
-    /// Полностью исключает аллокации, связанные с вызовами LINQ (.Select/.Concat).
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string? GetTextFromRuns(JsonElement? runsElement)
-    {
-        if (runsElement is null || runsElement.Value.ValueKind != JsonValueKind.Array)
-            return null;
-
-        var array = runsElement.Value;
-        int len = array.GetArrayLength();
-        if (len == 0) return null;
-        if (len == 1) return array[0].GetPropertyOrNull("text")?.GetStringOrNull();
-
-        int totalLen = 0;
-        var strings = new string[len];
-        for (int i = 0; i < len; i++)
-        {
-            var t = array[i].GetPropertyOrNull("text")?.GetStringOrNull();
-            if (t != null)
-            {
-                strings[i] = t;
-                totalLen += t.Length;
-            }
-        }
-
-        if (totalLen == 0) return null;
-        var span = totalLen <= 256 ? stackalloc char[totalLen] : new char[totalLen];
-        int pos = 0;
-
-        for (int i = 0; i < len; i++)
-        {
-            if (strings[i] != null)
-            {
-                strings[i].AsSpan().CopyTo(span[pos..]);
-                pos += strings[i].Length;
-            }
-        }
-
-        return new string(span);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long? ParseLongFromText(string? text)
-    {
-        if (string.IsNullOrEmpty(text)) return null;
-
-        long result = 0;
-        bool foundDigit = false;
-
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (char.IsAsciiDigit(c))
-            {
-                result = result * 10 + (c - '0');
-                foundDigit = true;
-            }
-            else if (foundDigit && c != ',' && c != '.' && c != ' ' && c != '\u00A0')
-            {
-                break;
-            }
-        }
-
-        return foundDigit ? result : null;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int? ParseYearFromText(string? text)
-    {
-        if (string.IsNullOrEmpty(text) || text.Length < 4) return null;
-
-        for (int i = 0; i <= text.Length - 4; i++)
-        {
-            if (char.IsAsciiDigit(text[i])
-                && char.IsAsciiDigit(text[i + 1])
-                && char.IsAsciiDigit(text[i + 2])
-                && char.IsAsciiDigit(text[i + 3]))
-            {
-                bool leftOk = i == 0 || !char.IsAsciiDigit(text[i - 1]);
-                bool rightOk = i + 4 == text.Length || !char.IsAsciiDigit(text[i + 4]);
-
-                if (leftOk && rightOk)
-                {
-                    int year = (text[i] - '0') * 1000
-                             + (text[i + 1] - '0') * 100
-                             + (text[i + 2] - '0') * 10
-                             + (text[i + 3] - '0');
-                    if (year >= 1900 && year <= 2100)
-                        return year;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsRelativeDate(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return false;
-
-        var span = text.AsSpan();
-        return span.Contains("сегодня".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("today".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("вчера".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("yesterday".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("назад".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("ago".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("час".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("hour".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("минут".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("minute".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("день".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("day".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("недел".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("week".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("месяц".AsSpan(), StringComparison.OrdinalIgnoreCase)
-            || span.Contains("month".AsSpan(), StringComparison.OrdinalIgnoreCase);
-    }
+    private static string? GetTextFromStat(JsonElement stat) =>
+        stat.GetPropertyOrNull("simpleText")?.GetStringOrNull()
+        ?? YoutubeParsingHelpers.ConcatTextRuns(stat.GetPropertyOrNull("runs"));
 
     #endregion
 }

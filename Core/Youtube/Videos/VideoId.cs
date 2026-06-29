@@ -20,86 +20,52 @@ public readonly partial struct VideoId(string value)
 
 public partial struct VideoId
 {
-    private static bool IsValid(string videoId) =>
-        videoId.Length == 11 && videoId.All(static c => char.IsLetterOrDigit(c) || c is '_' or '-');
+    private static bool IsValid(string videoId)
+    {
+        if (videoId.Length != 11) return false;
+        foreach (var c in videoId.AsSpan())
+            if (!char.IsLetterOrDigit(c) && c is not ('_' or '-')) return false;
+        return true;
+    }
+
 
     private static string? TryNormalize(string? videoIdOrUrl)
     {
-        if (string.IsNullOrWhiteSpace(videoIdOrUrl))
-            return null;
+        if (string.IsNullOrWhiteSpace(videoIdOrUrl)) return null;
 
-        // Check if already passed an ID
-        // yIVRs6YSbOM
-        if (IsValid(videoIdOrUrl))
-            return videoIdOrUrl;
+        if (IsValid(videoIdOrUrl)) return videoIdOrUrl;
 
-        // Try to extract the ID from the URL
-        // https://www.youtube.com/watch?v=yIVRs6YSbOM
         {
-            var id = MyRegex().Match(videoIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
+            var raw = MyRegex().Match(videoIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
+        }
+        {
+            var raw = MyRegex1().Match(videoIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
+        }
+        {
+            var raw = MyRegex2().Match(videoIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
+        }
+        {
+            var raw = MyRegex3().Match(videoIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
+        }
+        {
+            var raw = MyRegex4().Match(videoIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
+        }
+        {
+            var raw = MyRegex5.Match(videoIdOrUrl).Groups[1].Value;
+            var id = WebUtility.UrlDecode(raw);
+            if (!string.IsNullOrWhiteSpace(id) && IsValid(id)) return id;
         }
 
-        // Try to extract the ID from the URL (partially shortened)
-        // https://youtu.be/watch?v=Fcds0_MrgNU
-        {
-            var id = MyRegex1().Match(videoIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
-        }
-
-        // Try to extract the ID from the URL (shortened)
-        // https://youtu.be/yIVRs6YSbOM
-        {
-            var id = MyRegex2().Match(videoIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
-        }
-
-        // Try to extract the ID from the URL (embedded)
-        // https://www.youtube.com/embed/yIVRs6YSbOM
-        {
-            var id = MyRegex3().Match(videoIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
-        }
-
-        // Try to extract the ID from the URL (shorts clip)
-        // https://www.youtube.com/shorts/sKL1vjP0tIo
-        {
-            var id = MyRegex4().Match(videoIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
-        }
-
-        // Try to extract the ID from the URL (livestream)
-        // https://www.youtube.com/live/jfKfPfyJRdk
-        {
-            var id = MyRegex5.Match(videoIdOrUrl)
-                .Groups[1]
-                .Value.Pipe(WebUtility.UrlDecode);
-
-            if (!string.IsNullOrWhiteSpace(id) && IsValid(id))
-                return id;
-        }
-
-        // Invalid input
         return null;
     }
 
@@ -108,7 +74,7 @@ public partial struct VideoId
     /// Returns null in case of failure.
     /// </summary>
     public static VideoId? TryParse(string? videoIdOrUrl) =>
-        TryNormalize(videoIdOrUrl)?.Pipe(static id => new VideoId(id));
+        TryNormalize(videoIdOrUrl) is { } id ? new VideoId(id) : default;
 
     /// <summary>
     /// Parses the specified string as a YouTube video ID or URL.

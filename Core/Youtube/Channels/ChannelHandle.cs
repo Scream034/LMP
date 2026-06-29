@@ -20,30 +20,22 @@ public readonly partial struct ChannelHandle(string value)
 
 public readonly partial struct ChannelHandle
 {
-    private static bool IsValid(string channelHandle) =>
-        channelHandle.All(static c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.');
+    private static bool IsValid(string channelHandle)
+    {
+        foreach (var c in channelHandle.AsSpan())
+            if (!char.IsLetterOrDigit(c) && c is not ('_' or '-' or '.')) return false;
+        return true;
+    }
 
     private static string? TryNormalize(string? channelHandleOrUrl)
     {
-        if (string.IsNullOrWhiteSpace(channelHandleOrUrl))
-            return null;
+        if (string.IsNullOrWhiteSpace(channelHandleOrUrl)) return null;
 
-        // Check if already passed a handle
-        // Tyrrrz
-        if (IsValid(channelHandleOrUrl))
-            return channelHandleOrUrl;
+        if (IsValid(channelHandleOrUrl)) return channelHandleOrUrl;
 
-        // Try to extract the handle from the URL
-        // https://www.youtube.com/@Tyrrrz
-        var handle = MyRegex().Match(channelHandleOrUrl)
-            .Groups[1]
-            .Value.Pipe(WebUtility.UrlDecode);
-
-        if (!string.IsNullOrWhiteSpace(handle) && IsValid(handle))
-            return handle;
-
-        // Invalid input
-        return null;
+        var raw = MyRegex().Match(channelHandleOrUrl).Groups[1].Value;
+        var handle = WebUtility.UrlDecode(raw);
+        return !string.IsNullOrWhiteSpace(handle) && IsValid(handle) ? handle : null;
     }
 
     /// <summary>
@@ -51,7 +43,7 @@ public readonly partial struct ChannelHandle
     /// Returns null in case of failure.
     /// </summary>
     public static ChannelHandle? TryParse(string? channelHandleOrUrl) =>
-        TryNormalize(channelHandleOrUrl)?.Pipe(static handle => new ChannelHandle(handle));
+        TryNormalize(channelHandleOrUrl) is { } handle ? new ChannelHandle(handle) : default;
 
     /// <summary>
     /// Parses the specified string as a YouTube channel handle or custom URL.

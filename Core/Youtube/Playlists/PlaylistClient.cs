@@ -9,6 +9,22 @@ public sealed class PlaylistClient(HttpClient http)
 {
     private readonly PlaylistController _controller = new(http);
 
+    private static readonly string[] MusicKeywords =
+    [
+        "official video", "official music", "official audio", "music video",
+    "lyrics", "lyric video", "(audio)", "[audio]", "ft.", "feat.",
+    "official mv", "m/v", "visualizer", "acoustic", "remix", "cover",
+    "live performance", "official lyric", "audio only"
+    ];
+
+    private static readonly string[] NonMusicKeywords =
+    [
+        "tutorial", "how to", "review", "unboxing", "gameplay", "walkthrough",
+    "podcast", "interview", "news", "trailer", "teaser", "behind the scenes",
+    "making of", "reaction", "compilation", "best of", "highlights",
+    "episode", "ep.", "part ", "chapter", "lecture", "course"
+    ];
+
     /// <summary>
     /// Возвращает метаданные плейлиста.
     /// </summary>
@@ -18,23 +34,17 @@ public sealed class PlaylistClient(HttpClient http)
     {
         var response = await _controller.GetPlaylistResponseAsync(playlistId, cancellationToken);
 
-        var title = response.Title ?? throw new YoutubeExplodeException("Failed to extract playlist title.");
-        var channelTitle = response.Author;
-
-        var domainThumbs = response.Thumbnails
-            .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-            .ToList();
-
-        var bestThumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(domainThumbs);
+        var title = response.Title
+            ?? throw new YoutubeExplodeException("Failed to extract playlist title.");
 
         return new Playlist
         {
             Id = $"yt_{playlistId.Value}",
             YoutubeId = playlistId.Value,
             StoredName = title,
-            Author = channelTitle,
+            Author = response.Author,
             Description = response.Description,
-            ThumbnailUrl = bestThumb,
+            ThumbnailUrl = ThumbnailUtils.GetBestUrl(response.Thumbnails),
             SyncMode = PlaylistSyncMode.CloudPublic
         };
     }
@@ -237,7 +247,7 @@ public sealed class PlaylistClient(HttpClient http)
                 var t = data.Thumbnails[i];
                 domainThumbs.Add(new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)));
             }
-            bestThumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(domainThumbs);
+            bestThumb = ThumbnailUtils.GetBestUrl(domainThumbs);
         }
 
         var playlist = new Playlist
@@ -303,7 +313,7 @@ public sealed class PlaylistClient(HttpClient http)
                 Author = author,
                 ChannelId = videoData.ChannelId,
                 Duration = videoData.Duration ?? TimeSpan.Zero,
-                ThumbnailUrl = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(videoData.Thumbnails, videoId),
+                ThumbnailUrl = ThumbnailUtils.GetBestUrl(videoData.Thumbnails, videoId),
                 Url = $"https://www.youtube.com/watch?v={videoId}",
                 IsMusic = DetectIfMusic(title, author, videoData.Duration)
             });
@@ -336,28 +346,18 @@ public sealed class PlaylistClient(HttpClient http)
 
     private static bool ContainsMusicKeywords(string title)
     {
-        var keywords = new[]
-        {
-            "official video", "official music", "official audio", "music video",
-            "lyrics", "lyric video", "(audio)", "[audio]", "ft.", "feat.",
-            "official mv", "m/v", "visualizer", "acoustic", "remix", "cover",
-            "live performance", "official lyric", "audio only"
-        };
-
-        return keywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
+        for (int i = 0; i < MusicKeywords.Length; i++)
+            if (title.Contains(MusicKeywords[i], StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
     }
 
     private static bool ContainsNonMusicKeywords(string title)
     {
-        var keywords = new[]
-        {
-            "tutorial", "how to", "review", "unboxing", "gameplay", "walkthrough",
-            "podcast", "interview", "news", "trailer", "teaser", "behind the scenes",
-            "making of", "reaction", "compilation", "best of", "highlights",
-            "episode", "ep.", "part ", "chapter", "lecture", "course"
-        };
-
-        return keywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
+        for (int i = 0; i < NonMusicKeywords.Length; i++)
+            if (title.Contains(NonMusicKeywords[i], StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
     }
 
     /// <summary>
