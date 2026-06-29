@@ -393,6 +393,7 @@ public partial class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// Выполняет фоновую валидацию сессии после готовности первой страницы приложения.
     /// Сетевой запрос пропускается, если кэш профиля ещё свежий.
+    /// При сетевых ошибках показывает информативный toast вместо молчания.
     /// </summary>
     private async Task ValidateAuthOnStartupAsync(CancellationToken ct)
     {
@@ -432,16 +433,31 @@ public partial class MainWindowViewModel : ViewModelBase
             if (ct.IsCancellationRequested)
                 return;
 
-            if (!isValid && !isNetworkError)
+            if (!isValid)
             {
-                Log.Warn($"[Auth] Session expired on startup: {error}");
-
                 var notifications = _services.GetRequiredService<NotificationService>();
-                await notifications.ShowToastAsync(
-                    "Auth_SessionExpired_Title",
-                    "Auth_SessionExpired_Message",
-                    NotificationSeverity.Warning,
-                    durationMs: 8000);
+
+                if (isNetworkError)
+                {
+                    Log.Warn($"[Auth] Startup validation failed due to network: {error}");
+
+                    await notifications.ShowToastAsync(
+                        "Auth_ProfileLoadError_Title",
+                        "Error_Network_ConnectionFailed",
+                        NotificationSeverity.Warning,
+                        durationMs: 6000,
+                        recommendationKey: "Recommendation_CheckNetwork");
+                }
+                else
+                {
+                    Log.Warn($"[Auth] Session expired on startup: {error}");
+
+                    await notifications.ShowToastAsync(
+                        "Auth_SessionExpired_Title",
+                        "Auth_SessionExpired_Message",
+                        NotificationSeverity.Warning,
+                        durationMs: 8000);
+                }
             }
         }
         catch (OperationCanceledException)

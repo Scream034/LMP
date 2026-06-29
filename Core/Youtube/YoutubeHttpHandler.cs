@@ -199,7 +199,7 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
        HttpRequestMessage request,
        CancellationToken cancellationToken)
     {
-        // Все скрытые фоновые попытки эмуляции RotateCookies убраны во избежание 401 блокировок
+        Exception? lastException = null;
 
         for (var i = 0; i < 3; i++)
         {
@@ -224,8 +224,6 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
                         continue;
                     }
 
-                    // Больше не пытаемся делать скрытую реанимацию сессии, так как это поведение бота.
-                    // Возвращаем исходный 401 ответ, переводя сессию в режим Guest.
                     return response;
                 }
 
@@ -243,6 +241,8 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
                 if (cancellationToken.IsCancellationRequested && ex is OperationCanceledException)
                     throw;
 
+                lastException = ex;
+
                 if (i < 2 && (ex is HttpRequestException || ex is OperationCanceledException || ex is IOException))
                 {
                     Log.Warn($"[YouTube] Network error: {ex.Message}. Retrying {i + 1}...");
@@ -254,8 +254,24 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
                     continue;
                 }
 
+                // Последняя попытка исчерпана — классифицируем сетевую ошибку
+                var networkEx = YoutubeNetworkException.TryClassify(ex, cancellationToken);
+                if (networkEx is not null)
+                {
+                    Log.Warn($"[YouTube] Network failure after retries: {networkEx.ErrorType} — {ex.Message}");
+                    throw networkEx;
+                }
+
                 throw;
             }
+        }
+
+        // 3 итерации завершились без return (все 401 с обновлением кук / 429)
+        if (lastException is not null)
+        {
+            var networkEx = YoutubeNetworkException.TryClassify(lastException, cancellationToken);
+            if (networkEx is not null)
+                throw networkEx;
         }
 
         throw new YoutubeExplodeException("Failed to execute request after multiple attempts.");

@@ -67,7 +67,12 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
     private readonly Subject<Unit> _nextSubject = new();
     private readonly Subject<Unit> _prevSubject = new();
 
-    private readonly HashSet<string> _restrictedTracks = [];
+    /// <summary>
+    /// Кэш треков, для которых получение форматов невозможно из-за контентных ограничений.
+    /// Ключ = trackId, значение = причина ограничения.
+    /// Не включает сетевые ошибки — они транзиентны и не кэшируются.
+    /// </summary>
+    private readonly Dictionary<string, LoginRequiredReason> _restrictedTracks = [];
     private CancellationTokenSource? _formatsCts;
 
     private CompositeDisposable? _heavySubscriptions;
@@ -1292,13 +1297,13 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
     {
         if (CurrentTrack == null) return;
 
-        if (_restrictedTracks.Contains(CurrentTrack.Id))
+        if (_restrictedTracks.TryGetValue(CurrentTrack.Id, out var cachedReason))
         {
             await HandleMissingFormatsNotificationAsync(
                 new LoginRequiredException(
                     "Cached authorization restriction",
                     CurrentTrack.Id.Replace("yt_", ""),
-                    _youtube.AuthService.IsAuthenticated ? LoginRequiredReason.Unknown : LoginRequiredReason.AgeRestricted),
+                    cachedReason),
                 "Cached authorization requirement");
             AvailableFormats.Clear();
             return;
@@ -1323,6 +1328,31 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
         {
             return;
         }
+        catch (YoutubeNetworkException ex)
+        {
+            // Сетевые ошибки НЕ кэшируются — трек может быть доступен при
+            // восстановлении соединения
+            Log.Warn($"LoadFormatsAsync network error: {ex.ErrorType} — {ex.Message}");
+            caughtException = ex;
+            hasError = true;
+            errorMessage = ex.Message;
+            formats = [];
+        }
+        catch (LoginRequiredException ex)
+        {
+            Log.Error($"LoadFormatsAsync login required: {ex.Reason} — {ex.Message}");
+            caughtException = ex;
+            hasError = true;
+            errorMessage = ex.Message;
+
+            // Кэшируем ТОЛЬКО контентные ограничения, НЕ бот-детекцию (она транзиентна)
+            if (ex.Reason != LoginRequiredReason.BotDetection)
+            {
+                _restrictedTracks[CurrentTrack.Id] = ex.Reason;
+            }
+
+            formats = [];
+        }
         catch (Exception ex)
         {
             Log.Error($"LoadFormatsAsync error: {ex.Message}");
@@ -1330,15 +1360,11 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
             hasError = true;
             errorMessage = ex.Message;
 
-            if (ex is LoginRequiredException)
+            if (!_youtube.AuthService.IsAuthenticated &&
+                (ex.Message.Contains("LoginRequired", StringComparison.OrdinalIgnoreCase) ||
+                 ex.Message.Contains("403")))
             {
-                _restrictedTracks.Add(CurrentTrack.Id);
-            }
-            else if (!_youtube.AuthService.IsAuthenticated &&
-                     (ex.Message.Contains("LoginRequired", StringComparison.OrdinalIgnoreCase) ||
-                      ex.Message.Contains("403")))
-            {
-                _restrictedTracks.Add(CurrentTrack.Id);
+                _restrictedTracks[CurrentTrack.Id] = LoginRequiredReason.Unknown;
             }
 
             formats = [];
@@ -1384,9 +1410,9 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
 
         if (hasError || !hasValidPhysicalFormats)
         {
-            if (!_youtube.AuthService.IsAuthenticated)
+            if (!_youtube.AuthService.IsAuthenticated && caughtException is not YoutubeNetworkException)
             {
-                _restrictedTracks.Add(CurrentTrack.Id);
+                _restrictedTracks.TryAdd(CurrentTrack.Id, LoginRequiredReason.Unknown);
             }
             await HandleMissingFormatsNotificationAsync(caughtException, errorMessage);
         }
@@ -1400,7 +1426,12 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
         string messageKey = "Error_Stream_Generic";
         string? recommendationKey = "Recommendation_ContactDev";
 
-        if (exception is LoginRequiredException lre)
+        if (exception is YoutubeNetworkException netEx)
+        {
+            messageKey = netEx.GetLocalizationKey();
+            recommendationKey = netEx.GetRecommendationKey();
+        }
+        else if (exception is LoginRequiredException lre)
         {
             messageKey = lre.GetLocalizationKey();
             recommendationKey = lre.Reason switch
@@ -1408,8 +1439,14 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
                 LoginRequiredReason.AgeRestricted => "Recommendation_Login_AgeRestricted",
                 LoginRequiredReason.Private => "Recommendation_Private",
                 LoginRequiredReason.MembersOnly => "Recommendation_MembersOnly",
+                LoginRequiredReason.BotDetection => "Recommendation_BotDetection",
                 _ => "Recommendation_Login"
             };
+        }
+        else if (exception is BotDetectionException)
+        {
+            messageKey = "Error_Login_BotDetection";
+            recommendationKey = "Recommendation_BotDetection";
         }
         else if (errorMessage != null &&
                  (errorMessage.Contains("AgeRestricted", StringComparison.OrdinalIgnoreCase) ||

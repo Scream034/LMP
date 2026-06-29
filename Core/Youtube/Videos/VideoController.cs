@@ -132,10 +132,10 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
     }
 
     public async ValueTask<PlayerResponse> GetPlayerResponseWithClientAsync(
-        VideoId videoId,
-        string clientName,
-        CancellationToken cancellationToken,
-        string? signatureTimestamp = null)
+       VideoId videoId,
+       string clientName,
+       CancellationToken cancellationToken,
+       string? signatureTimestamp = null)
     {
         ThrowIfInCooldown();
 
@@ -150,7 +150,6 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
 
         Log.Info($"GetPlayerResponse START ({clientName}): {videoId}");
 
-        // Единая точка разрешения VisitorData с защитой от таймаута и дублирующих сетевых вызовов
         var visitorData = await YoutubeClientUtils.EnsureVisitorDataAsync(ct: cancellationToken).ConfigureAwait(false);
 
         if (signatureTimestamp == null && clientName is "WEB" or "WEB_REMIX" or "TVHTML5_SIMPLY_EMBEDDED_PLAYER")
@@ -205,26 +204,33 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
 
         var playerResponse = PlayerResponse.Parse(content);
 
+        // Bot detection tracking ПЕРЕД LoginRequired
+        // Обеспечивает инкремент _consecutiveFailures для LOGIN_REQUIRED + "bot"
+        TrackBotDetection(playerResponse, videoId.Value);
+
         if (playerResponse.IsLoginRequired)
         {
-            Log.Warn($"[VideoController] [{videoId}] LOGIN_REQUIRED via {clientName}: {playerResponse.LoginRequiredReason}");
+            var reason = playerResponse.LoginRequiredReason;
+
+            Log.Warn($"[VideoController] [{videoId}] LOGIN_REQUIRED via {clientName}: " +
+                     $"reason={reason}, raw=\"{playerResponse.PlayabilityError}\"");
 
             throw new LoginRequiredException(
                 $"Video {videoId} requires login: {playerResponse.LoginRequiredReason}",
                 videoId.Value,
-                playerResponse.LoginRequiredReason);
+                reason);
         }
-
-        TrackBotDetection(playerResponse, videoId.Value);
 
         return playerResponse;
     }
 
     /// <summary>
     /// Извлекает signatureTimestamp из единого кэша <see cref="PlayerContextManager"/>.
+    /// Пробрасывает сетевые ошибки и отмены, чтобы вызывающий код
+    /// мог корректно определить причину сбоя.
     /// </summary>
     /// <param name="ct">Токен отмены.</param>
-    /// <returns>Строка signatureTimestamp или <c>null</c> при ошибке.</returns>
+    /// <returns>Строка signatureTimestamp или <c>null</c> при некритичной ошибке.</returns>
     private async ValueTask<string?> ResolveSignatureTimestampAsync(CancellationToken ct)
     {
         var cached = _playerManager.GetCachedSignatureTimestamp();
@@ -244,6 +250,14 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
 
             _playerManager.SetCachedSignatureTimestamp(sts);
             return sts;
+        }
+        catch (YoutubeNetworkException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -323,6 +337,9 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
         bool hasLoginRequired = false;
         LoginRequiredException? loginException = null;
 
+        bool hasNonNetworkFailure = false;
+        YoutubeNetworkException? firstNetworkException = null;
+
         foreach (var clientName in clients)
         {
             try
@@ -351,15 +368,33 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
 
                 if (!IsBotDetectionResponse(response))
                     allBotDetection = false;
+
+                hasNonNetworkFailure = true;
             }
             catch (LoginRequiredException ex)
             {
-                if (!hasLoginRequired)
+                if (ex.Reason == LoginRequiredReason.BotDetection)
                 {
-                    hasLoginRequired = true;
-                    loginException = ex;
+                    errors.Add($"{clientName}: BOT_DETECTION (LOGIN_REQUIRED)");
+                    // allBotDetection остаётся true — это IS bot detection
                 }
-                errors.Add($"{clientName}: LOGIN_REQUIRED");
+                else
+                {
+                    if (!hasLoginRequired)
+                    {
+                        hasLoginRequired = true;
+                        loginException = ex;
+                    }
+                    errors.Add($"{clientName}: LOGIN_REQUIRED ({ex.Reason})");
+                    allBotDetection = false;
+                }
+                hasNonNetworkFailure = true;
+            }
+            catch (YoutubeNetworkException netEx)
+            {
+                Log.Warn($"[VideoController] [{videoId}] {clientName} network error: {netEx.ErrorType} — {netEx.Message}");
+                errors.Add($"{clientName}: NETWORK_{netEx.ErrorType}");
+                firstNetworkException ??= netEx;
                 allBotDetection = false;
             }
             catch (StreamUnavailableException) { throw; }
@@ -367,12 +402,35 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                Log.Warn($"[VideoController] [{videoId}] {clientName} exception: {ex.Message}");
-                errors.Add($"{clientName}: {ex.Message}");
+                // Пытаемся классифицировать как сетевую ошибку (на случай
+                // если YoutubeHttpHandler не обернул — например, ошибка до SendAsync)
+                var classified = YoutubeNetworkException.TryClassify(ex, cancellationToken);
+                if (classified is not null)
+                {
+                    Log.Warn($"[VideoController] [{videoId}] {clientName} classified as network: {classified.ErrorType} — {ex.Message}");
+                    errors.Add($"{clientName}: NETWORK_{classified.ErrorType}");
+                    firstNetworkException ??= classified;
+                }
+                else
+                {
+                    Log.Warn($"[VideoController] [{videoId}] {clientName} exception: {ex.Message}");
+                    errors.Add($"{clientName}: {ex.Message}");
+                    hasNonNetworkFailure = true;
+                }
                 allBotDetection = false;
             }
         }
 
+        // Приоритет финальных ошибок
+
+        // 1. Все клиенты упали из-за сети — пользователь должен увидеть "проблема с сетью"
+        if (firstNetworkException is not null && !hasNonNetworkFailure)
+        {
+            Log.Error($"[VideoController] [{videoId}] All clients failed due to network: {firstNetworkException.ErrorType}");
+            throw firstNetworkException;
+        }
+
+        // 2. Все клиенты потребовали логин (не бот)
         if (hasLoginRequired && loginException != null)
         {
             Log.Error($"[VideoController] [{videoId}] All clients require login: {loginException.Reason}");
@@ -381,11 +439,19 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
 
         var allErrors = string.Join("; ", errors);
 
-        if (allBotDetection && IsInCooldown)
+        // 3. Все клиенты заблокированы ботодетекцией
+        if (allBotDetection)
         {
             throw new BotDetectionException(
-                $"All clients blocked by bot detection for {videoId}",
+                $"All clients detected as bot for {videoId}",
                 GetRemainingCooldown());
+        }
+
+        // 4. Смешанные ошибки, но есть сетевая — упоминаем в сообщении
+        if (firstNetworkException is not null)
+        {
+            Log.Error($"[VideoController] [{videoId}] Mixed failures (including network: {firstNetworkException.ErrorType}). Errors: {allErrors}");
+            throw firstNetworkException;
         }
 
         throw new VideoUnplayableException(

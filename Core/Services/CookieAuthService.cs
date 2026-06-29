@@ -414,6 +414,17 @@ public partial class CookieAuthService
 
             return (false, $"Validation returned status {response.StatusCode}", true);
         }
+        catch (OperationCanceledException)
+        {
+            // Внешняя отмена — пробрасываем, чтобы вызывающий код отличил
+            // user cancel от внутреннего таймаута
+            if (ct.IsCancellationRequested)
+                throw;
+
+            // Внутренний CancelAfter(8s) сработал — это сетевой таймаут, не user cancel
+            Log.Warn("[Auth] Session validation timed out (8s internal deadline)");
+            return (false, "Connection timed out", true);
+        }
         catch (Exception ex)
         {
             // Важно: При сетевых таймаутах мы НЕ вызываем Logout(),
@@ -512,6 +523,7 @@ public partial class CookieAuthService
     /// <summary>
     /// Выполняет отложенную валидацию сессии после свежего логина.
     /// Предыдущий незавершённый вызов отменяется через <see cref="_validateCts"/>.
+    /// При сетевой ошибке отображает пользователю информативное уведомление.
     /// </summary>
     private async Task ValidateAndNotifyAsync()
     {
@@ -525,13 +537,14 @@ public partial class CookieAuthService
 
         try
         {
-            var (_, _, isNetworkError) = await ValidateSessionAsync(cts.Token).ConfigureAwait(false);
+            var (isValid, error, isNetworkError) = await ValidateSessionAsync(cts.Token).ConfigureAwait(false);
 
             if (cts.IsCancellationRequested) return;
 
             if (isNetworkError)
             {
-                Log.Warn("[Auth] Post-login validation failed due to network. Firing fallback auth state change.");
+                Log.Warn($"[Auth] Post-login validation failed due to network: {error}. Firing fallback auth state change.");
+                _profileLoadError = error;
                 OnAuthStateChanged?.Invoke();
             }
             // Успех → UpdateUserProfile уже вызвал OnAuthStateChanged
@@ -543,6 +556,7 @@ public partial class CookieAuthService
             if (!cts.IsCancellationRequested)
             {
                 Log.Warn($"[Auth] Deferred session validation failed: {ex.Message}. Firing fallback auth state change.");
+                _profileLoadError = ex.Message;
                 OnAuthStateChanged?.Invoke();
             }
         }
@@ -550,7 +564,6 @@ public partial class CookieAuthService
         {
             lock (_validateLock)
             {
-                // Диспозим только если CTS ещё наш — не заменён следующим вызовом
                 if (_validateCts == cts)
                 {
                     cts.Dispose();

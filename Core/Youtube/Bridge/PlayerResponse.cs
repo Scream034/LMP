@@ -52,23 +52,35 @@ internal partial class PlayerResponse(JsonElement content)
                 return LoginRequiredReason.Unknown;
 
             var reason = PlayabilityError ?? "";
+
+            // 1. Bot detection — ОБЯЗАТЕЛЬНО первым
+            // YouTube ANDROID_VR возвращает "Sign in to confirm you're not a bot"
+            // со статусом LOGIN_REQUIRED. Слово "confirm" ранее ложно
+            // срабатывало на ветку AgeRestricted.
+            if (reason.Contains("bot", StringComparison.OrdinalIgnoreCase) ||
+                reason.Contains("не робот", StringComparison.OrdinalIgnoreCase))
+            {
+                return LoginRequiredReason.BotDetection;
+            }
+
+            // 2. Age gate
             var desktopAgeGateReason = Playability
                 ?.GetPropertyOrNull("desktopLegacyAgeGateReason")
                 ?.GetInt32OrNull();
 
-            // desktopLegacyAgeGateReason: 1 = age restricted
             if (desktopAgeGateReason == 1 ||
-                reason.Contains("age", StringComparison.OrdinalIgnoreCase) ||
-                reason.Contains("confirm", StringComparison.OrdinalIgnoreCase))
+                reason.Contains("age", StringComparison.OrdinalIgnoreCase))
             {
                 return LoginRequiredReason.AgeRestricted;
             }
 
+            // 3. Private
             if (reason.Contains("private", StringComparison.OrdinalIgnoreCase))
             {
                 return LoginRequiredReason.Private;
             }
 
+            // 4. Members only
             if (reason.Contains("members", StringComparison.OrdinalIgnoreCase) ||
                 reason.Contains("member", StringComparison.OrdinalIgnoreCase))
             {

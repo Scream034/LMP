@@ -177,6 +177,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
             await (actualException switch
             {
                 BotDetectionException botEx => HandleBotDetectionAsync(botEx),
+                YoutubeNetworkException netEx => HandleNetworkErrorAsync(netEx, isDuplicate),
                 LoginRequiredException loginEx => HandleLoginRequiredAsync(loginEx, isDuplicate),
                 StreamUnavailableException streamEx => HandleStreamUnavailableAsync(streamEx, isDuplicate),
                 ChunkDownloadFatalException chunkEx => HandleChunkFatalAsync(chunkEx, isDuplicate),
@@ -188,6 +189,21 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         {
             Log.Error($"[Orchestrator] Error in handler: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Обрабатывает сетевые ошибки подключения к YouTube (таймаут, SSL, DNS).
+    /// Показывает пользователю понятное сообщение с рекомендацией вместо
+    /// технического "видео недоступно через все клиенты".
+    /// </summary>
+    private async Task HandleNetworkErrorAsync(YoutubeNetworkException exception, bool isDuplicate)
+    {
+        Log.Warn($"[Orchestrator] Network error: {exception.ErrorType} — {exception.Message}");
+
+        var messageKey = exception.GetLocalizationKey();
+        var recommendationKey = exception.GetRecommendationKey();
+
+        await DispatchPlaybackErrorAsync(exception, messageKey, null, isDuplicate, recommendationKey);
     }
 
     private async Task HandleLoginRequiredAsync(LoginRequiredException exception, bool isDuplicate)
@@ -321,14 +337,15 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     #region Behavior Strategies (Deduplicated)
 
     /// <summary>
-    /// Универсальный диспетчер, обрабатывающий поведение на основе настроек `PlaybackErrorBehavior`.
+    /// Универсальный диспетчер, обрабатывающий поведение на основе настроек <c>PlaybackErrorBehavior</c>.
     /// Полностью устраняет дублирование между типами ошибок.
     /// </summary>
     private async Task DispatchPlaybackErrorAsync(
       Exception exception,
       string messageOrKey,
       List<AttemptRecord>? attempts = null,
-      bool skipNotification = false)
+      bool skipNotification = false,
+      string? recommendationKeyOverride = null)
     {
         var behavior = _libraryService.Settings.Audio.CriticalErrorBehavior;
 
@@ -350,15 +367,15 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
             return;
         }
 
-        var settings = _libraryService.Settings.Audio;
         var (trackId, trackTitle) = GetCurrentTrackInfo();
 
-        bool isSslFailure = NetworkErrorHelper.IsSslOrTlsHandshakeFailure(exception);
+        bool isSslFailure = exception is YoutubeNetworkException { IsSslFailure: true }
+                         || NetworkErrorHelper.IsSslOrTlsHandshakeFailure(exception);
+
         string finalMessageOrKey = isSslFailure ? "Error_SslHandshake_Failed" : messageOrKey;
 
-        string? recommendationKey = isSslFailure
-            ? "Recommendation_DpiBlocked"
-            : GetRecommendation(exception);
+        string? recommendationKey = recommendationKeyOverride
+            ?? (isSslFailure ? "Recommendation_DpiBlocked" : GetRecommendation(exception));
 
         _notificationService.TryPlayErrorSound();
 
@@ -458,6 +475,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
             LoginRequiredReason.AgeRestricted => "Error_Login_AgeRestricted",
             LoginRequiredReason.Private => "Error_Login_Private",
             LoginRequiredReason.MembersOnly => "Error_Login_MembersOnly",
+            LoginRequiredReason.BotDetection => "Error_Login_BotDetection",
             _ => "Error_Login_Required"
         };
     }
@@ -473,7 +491,8 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
             if (inner is BotDetectionException or
                 LoginRequiredException or
                 StreamUnavailableException or
-                ChunkDownloadFatalException)
+                ChunkDownloadFatalException or
+                YoutubeNetworkException)
             {
                 return inner;
             }
@@ -491,6 +510,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         return exception switch
         {
             BotDetectionException => "bot_detection",
+            YoutubeNetworkException net => $"network_{net.ErrorType}",
             LoginRequiredException login => $"login_{login.VideoId}",
             StreamUnavailableException stream => $"stream_{stream.VideoId}_{stream.Reason}",
             ChunkDownloadFatalException chunk => $"chunk_{chunk.TrackId}_{chunk.Reason}",

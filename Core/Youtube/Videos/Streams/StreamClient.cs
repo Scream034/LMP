@@ -64,6 +64,7 @@ public sealed class StreamClient
 
     /// <summary>
     /// Извлекает signatureTimestamp из кэша <see cref="PlayerContextManager"/>.
+    /// Пробрасывает сетевые ошибки и отмены для корректной диагностики.
     /// </summary>
     private async ValueTask<CipherManifest> ResolveCipherManifestAsync(CancellationToken cancellationToken)
     {
@@ -80,6 +81,14 @@ public sealed class StreamClient
 
             _cipherManifest = new CipherManifest(sts ?? "");
             return _cipherManifest;
+        }
+        catch (YoutubeNetworkException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

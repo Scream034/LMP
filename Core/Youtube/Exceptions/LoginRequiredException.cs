@@ -2,7 +2,7 @@ namespace LMP.Core.Youtube.Exceptions;
 
 /// <summary>
 /// Выбрасывается когда YouTube требует авторизацию для воспроизведения контента или выполнения операций.
-/// Обычно для возрастных ограничений (age-restricted), приватного контента или при истечении сессии.
+/// Обычно для возрастных ограничений (age-restricted), приватного контента, детекции бота или при истечении сессии.
 /// </summary>
 public sealed class LoginRequiredException(
     string message,
@@ -29,7 +29,8 @@ public sealed class LoginRequiredException(
             LoginRequiredReason.AgeRestricted => "Error_Login_AgeRestricted",
             LoginRequiredReason.Private => "Error_Login_Private",
             LoginRequiredReason.MembersOnly => "Error_Login_MembersOnly",
-            LoginRequiredReason.SessionExpired => "Auth_SessionExpired_Message", // Привязка к существующему ключу локализации
+            LoginRequiredReason.SessionExpired => "Auth_SessionExpired_Message",
+            LoginRequiredReason.BotDetection => "Error_Login_BotDetection",
             _ => "Error_Login_Required"
         };
     }
@@ -53,5 +54,11 @@ public enum LoginRequiredReason
     MembersOnly,
 
     /// <summary>Сессия авторизации истекла или недействительна.</summary>
-    SessionExpired
+    SessionExpired,
+
+    /// <summary>
+    /// YouTube расценил запрос как автоматизированный (бот-детекция).
+    /// Ответ содержит <c>LOGIN_REQUIRED</c> + <c>"Sign in to confirm you're not a bot"</c>.
+    /// </summary>
+    BotDetection
 }
