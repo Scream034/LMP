@@ -262,6 +262,17 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
         ApplyStreamingProfile();
 
+        // Проверяем флаг готовности: если LibraryService уже инициализирован — применяем настройки,
+        // если нет — подписываемся на событие завершения инициализации.
+        if (_library.IsInitialized)
+        {
+            InitializeFromSettings();
+        }
+        else
+        {
+            _library.OnInitialized += InitializeFromSettings;
+        }
+
         // Настройка делегатов один раз при создании класса. 
         // Исключает аллокацию замыканий в куче (Gen 0) во время проигрывания.
         _positionChangedHandler = HandlePositionChangedInternal;
@@ -421,12 +432,26 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         };
     }
 
+    /// <summary>
+    /// Извлекает сохранённые параметры воспроизведения из настроек и применяет их к активному конвейеру.
+    /// </summary>
     private void InitializeFromSettings()
     {
         var settings = _library.Settings;
         ShuffleEnabled = settings.ShuffleEnabled;
         RepeatMode = settings.RepeatMode;
-        _volumePercent = settings.Volume > 0 ? (int)settings.Volume : 60;
+
+        // Восстановление уровня громкости: отдаём приоритет LastVolume (int), 
+        // при его отсутствии парсим Volume (float), предотвращая сброс в 0 при первом запуске (0.5f)
+        int savedVolume = settings.LastVolume;
+        if (savedVolume <= 0)
+        {
+            savedVolume = settings.Volume > 1.0f
+                ? (int)settings.Volume
+                : (int)Math.Round(settings.Volume * 100.0);
+        }
+
+        _volumePercent = savedVolume > 0 ? Math.Clamp(savedVolume, 0, VolumeNormalRange) : 50;
         ApplyGainToPipeline();
     }
 
@@ -811,7 +836,10 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
                     // Apply loudness from descriptor to track for normalization
                     if (descriptor.HasLoudness)
+                    {
                         track.TrySetGainFromLoudness(descriptor.LoudnessDb);
+                        AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(track.Id, descriptor.LoudnessDb);
+                    }
 
                     if (_session.IsStaleOrCancelled(session, ct) || IsSealedFailedTrack(track.Id)) return;
 
@@ -1483,6 +1511,12 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             Log.Info($"[AudioEngine] SwitchQuality resolved -> {d}");
 
             var actualPosition = CurrentPosition;
+
+            if (d.HasLoudness)
+            {
+                track.TrySetGainFromLoudness(d.LoudnessDb);
+                AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(track.Id, d.LoudnessDb);
+            }
 
             await _player.PlayAsync(d, ct,
                 seekPosition: actualPosition.TotalSeconds > 1 ? actualPosition : null).ConfigureAwait(false);

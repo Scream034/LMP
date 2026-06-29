@@ -49,6 +49,11 @@ public sealed class LibraryService : IAsyncDisposable
 
     public AppSettings Settings { get; private set; } = new();
 
+    /// <summary>
+    /// Флаг завершения первичной асинхронной инициализации и загрузки настроек.
+    /// </summary>
+    public bool IsInitialized { get; private set; }
+
     public event Action? OnDataChanged;
     public event Action<TrackInfo>? OnTrackUpdated;
     public event Action<Playlist>? OnPlaylistChanged;
@@ -58,6 +63,11 @@ public sealed class LibraryService : IAsyncDisposable
     /// Событие, сигнализирующее о завершении полной асинхронной гидрации кэшей после смены аккаунта.
     /// </summary>
     public event Action? OnAccountHydrated;
+
+    /// <summary>
+    /// Событие, сигнализирующее о завершении загрузки настроек и инициализации LibraryService.
+    /// </summary>
+    public event Action? OnInitialized;
 
     private string CurrentOwnerId => _auth.State.DisplayId;
 
@@ -181,12 +191,12 @@ public sealed class LibraryService : IAsyncDisposable
             requireSave = true;
         }
 #else
-    if (BootstrapSettings.Current.AppUpdatedThisRun && Settings.InternetProfile != InternetProfile.Medium)
-    {
-        Settings.InternetProfile = InternetProfile.Medium;
-        requireSave = true;
-        Log.Info("[LibraryService] App updated, resetting InternetProfile to default.");
-    }
+        if (BootstrapSettings.Current.AppUpdatedThisRun && Settings.InternetProfile != InternetProfile.Medium)
+        {
+            Settings.InternetProfile = InternetProfile.Medium;
+            requireSave = true;
+            Log.Info("[LibraryService] App updated, resetting InternetProfile to default.");
+        }
 #endif
 
         if (requireSave)
@@ -216,6 +226,10 @@ public sealed class LibraryService : IAsyncDisposable
 
         sw.Stop();
         Log.Info($"[LibraryService] Initialized in {sw.ElapsedMilliseconds}ms");
+
+        // Установка флага должна происходить строго перед вызовом события во избежание гонок
+        IsInitialized = true;
+        OnInitialized?.Invoke();
     }
 
     private async Task MigrateFromJsonAsync(string path, CancellationToken ct)

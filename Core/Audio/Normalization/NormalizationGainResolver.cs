@@ -76,11 +76,14 @@ public static class NormalizationGainResolver
         if (!config.Enabled)
             return float.NaN;
 
-        if (cachedNormalizationGain is float gain && float.IsFinite(gain) && gain > 0f)
-            return ApplyConstraints(gain, config);
-
+        // Приоритет 1: YouTube loudness — ground truth, пересчитывается
+        // для текущего targetLufs и mode динамически.
         if (youtubeIntegratedLoudnessDb is float loudnessDb && float.IsFinite(loudnessDb))
             return ComputeGainFromYoutubeLoudness(loudnessDb, config);
+
+        // Приоритет 2: cached EBU R128 gain — fallback когда YouTube loudness недоступен.
+        if (cachedNormalizationGain is float gain && float.IsFinite(gain) && gain > 0f)
+            return ApplyConstraints(gain, config);
 
         return float.NaN;
     }

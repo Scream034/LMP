@@ -112,6 +112,16 @@ public sealed class PlayerControlService : IDisposable
         _audio.OnLoadingStateChanged += OnLoadingStateChanged;
         _audio.OnNTokenDecryptionWarning += OnNTokenDecryptionWarning;
 
+        // Если БД уже загружена — синхронизируем UI-Subjects, если нет — ждем OnInitialized
+        if (_library.IsInitialized)
+        {
+            ForceSync();
+        }
+        else
+        {
+            _library.OnInitialized += ForceSync;
+        }
+
         Log.Debug("[PlayerControl] Service initialized");
     }
 

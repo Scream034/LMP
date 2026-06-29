@@ -172,16 +172,6 @@ public partial class App : Application
             await Task.Run(async () => await library.InitializeAsync());
             _splash?.SetProgress(45);
 
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                var audio = AppEntry.Services.GetRequiredService<AudioEngine>();
-                audio.ShuffleEnabled = library.Settings.ShuffleEnabled;
-                audio.RepeatMode = library.Settings.RepeatMode;
-
-                var playerControl = AppEntry.Services.GetRequiredService<PlayerControlService>();
-                playerControl.ForceSync();
-            });
-
             // СИНХРОНИЗАЦИЯ ЯЗЫКА
             var savedLang = library.Settings.LanguageCode;
             var currentLang = L.CurrentLanguageCode;

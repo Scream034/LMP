@@ -632,7 +632,7 @@ public sealed partial class PlaylistViewModel : TrackListReorderableViewModel, I
         var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
-        _playerControl.SetShuffleEnabled(false);
+        // Удален форсированный сброс Shuffle. Сохраняем глобальный выбор пользователя!
         _playerControl.SetActivePlaylistId(_currentPlaylistId);
         IsShuffleActive = false;
         await Audio.StartQueueAsync(allTracks, allTracks[0]);
@@ -644,16 +644,15 @@ public sealed partial class PlaylistViewModel : TrackListReorderableViewModel, I
         var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
-        var shuffled = new List<TrackInfo>(allTracks);
-        for (int i = shuffled.Count - 1; i > 0; i--)
-        {
-            int j = Random.Shared.Next(i + 1);
-            (shuffled[i], shuffled[j]) = (shuffled[j], shuffled[i]);
-        }
+        // Выбираем случайную песню в качестве отправной точки для воспроизведения
+        var startTrack = allTracks[Random.Shared.Next(allTracks.Count)];
 
-        _playerControl.SetShuffleEnabled(false);
+        // Активируем Shuffle глобально. Теперь статус кнопки на PlayerBar визуально синхронизирован
+        _playerControl.SetShuffleEnabled(true);
         _playerControl.SetActivePlaylistId(_currentPlaylistId);
-        await Audio.StartQueueAsync(shuffled, shuffled[0]);
+
+        // Движок AudioEngine автоматически перемешает оставшуюся очередь, закрепив выбранный трек на первой позиции
+        await Audio.StartQueueAsync(allTracks, startTrack);
 
         IsShuffleActive = true;
         Observable.Timer(TimeSpan.FromMilliseconds(800))
@@ -666,7 +665,8 @@ public sealed partial class PlaylistViewModel : TrackListReorderableViewModel, I
     {
         try
         {
-            _playerControl.SetShuffleEnabled(false);
+            // Удален форсированный сброс Shuffle. 
+            // Если Shuffle включен, при клике на трек очередь автоматически перемешается, воспроизведя этот трек первым.
             _playerControl.SetActivePlaylistId(_currentPlaylistId);
             IsShuffleActive = false;
             var allTracks = await GetAllTracksAsync();
