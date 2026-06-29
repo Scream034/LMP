@@ -294,30 +294,46 @@ public partial class App : Application
                 Log.Info("[Memory] Post-startup GC compaction complete. Cold memory reclaimed.");
             });
 
-            // Shutdown Handler
-            desktop.ShutdownRequested += async (_, _) =>
+            // Shutdown Handler (исправленный детерминированный асинхронный цикл)
+            bool isCleaningUp = false;
+            desktop.ShutdownRequested += (sender, e) =>
             {
-                try
-                {
-                    _appLifetimeCts.Cancel();
+                if (isCleaningUp) return;
 
-                    // Сохраняем ДО dispose AudioCacheManager — порядок важен
-                    CdnHostStatsStore.Save();
-                    SessionCacheStore.Save();
+                // Отменяем немедленное синхронное завершение процесса ОС
+                e.Cancel = true;
+                isCleaningUp = true;
 
-                    LocalAuthServer.DisposeIfCreated();
-                    MemoryCleanupHelper.Dispose();
-                    await audioCacheManager.DisposeAsync();
-                    await library.DisposeAsync();
-                }
-                catch (Exception ex)
+                // Перенаправляем выполнение очистки в очередь UI-потока с высоким приоритетом
+                Dispatcher.UIThread.Post(async () =>
                 {
-                    Log.Error($"Shutdown error: {ex.Message}");
-                }
-                finally
-                {
-                    _appLifetimeCts.Dispose();
-                }
+                    try
+                    {
+                        _appLifetimeCts.Cancel();
+
+                        // Сохраняем статистику до освобождения ресурсов менеджера кэша
+                        CdnHostStatsStore.Save();
+                        SessionCacheStore.Save();
+
+                        LocalAuthServer.DisposeIfCreated();
+                        MemoryCleanupHelper.Dispose();
+
+                        // Асинхронно высвобождаем ресурсы и гарантированно записываем настройки в SQLite
+                        await audioCacheManager.DisposeAsync().ConfigureAwait(false);
+                        await library.DisposeAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"Shutdown error during async cleanup: {ex.Message}");
+                    }
+                    finally
+                    {
+                        _appLifetimeCts.Dispose();
+
+                        // Завершаем работу приложения (force shutdown в обход повторного вызова событий)
+                        desktop.Shutdown();
+                    }
+                }, DispatcherPriority.Normal);
             };
 
 #if DEBUG

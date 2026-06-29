@@ -470,6 +470,7 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
 
     /// <summary>
     /// Вызывается при переходе на страницу настроек.
+    /// Перезагружает актуальные параметры из сервиса библиотеки для синхронизации с внешними изменениями.
     /// </summary>
     public override async Task OnNavigatedToAsync()
     {
@@ -477,6 +478,8 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
 
         if (_isDataLoaded)
         {
+            // Синхронизируем свойства вью-модели со свежими настройками из сервиса (например, после диалога закрытия)
+            LoadAllSettings();
             IsContentReady = true;
             return;
         }
@@ -1512,6 +1515,15 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
             SL["Settings_NormalizationInfo_Title"],
             SL["Settings_NormalizationInfo_Body"],
             SL["Common_GotIt"]);
+    }
+
+    /// <inheritdoc />
+    protected override void OnResume()
+    {
+        base.OnResume();
+
+        // Синхронизируем настройки при восстановлении/разворачивании окна из фонового режима
+        LoadAllSettings();
     }
 
     /// <inheritdoc />
