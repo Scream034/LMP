@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using LMP.Core.Data.Entities;
+using LMP.Core.Youtube.Utils;
 using Microsoft.EntityFrameworkCore;
 
 namespace LMP.Core.Data.Repositories;
@@ -443,7 +444,7 @@ public sealed partial class TrackRepository : ITrackRepository
         IsDisliked = e.IsDisliked,
         IsDownloaded = e.IsDownloaded,
         LocalPath = e.LocalPath,
-        PreferredContainer = e.PreferredContainer,
+        PreferredFormat = ParsePreferredFormat(e.PreferredContainer),
         PreferredBitrate = e.PreferredBitrate,
         RadioSeedId = e.RadioSeedId,
         CachedNormalizationGain = e.CachedNormalizationGain ?? float.NaN
@@ -464,7 +465,7 @@ public sealed partial class TrackRepository : ITrackRepository
         IsDisliked = m.IsDisliked,
         IsDownloaded = m.IsDownloaded,
         LocalPath = m.LocalPath,
-        PreferredContainer = m.PreferredContainer,
+        PreferredContainer = PersistPreferredFormat(m.PreferredFormat),
         PreferredBitrate = m.PreferredBitrate,
         RadioSeedId = m.RadioSeedId,
         CachedNormalizationGain = float.IsNaN(m.CachedNormalizationGain) || !float.IsFinite(m.CachedNormalizationGain)
@@ -485,7 +486,8 @@ public sealed partial class TrackRepository : ITrackRepository
         entity.IsDisliked = model.IsDisliked;
         entity.IsDownloaded = model.IsDownloaded;
         entity.LocalPath = model.LocalPath ?? entity.LocalPath;
-        entity.PreferredContainer = model.PreferredContainer ?? entity.PreferredContainer;
+        if (model.PreferredFormat.HasValue && model.PreferredFormat != AudioFormat.Unknown)
+            entity.PreferredContainer = PersistPreferredFormat(model.PreferredFormat);
         entity.PreferredBitrate = model.PreferredBitrate > 0 ? model.PreferredBitrate : entity.PreferredBitrate;
         entity.RadioSeedId = model.RadioSeedId ?? entity.RadioSeedId;
 
@@ -494,4 +496,17 @@ public sealed partial class TrackRepository : ITrackRepository
     }
 
     #endregion
+
+    private static AudioFormat? ParsePreferredFormat(string? container)
+    {
+        var format = YoutubeIdHelper.MapContainerToFormat(container);
+        return format == AudioFormat.Unknown ? null : format;
+    }
+
+    private static string? PersistPreferredFormat(AudioFormat? format)
+    {
+        return format is { } value && value != AudioFormat.Unknown
+            ? value.ToContainerName()
+            : null;
+    }
 }

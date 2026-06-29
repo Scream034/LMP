@@ -414,8 +414,8 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
         var cache = AudioSourceFactory.GlobalCache;
         if (cache != null)
         {
-            Observable.FromEvent<Action<string, string, int, bool>, (string TrackId, string Container, int Bitrate, bool Downloaded)>(
-                    h => (t, c, b, d) => h((t, c, b, d)),
+            Observable.FromEvent<Action<string, AudioFormat, int, bool>, Unit>(
+                    h => (trackId, format, bitrate, isDownloaded) => h(Unit.Default),
                     h => cache.OnFormatCached += h,
                     h => cache.OnFormatCached -= h)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)

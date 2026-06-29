@@ -47,7 +47,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     private readonly Task _autoSaveTask;
     private volatile bool _disposed;
 
-    public event Action<string, string, int, bool>? OnFormatCached;
+    public event Action<string, AudioFormat, int, bool>? OnFormatCached;
     public event Action? OnCacheCleared;
 
     public AudioCacheManager(string? cacheDirectory = null, long maxCacheSizeMb = 2048)
@@ -106,7 +106,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             if (bestEntry != null)
             {
                 foreach (var track in tracksList)
-                    track.MarkAsCached(bestEntry.Format.ToString(), bestEntry.Bitrate);
+                    track.MarkAsCached(bestEntry.Format, bestEntry.Bitrate);
             }
         }
     }
@@ -780,9 +780,9 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         }
     }
 
-    public List<(string Container, int Bitrate)> GetCachedFormats(string trackId)
+    public List<(AudioFormat Format, int Bitrate)> GetCachedFormats(string trackId)
     {
-        var result = new List<(string, int)>();
+        var result = new List<(AudioFormat, int)>();
         if (!_trackIndex.TryGetValue(trackId, out var keys)) return result;
 
         foreach (var key in keys.Keys)
@@ -791,16 +791,15 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                 && entry.IsComplete
                 && EnsureCacheFileIntegrity(entry))
             {
-                result.Add((entry.Format.ToString(), entry.Bitrate));
+                result.Add((entry.Format, entry.Bitrate));
             }
         }
 
         return result;
     }
 
-    public bool IsFormatCached(string trackId, string container, int bitrate)
+    public bool IsFormatCached(string trackId, AudioFormat format, int bitrate)
     {
-        if (!Enum.TryParse<AudioFormat>(container, true, out var format)) return false;
         return IsFullyCached(AudioSourceFactory.BuildCacheKey(trackId, format, bitrate));
     }
 
@@ -877,7 +876,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                 var existing = new FileInfo(destPath);
                 if (existing.Length == entry.TotalSize)
                 {
-                    track.MarkAsDownloaded(destPath, entry.Format.ToString(), entry.Bitrate);
+                    track.MarkAsDownloaded(destPath, entry.Format, entry.Bitrate);
                     await updateTrackFunc(track).ConfigureAwait(false);
                     return true;
                 }
@@ -889,9 +888,9 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             Log.Info($"[AudioCache] Exporting to Downloads: {Path.GetFileName(destPath)}");
             File.Copy(cachePath, destPath, overwrite: true);
 
-            track.MarkAsDownloaded(destPath, entry.Format.ToString(), entry.Bitrate);
+            track.MarkAsDownloaded(destPath, entry.Format, entry.Bitrate);
             await updateTrackFunc(track).ConfigureAwait(false);
-            OnFormatCached?.Invoke(entry.TrackId, entry.Format.ToString(), entry.Bitrate, true);
+            OnFormatCached?.Invoke(entry.TrackId, entry.Format, entry.Bitrate, true);
             return true;
         }
         catch (Exception ex)
@@ -1224,7 +1223,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     {
         try
         {
-            OnFormatCached?.Invoke(entry.TrackId, entry.Format.ToString(), entry.Bitrate, false);
+            OnFormatCached?.Invoke(entry.TrackId, entry.Format, entry.Bitrate, false);
         }
         catch (Exception ex)
         {

@@ -8,9 +8,7 @@ namespace LMP.Core.Helpers;
 /// </summary>
 internal static class UrlEx
 {
-    // ═══════════════════════════════════════════════════════════════
     //  SetQueryParameter — IN-PLACE замена с сохранением порядка
-    // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Устанавливает значение query-параметра. Если параметр уже существует,
@@ -31,7 +29,7 @@ internal static class UrlEx
 
         if (keyStart >= 0)
         {
-            // ═══ IN-PLACE REPLACEMENT ═══
+            // IN-PLACE REPLACEMENT
             // url = [prefix][old_value][suffix]
             //        ^0..valueStart    ^valueEnd..
             // Заменяем old_value на encodedValue, всё остальное — побитово копируем.
@@ -57,7 +55,7 @@ internal static class UrlEx
             });
         }
 
-        // ═══ APPEND — параметра нет, добавляем в конец ═══
+        // APPEND — параметра нет, добавляем в конец
         var separator = urlSpan.Contains('?') ? '&' : '?';
         var encodedKey = Uri.EscapeDataString(key);
         
@@ -141,9 +139,7 @@ internal static class UrlEx
         });
     }
 
-    // ═══════════════════════════════════════════════════════════════
     //  Query parameter reading — zero-alloc fast path
-    // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Возвращает raw (не декодированное) значение параметра, или null если не найден.
@@ -224,9 +220,7 @@ internal static class UrlEx
         return dict;
     }
 
-    // ═══════════════════════════════════════════════════════════════
     //  CORE: FindParameterBounds — span-based, zero-allocation
-    // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Находит точные границы параметра в URL.

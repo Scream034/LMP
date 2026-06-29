@@ -101,7 +101,7 @@ public sealed class TrackRegistry
         {
             completeEntry = audioCache.FindBestCacheByTrackId(track.Id);
             if (completeEntry != null)
-                track.MarkAsCached(completeEntry.Format.ToString(), completeEntry.Bitrate);
+                track.MarkAsCached(completeEntry.Format, completeEntry.Bitrate);
         }
 
         if (track.HasCachedNormalizationGain && track.HasYoutubeLoudnessDb)
@@ -509,29 +509,29 @@ public sealed class TrackRegistry
     /// <summary>
     /// Реагирует на успешное завершение локального кэширования трека, обновляя его рантайм-свойства.
     /// </summary>
-    private void HandleFormatCached(string trackId, string container, int bitrate, bool isDownloaded)
+    private void HandleFormatCached(string trackId, AudioFormat format, int bitrate, bool isDownloaded)
     {
         if (string.IsNullOrEmpty(trackId)) return;
 
         if (_pinned.TryGetValue(trackId, out var pinned))
         {
             if (isDownloaded)
-                pinned.MarkAsDownloaded(pinned.LocalPath ?? "", container, bitrate);
+                pinned.MarkAsDownloaded(pinned.LocalPath ?? "", format, bitrate);
             else
-                pinned.MarkAsCached(container, bitrate);
+                pinned.MarkAsCached(format, bitrate);
 
-            Log.Debug($"[TrackRegistry] Marked pinned track {trackId} as cached ({container}/{bitrate}kbps)");
+            Log.Debug($"[TrackRegistry] Marked pinned track {trackId} as cached ({format}/{bitrate}kbps)");
             return;
         }
 
         if (_cache.TryGetValue(trackId, out var weakRef) && weakRef.TryGetTarget(out var cached))
         {
             if (isDownloaded)
-                cached.MarkAsDownloaded(cached.LocalPath ?? "", container, bitrate);
+                cached.MarkAsDownloaded(cached.LocalPath ?? "", format, bitrate);
             else
-                cached.MarkAsCached(container, bitrate);
+                cached.MarkAsCached(format, bitrate);
 
-            Log.Debug($"[TrackRegistry] Marked cached track {trackId} as cached ({container}/{bitrate}kbps)");
+            Log.Debug($"[TrackRegistry] Marked cached track {trackId} as cached ({format}/{bitrate}kbps)");
         }
     }
 }

@@ -174,13 +174,13 @@ public sealed class NotificationService : ReactiveObject, IDisposable
         await OsNotificationHelper.ShowAsync(title, message, severity);
     }
 
-    public void PlayErrorSound()
+    public void TryPlayErrorSound()
     {
         if (_libraryService.Settings.Audio.PlayErrorSound)
-            ErrorSoundPlayer.PlayError();
+            OsSoundPlayer.PlayError();
     }
 
-    public static void PlaySuccessSound() => ErrorSoundPlayer.PlaySuccess();
+    public static void PlaySuccessSound() => OsSoundPlayer.PlaySuccess();
 
     #endregion
 

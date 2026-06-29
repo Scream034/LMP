@@ -15,16 +15,4 @@ public static class TrackFilters
         return track.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                track.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
     }
-
-    /// <summary>
-    /// Фильтрует трек с дополнительными полями (для расширенного поиска).
-    /// </summary>
-    public static bool MatchesExtended(TrackInfo track, string query)
-    {
-        if (string.IsNullOrWhiteSpace(query)) return true;
-
-        return track.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               track.Author.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               (track.ChannelId?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
-    }
 }

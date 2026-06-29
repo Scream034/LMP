@@ -662,10 +662,9 @@ public partial class YoutubeProvider : IDisposable
         var rawVideoId = track.GetRawIdSpan().ToString();
         if (string.IsNullOrEmpty(rawVideoId)) return null;
 
-        string? targetContainer = track.TransientContainer;
-        int targetBitrate = track.TransientBitrate;
+        var requested = StreamSelectionHint.FromTrack(track, _libraryService?.Settings.RememberTrackFormat == true);
 
-        Log.Info($"[YouTube] RefreshStreamAsync start: track={track.Id}, force={forceRefresh}, target={targetContainer ?? "-"}/{targetBitrate}");
+        Log.Info($"[YouTube] RefreshStreamAsync start: track={track.Id}, force={forceRefresh}, target={requested.Format?.ToContainerName() ?? "-"}/{requested.BitrateKbps}");
 
         if (forceRefresh)
         {
@@ -673,28 +672,24 @@ public partial class YoutubeProvider : IDisposable
         }
 
         // 1) EXACT FULL DISK CACHE (0 сети)
-        if (!forceRefresh && !string.IsNullOrEmpty(targetContainer) && targetBitrate > 0)
+        if (!forceRefresh && requested.HasFormat && requested.HasBitrate)
         {
-            var format = YoutubeIdHelper.MapContainerToFormat(targetContainer);
-            if (format != AudioFormat.Unknown)
+            string cacheKey = AudioSourceFactory.BuildCacheKey(track.Id, requested.Format!.Value, requested.BitrateKbps);
+            var cache = AudioSourceFactory.GlobalCache;
+            if (cache != null && cache.IsFullyCached(cacheKey))
             {
-                string cacheKey = AudioSourceFactory.BuildCacheKey(track.Id, format, targetBitrate);
-                var cache = AudioSourceFactory.GlobalCache;
-                if (cache != null && cache.IsFullyCached(cacheKey))
+                var entry = cache.GetCacheInfo(cacheKey);
+                if (entry != null)
                 {
-                    var entry = cache.GetCacheInfo(cacheKey);
-                    if (entry != null)
-                    {
-                        var d = CreateDescriptorFromCacheEntry(track.Id, entry);
-                        Log.Info($"[YouTube] RefreshStreamAsync FULL CACHE (exact) -> {d}");
-                        return d;
-                    }
+                    var d = CreateDescriptorFromCacheEntry(track.Id, entry);
+                    Log.Info($"[YouTube] RefreshStreamAsync FULL CACHE (exact) -> {d}");
+                    return d;
                 }
             }
         }
 
         // 2) ANY FULL DISK CACHE (0 сети, если формат не важен)
-        if (!forceRefresh && string.IsNullOrEmpty(targetContainer))
+        if (!forceRefresh && requested.HasFormat)
         {
             var anyCache = AudioSourceFactory.FindAnyCachedTrack(rawVideoId);
             if (anyCache != null)
@@ -708,7 +703,7 @@ public partial class YoutubeProvider : IDisposable
         // 3) RAM MANIFEST CACHE (0 сети, все форматы)
         if (!forceRefresh && _manifestRamCache.TryGetValue(track.Id, out var ramManifest))
         {
-            var d = SelectFromManifest(ramManifest, track.Id, targetContainer, targetBitrate);
+            var d = SelectFromManifest(ramManifest, track.Id, requested.Format, requested.BitrateKbps);
             if (d != null)
             {
                 Log.Info($"[YouTube] RefreshStreamAsync RAM MANIFEST -> {d}");
@@ -728,7 +723,7 @@ public partial class YoutubeProvider : IDisposable
                 var diskManifest = ReconstructManifest(diskEntry);
                 _manifestRamCache[track.Id] = diskManifest;
 
-                var d = SelectFromManifest(diskManifest, track.Id, targetContainer, targetBitrate);
+                var d = SelectFromManifest(diskManifest, track.Id, requested.Format, requested.BitrateKbps);
                 if (d != null)
                 {
                     Log.Info($"[YouTube] RefreshStreamAsync DISK MANIFEST ({diskEntry.Variants.Count} variants) -> {d}");
@@ -758,7 +753,7 @@ public partial class YoutubeProvider : IDisposable
             _manifestRamCache[track.Id] = manifest;
             SessionCacheStore.RecordManifest(track.Id, audioStreams);
 
-            var descriptor = SelectFromManifest(manifest, track.Id, targetContainer, targetBitrate);
+            var descriptor = SelectFromManifest(manifest, track.Id, requested.Format, requested.BitrateKbps);
             if (descriptor == null)
                 throw new StreamUnavailableException($"No matching stream for {rawVideoId}", rawVideoId, StreamUnavailableReason.AllClientsFailed);
 
@@ -862,24 +857,25 @@ public partial class YoutubeProvider : IDisposable
     }
 
     private AudioOnlyStreamInfo? SelectBestStream(
-           List<AudioOnlyStreamInfo> streams,
-           string? preferredContainer,
-           int preferredBitrate = 0)
+     List<AudioOnlyStreamInfo> streams,
+     AudioFormat? preferredFormat,
+     int preferredBitrate = 0)
     {
         if (streams.Count == 0) return null;
 
-        if (!string.IsNullOrEmpty(preferredContainer))
+        if (preferredFormat is { } requestedFormat && requestedFormat != AudioFormat.Unknown)
         {
             AudioOnlyStreamInfo? bestMatch = null;
             double bestDelta = double.MaxValue;
-            AudioOnlyStreamInfo? firstInContainer = null;
+            AudioOnlyStreamInfo? firstInFormat = null;
 
             for (int i = 0; i < streams.Count; i++)
             {
-                if (!streams[i].Container.Name.Equals(preferredContainer, StringComparison.OrdinalIgnoreCase))
+                var streamFormat = YoutubeIdHelper.MapContainerToFormat(streams[i].Container.Name);
+                if (streamFormat != requestedFormat)
                     continue;
 
-                firstInContainer ??= streams[i];
+                firstInFormat ??= streams[i];
 
                 if (preferredBitrate > 0)
                 {
@@ -893,7 +889,7 @@ public partial class YoutubeProvider : IDisposable
             }
 
             if (preferredBitrate > 0 && bestMatch != null) return bestMatch;
-            if (firstInContainer != null) return firstInContainer;
+            if (firstInFormat != null) return firstInFormat;
         }
 
         var qualityPref = _libraryService?.Settings.QualityPreference ?? AudioQualityPreference.BestAvailable;
@@ -902,12 +898,17 @@ public partial class YoutubeProvider : IDisposable
         {
             for (int i = 0; i < streams.Count; i++)
             {
-                if (streams[i].Container.Name is "mp4" or "m4a")
+                if (YoutubeIdHelper.MapContainerToFormat(streams[i].Container.Name) == AudioFormat.Mp4)
                     return streams[i];
             }
         }
 
         return streams.Count > 0 ? streams[0] : null;
+    }
+
+    private static AudioCodec DetermineCodec(AudioOnlyStreamInfo stream, AudioFormat format)
+    {
+        return stream.AudioCodec.ToAudioCodec(format);
     }
 
     /// <summary>
@@ -936,27 +937,6 @@ public partial class YoutubeProvider : IDisposable
             Log.Debug($"[YouTube] GetLoudnessDbOnlyAsync failed for {videoId}: {ex.Message}");
             return float.NaN;
         }
-    }
-
-    private static string DetermineCodec(string container, AudioOnlyStreamInfo stream)
-    {
-        var codecStr = stream.AudioCodec;
-
-        if (!string.IsNullOrEmpty(codecStr))
-        {
-            var span = codecStr.AsSpan();
-            if (span.Contains("opus", StringComparison.OrdinalIgnoreCase)) return "Opus";
-            if (span.Contains("aac", StringComparison.OrdinalIgnoreCase)) return "AAC";
-            if (span.Contains("mp4a", StringComparison.OrdinalIgnoreCase)) return "AAC";
-            if (span.Contains("vorbis", StringComparison.OrdinalIgnoreCase)) return "Vorbis";
-        }
-
-        return container switch
-        {
-            "webm" => "Opus",
-            "mp4" or "m4a" => "AAC",
-            _ => container.ToUpperInvariant()
-        };
     }
 
     #endregion
@@ -1821,14 +1801,14 @@ public partial class YoutubeProvider : IDisposable
     private ResolvedStreamDescriptor? SelectFromManifest(
         StreamManifest manifest,
         string trackId,
-        string? targetContainer,
+        AudioFormat? targetFormat,
         int targetBitrate)
     {
         var streams = manifest.GetAudioOnlyStreams()
             .OrderByDescending(s => s.Bitrate)
             .ToList();
 
-        var selected = SelectBestStream(streams, targetContainer, targetBitrate);
+        var selected = SelectBestStream(streams, targetFormat, targetBitrate);
         if (selected == null) return null;
 
         return CreateDescriptorFromStream(trackId, selected);
@@ -1837,9 +1817,8 @@ public partial class YoutubeProvider : IDisposable
     private ResolvedStreamDescriptor CreateDescriptorFromStream(string trackId, AudioOnlyStreamInfo stream)
     {
         var url = stream.Url;
-        var container = stream.Container.Name;
-        var codecStr = DetermineCodec(container, stream);
-        var format = YoutubeIdHelper.MapContainerToFormat(container);
+        var format = YoutubeIdHelper.MapContainerToFormat(stream.Container.Name);
+        var codec = DetermineCodec(stream, format);
 
         DateTime expireUtc = DateTime.MaxValue;
         var expireStr = UrlEx.TryGetQueryParameterValue(url, "expire");
@@ -1856,8 +1835,7 @@ public partial class YoutubeProvider : IDisposable
             Itag = stream.Itag,
             Url = url,
             Format = format,
-            Codec = Enum.TryParse<AudioCodec>(codecStr, true, out var c)
-                ? c : AudioSourceFactory.GetCodecForFormat(format),
+            Codec = codec,
             BitrateKbps = (int)Math.Round(stream.Bitrate.KiloBitsPerSecond),
             ContentLengthBytes = stream.Size.Bytes,
             CdnHost = cdnHost,
@@ -1923,11 +1901,13 @@ public partial class YoutubeProvider : IDisposable
         for (int i = 0; i < streams.Count; i++)
         {
             var s = streams[i];
+            var format = YoutubeIdHelper.MapContainerToFormat(s.Container.Name);
+
             result.Add(new StreamOption
             {
-                Container = s.Container.Name,
+                Format = format,
+                CodecType = DetermineCodec(s, format),
                 Bitrate = s.Bitrate.KiloBitsPerSecond,
-                Codec = DetermineCodec(s.Container.Name, s),
                 SizeMb = s.Size.MegaBytes
             });
         }
@@ -1988,14 +1968,14 @@ public partial class YoutubeProvider : IDisposable
     /// Поддерживает как полный trackId (с yt_ префиксом), так и чистый 11-значный videoId.
     /// </summary>
     /// <param name="videoId">Идентификатор видео или трека.</param>
-    /// <param name="container">Желаемый контейнер.</param>
+    /// <param name="format">Желаемый формат.</param>
     /// <param name="bitrate">Желаемый битрейт.</param>
-    public ResolvedStreamDescriptor? TryGetCachedStreamDescriptor(string videoId, string? container, int bitrate)
+    public ResolvedStreamDescriptor? TryGetCachedStreamDescriptor(string videoId, AudioFormat? format, int bitrate)
     {
         string trackId = videoId.StartsWith("yt_", StringComparison.Ordinal) ? videoId : $"yt_{videoId}";
         if (_manifestRamCache.TryGetValue(trackId, out var manifest))
         {
-            return SelectFromManifest(manifest, trackId, container, bitrate);
+            return SelectFromManifest(manifest, trackId, format, bitrate);
         }
         return null;
     }
@@ -2054,10 +2034,17 @@ public partial class YoutubeProvider : IDisposable
 
 public sealed partial class StreamOption : ReactiveObject
 {
-    public string Container { get; set; } = "";
+    /// <summary>Типизированный формат контейнера.</summary>
+    public AudioFormat Format { get; init; }
+
+    /// <summary>Типизированный аудиокодек.</summary>
+    public AudioCodec CodecType { get; init; }
+
     public double Bitrate { get; set; }
-    public string Codec { get; set; } = "";
     public double SizeMb { get; set; }
+
+    public string Container => Format.ToContainerName();
+    public string Codec => CodecType.ToDisplayName();
 
     public string DisplayName => $"{Codec} {string.Format(LocalizationService.Instance.Get("Stream_Bitrate"), Bitrate)} ({Container})";
 

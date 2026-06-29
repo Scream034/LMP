@@ -149,7 +149,16 @@ public sealed partial class TrackInfo : ReactiveObject, IBatchItem, ISearchResul
 
     #region Format Preferences
 
-    [Reactive] public partial string? PreferredContainer { get; set; }
+    /// <summary>
+    /// Предпочитаемый формат контейнера для этого трека.
+    /// Персистентный пользовательский выбор.
+    /// </summary>
+    [Reactive] public partial AudioFormat? PreferredFormat { get; set; }
+
+    /// <summary>
+    /// Предпочитаемый битрейт для этого трека.
+    /// Персистентный пользовательский выбор.
+    /// </summary>
     [Reactive] public partial int PreferredBitrate { get; set; }
 
     public string? RadioSeedId { get; set; }
@@ -159,11 +168,11 @@ public sealed partial class TrackInfo : ReactiveObject, IBatchItem, ISearchResul
     #region Runtime Stream Selection
 
     /// <summary>
-    /// Временный контейнер, выбранный пользователем в текущей сессии
+    /// Временный формат контейнера, выбранный пользователем в текущей сессии
     /// (например, при переключении качества).
     /// Не является кэшем resolved stream metadata.
     /// </summary>
-    [JsonIgnore] public string? TransientContainer { get; set; }
+    [JsonIgnore] public AudioFormat? TransientFormat { get; set; }
 
     /// <summary>
     /// Временный битрейт, выбранный пользователем в текущей сессии
@@ -319,29 +328,41 @@ public sealed partial class TrackInfo : ReactiveObject, IBatchItem, ISearchResul
 
         // Сохраняем только явные runtime-hints выбора качества текущей сессии.
         // Resolved stream metadata больше не переносится через TrackInfo.
-        if (!string.IsNullOrEmpty(fresh.TransientContainer) && fresh.TransientContainer != TransientContainer)
-            TransientContainer = fresh.TransientContainer;
+        if (fresh.TransientFormat is { } transientFormat
+            && transientFormat != AudioFormat.Unknown
+            && transientFormat != TransientFormat)
+        {
+            TransientFormat = transientFormat;
+        }
 
         if (fresh.TransientBitrate > 0 && fresh.TransientBitrate != TransientBitrate)
             TransientBitrate = fresh.TransientBitrate;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void MarkAsCached(string? container = null, int bitrate = 0)
+    public void MarkAsCached(AudioFormat? format = null, int bitrate = 0)
     {
         IsCached = true;
-        if (!string.IsNullOrEmpty(container)) PreferredContainer = container;
-        if (bitrate > 0) PreferredBitrate = bitrate;
+
+        if (format is { } preferredFormat && preferredFormat != AudioFormat.Unknown)
+            PreferredFormat = preferredFormat;
+
+        if (bitrate > 0)
+            PreferredBitrate = bitrate;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void MarkAsDownloaded(string localPath, string? container = null, int bitrate = 0)
+    public void MarkAsDownloaded(string localPath, AudioFormat? format = null, int bitrate = 0)
     {
         IsDownloaded = true;
         IsCached = true;
         LocalPath = localPath;
-        if (!string.IsNullOrEmpty(container)) PreferredContainer = container;
-        if (bitrate > 0) PreferredBitrate = bitrate;
+
+        if (format is { } preferredFormat && preferredFormat != AudioFormat.Unknown)
+            PreferredFormat = preferredFormat;
+
+        if (bitrate > 0)
+            PreferredBitrate = bitrate;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -70,7 +70,7 @@ public abstract class TrackListReorderableViewModel
             {
                 current.MarkAsDownloaded(
                     fresh.LocalPath,
-                    fresh.PreferredContainer,
+                    fresh.PreferredFormat,
                     fresh.PreferredBitrate);
             }
             else
@@ -81,16 +81,16 @@ public abstract class TrackListReorderableViewModel
         }
         else if (fresh.IsCached && !current.IsCached)
         {
-            current.MarkAsCached(fresh.PreferredContainer, fresh.PreferredBitrate);
+            current.MarkAsCached(fresh.PreferredFormat, fresh.PreferredBitrate);
         }
 
         if (!string.IsNullOrEmpty(fresh.LocalPath) && fresh.LocalPath != current.LocalPath)
             current.LocalPath = fresh.LocalPath;
 
-        if (!string.IsNullOrEmpty(fresh.PreferredContainer) &&
-            fresh.PreferredContainer != current.PreferredContainer)
+        if (fresh.PreferredFormat.HasValue &&
+            fresh.PreferredFormat != current.PreferredFormat)
         {
-            current.PreferredContainer = fresh.PreferredContainer;
+            current.PreferredFormat = fresh.PreferredFormat;
         }
 
         if (fresh.PreferredBitrate > 0 && fresh.PreferredBitrate != current.PreferredBitrate)
@@ -174,7 +174,7 @@ public abstract class TrackListReorderableViewModel
         var cache = AudioSourceFactory.GlobalCache;
         if (cache is null) return;
 
-        Observable.FromEvent<Action<string, string, int, bool>, (string trackId, string format, int bitrate, bool isExport)>(
+        Observable.FromEvent<Action<string, AudioFormat, int, bool>, (string trackId, AudioFormat format, int bitrate, bool isExport)>(
                 h => (id, format, bitrate, isExport) => h((id, format, bitrate, isExport)),
                 h => cache.OnFormatCached += h,
                 h => cache.OnFormatCached -= h)

@@ -320,7 +320,7 @@ public sealed class PlaylistEditService
                 severity: NotificationSeverity.Error,
                 durationMs: 4000);
 
-            _notifications.PlayErrorSound();
+            _notifications.TryPlayErrorSound();
             return null;
         }
         finally
@@ -396,7 +396,7 @@ public sealed class PlaylistEditService
                     severity: NotificationSeverity.Error,
                     durationMs: 4000);
 
-                _notifications.PlayErrorSound();
+                _notifications.TryPlayErrorSound();
                 return false;
             }
 
@@ -450,7 +450,7 @@ public sealed class PlaylistEditService
                 severity: NotificationSeverity.Error,
                 durationMs: 5000);
 
-            _notifications.PlayErrorSound();
+            _notifications.TryPlayErrorSound();
 
             return false;
         }

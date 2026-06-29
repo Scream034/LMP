@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Models;
 using LMP.Core.Models.Json;
+using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Videos.Streams;
 
 namespace LMP.Core.Audio.Http;
@@ -38,6 +39,20 @@ public sealed class VariantEntry
     /// </summary>
     [JsonConverter(typeof(NaNFloatJsonConverter))]
     public float LoudnessDb { get; set; } = float.NaN;
+
+    /// <summary>
+    /// Типизированный формат контейнера.
+    /// Не сериализуется и вычисляется из <see cref="Container"/>.
+    /// </summary>
+    [JsonIgnore]
+    public AudioFormat Format => YoutubeIdHelper.MapContainerToFormat(Container);
+
+    /// <summary>
+    /// Типизированный аудиокодек.
+    /// Не сериализуется и вычисляется из <see cref="Codec"/>.
+    /// </summary>
+    [JsonIgnore]
+    public AudioCodec CodecType => Codec.ToAudioCodec(Format);
 
     /// <summary>Код языка аудиодорожки.</summary>
     public string? LanguageCode { get; set; }
@@ -237,12 +252,14 @@ internal static class SessionCacheStore
         for (int i = 0; i < streams.Count; i++)
         {
             var s = streams[i];
+            var format = YoutubeIdHelper.MapContainerToFormat(s.Container.Name);
+
             variants.Add(new VariantEntry
             {
                 Itag = s.Itag,
                 Url = s.Url,
-                Container = s.Container.Name,
-                Codec = s.AudioCodec ?? "",
+                Container = format.ToContainerName(),
+                Codec = s.AudioCodec.ToAudioCodec(format).ToDisplayName(),
                 Bitrate = (int)s.Bitrate.BitsPerSecond,
                 Clen = s.Size.Bytes,
                 LoudnessDb = s.LoudnessDb,

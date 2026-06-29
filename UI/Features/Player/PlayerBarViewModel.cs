@@ -474,7 +474,7 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
             foreach (var f in AvailableFormats) f.IsActive = false;
             option.IsActive = true;
             BeginTrackReset();
-            await _audio.SwitchQualityAsync(option.Container, (int)option.Bitrate);
+            await _audio.SwitchQualityAsync(option.Format, (int)option.Bitrate);
         }));
     }
 
@@ -596,11 +596,11 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
         var cacheManager = AudioSourceFactory.GlobalCache
             ?? throw new NullReferenceException("AudioSourceFactory.GlobalCache is not initialized");
 
-        Observable.FromEvent<Action<string, string, int, bool>, (string TrackId, string Container, int Bitrate, bool Downloaded)>(
-                h => (t, c, b, d) => h((t, c, b, d)),
+        Observable.FromEvent<Action<string, AudioFormat, int, bool>, (string TrackId, AudioFormat Format, int Bitrate, bool Downloaded)>(
+                h => (t, f, b, d) => h((t, f, b, d)),
                 h => cacheManager.OnFormatCached += h,
                 h => cacheManager.OnFormatCached -= h)
-            .Subscribe(x => OnFormatCached(x.TrackId, x.Container, x.Bitrate, x.Downloaded))
+            .Subscribe(x => OnFormatCached(x.TrackId, x.Format, x.Bitrate, x.Downloaded))
             .DisposeWith(Disposables);
 
         Observable.FromEvent(
@@ -1094,7 +1094,7 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
             foreach (var f in AvailableFormats)
             {
                 int normalizedFormatBitrate = AudioConstants.NormalizeBitrate((int)f.Bitrate);
-                f.IsActive = string.Equals(f.Codec, info.Codec, StringComparison.OrdinalIgnoreCase) &&
+                f.IsActive = f.Format == info.Format &&
                              normalizedInfoBitrate == normalizedFormatBitrate;
             }
 
@@ -1368,11 +1368,11 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
             f.IsDownloaded = cachedFormats.Any(cached =>
             {
                 int normalizedCachedBitrate = AudioConstants.NormalizeBitrate(cached.Bitrate);
-                return string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
+                return f.Format == cached.Format &&
                        normalizedFormatBitrate == normalizedCachedBitrate;
             });
 
-            f.IsActive = string.Equals(f.Codec, currentFormat, StringComparison.OrdinalIgnoreCase) &&
+            f.IsActive = f.Format == currentFormat &&
                          normalizedFormatBitrate == normalizedCurrentBitrate;
 
             AvailableFormats.Add(f);
@@ -1380,8 +1380,7 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
 
         bool hasValidPhysicalFormats = formats.Any(f =>
             f.SizeMb > 0 &&
-            !string.Equals(f.Container, "m3u8", StringComparison.OrdinalIgnoreCase) &&
-            !f.Codec.Contains("HLS", StringComparison.OrdinalIgnoreCase));
+            f.Format != AudioFormat.Hls);
 
         if (hasError || !hasValidPhysicalFormats)
         {
@@ -1460,17 +1459,21 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
         Log.Debug("[PlayerBar] Restricted tracks cache cleared due to AuthState change.");
     }
 
-    private void OnFormatCached(string trackId, string container, int bitrate, bool isDownloaded)
+    private void OnFormatCached(string trackId, AudioFormat format, int bitrate, bool isDownloaded)
     {
         if (CurrentTrack == null || CurrentTrack.Id != trackId) return;
 
+        int normalizedIncomingBitrate = AudioConstants.NormalizeBitrate(bitrate);
         bool found = false;
-        foreach (var format in AvailableFormats)
+
+        foreach (var streamFormat in AvailableFormats)
         {
-            if (string.Equals(format.Container, container, StringComparison.OrdinalIgnoreCase) &&
-                (int)format.Bitrate == bitrate)
+            int normalizedFormatBitrate = AudioConstants.NormalizeBitrate((int)streamFormat.Bitrate);
+
+            if (streamFormat.Format == format &&
+                normalizedFormatBitrate == normalizedIncomingBitrate)
             {
-                format.IsDownloaded = isDownloaded;
+                streamFormat.IsDownloaded = isDownloaded;
                 found = true;
                 break;
             }

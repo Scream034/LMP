@@ -203,8 +203,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         }
 
         var settings = _libraryService.Settings.Audio;
-        if (settings.PlayErrorSound)
-            _notificationService.PlayErrorSound();
+        _notificationService.TryPlayErrorSound();
 
         var messageKey = GetLoginRequiredMessageKey(exception);
         var recommendationKey = GetRecommendation(exception);
@@ -277,8 +276,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
 
         await InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
 
-        if (settings.PlayErrorSound)
-            _notificationService.PlayErrorSound();
+        _notificationService.TryPlayErrorSound();
 
         var messageKey = GetLoginRequiredMessageKey(exception);
         var recommendationKey = GetRecommendation(exception);
@@ -362,8 +360,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
             ? "Recommendation_DpiBlocked"
             : GetRecommendation(exception);
 
-        if (settings.PlayErrorSound)
-            _notificationService.PlayErrorSound();
+        _notificationService.TryPlayErrorSound();
 
         var severity = NotificationSeverity.Error;
         int duration = behavior == PlaybackErrorBehavior.Dialog ? DialogToastDurationMs : SkipToastDurationMs;

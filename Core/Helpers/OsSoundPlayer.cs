@@ -5,7 +5,7 @@ namespace LMP.Core.Helpers;
 /// <summary>
 /// Воспроизводит системные звуки.
 /// </summary>
-public static partial class ErrorSoundPlayer
+public static partial class OsSoundPlayer
 {
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

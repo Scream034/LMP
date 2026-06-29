@@ -117,7 +117,7 @@ public sealed partial class AudioEngine
         {
             cacheEntry = FindNormalizationCacheEntry(track.Id);
             if (cacheEntry != null)
-                TryHydrateTrackNormalizationFromCache(track, cacheEntry);
+                TrackNormalizationHydrator.HydrateNormalization(track, cacheEntry);
         }
 
         float cachedGain = normConfig.Enabled
@@ -189,56 +189,65 @@ public sealed partial class AudioEngine
     }
 
     /// <summary>
-    /// Синхронно дренирует очередь отложенных записей gain нормализации в БД.
-    /// Используется только в sync shutdown-path как best-effort fallback.
+    /// Синхронно сохраняет все отложенные записи коэффициента усиления в базу данных.
+    /// <para>Вызывается в процессе закрытия приложения как экстренный fallback-сценарий.</para>
     /// </summary>
     private void FlushPendingGainWritesSync()
     {
         if (_pendingGainWrites.IsEmpty) return;
 
-        _gainBatch.Clear();
-        while (_pendingGainWrites.TryDequeue(out var pending))
-            _gainBatch[pending.TrackId] = pending.Gain;
-
-        if (_gainBatch.Count == 0) return;
-
-        foreach (var (trackId, gain) in _gainBatch)
+        // Потокобезопасная синхронизация общего не-threadsafe словаря
+        lock (_gainBatch)
         {
-            try
+            _gainBatch.Clear();
+            while (_pendingGainWrites.TryDequeue(out var pending))
+                _gainBatch[pending.TrackId] = pending.Gain;
+
+            if (_gainBatch.Count == 0) return;
+
+            foreach (var (trackId, gain) in _gainBatch)
             {
-                var track = _trackRegistry.TryGet(trackId) ?? _library.GetTrack(trackId);
-                if (track != null)
+                try
                 {
-                    _library.AddOrUpdateTrackAsync(track, CancellationToken.None)
-                        .ConfigureAwait(false)
-                        .GetAwaiter()
-                        .GetResult();
+                    var track = _trackRegistry.TryGet(trackId) ?? _library.GetTrack(trackId);
+                    if (track != null)
+                    {
+                        _library.AddOrUpdateTrackAsync(track, CancellationToken.None)
+                            .ConfigureAwait(false)
+                            .GetAwaiter()
+                            .GetResult();
+                    }
+                    else
+                    {
+                        _library.SaveTrackNormalizationGainAsync(trackId, gain, CancellationToken.None)
+                            .ConfigureAwait(false)
+                            .GetAwaiter()
+                            .GetResult();
+                    }
                 }
-                else
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _library.SaveTrackNormalizationGainAsync(trackId, gain, CancellationToken.None)
-                        .ConfigureAwait(false)
-                        .GetAwaiter()
-                        .GetResult();
+                    Log.Warn($"[AudioEngine] Failed to sync persist gain for {trackId}: {ex.Message}");
                 }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                Log.Warn($"[AudioEngine] Failed to sync persist gain for {trackId}: {ex.Message}");
             }
         }
     }
 
     /// <summary>
-    /// Дренирует очередь отложенных записей gain нормализации в БД.
+    /// Асинхронно дренирует и сохраняет отложенные записи коэффициента усиления в БД.
     /// </summary>
+    /// <param name="ct">Токен отмены.</param>
     private async Task FlushPendingGainWritesAsync(CancellationToken ct)
     {
         if (_pendingGainWrites.IsEmpty) return;
 
-        _gainBatch.Clear();
-        while (_pendingGainWrites.TryDequeue(out var pending))
-            _gainBatch[pending.TrackId] = pending.Gain;
+        // Потокобезопасная синхронизация общего не-threadsafe словаря
+        lock (_gainBatch)
+        {
+            _gainBatch.Clear();
+            while (_pendingGainWrites.TryDequeue(out var pending))
+                _gainBatch[pending.TrackId] = pending.Gain;
+        }
 
         if (_gainBatch.Count == 0) return;
 
@@ -246,17 +255,13 @@ public sealed partial class AudioEngine
         {
             try
             {
-                // Исправление 3: Ищем трек напрямую в выделенном TrackRegistry,
-                // минимизируя шанс промаха из-за выгрузки WeakReference.
                 var track = _trackRegistry.TryGet(trackId) ?? _library.GetTrack(trackId);
                 if (track != null)
                 {
-                    // Гарантированно сохраняем сущность со всеми её метаданными через Upsert
                     await _library.AddOrUpdateTrackAsync(track, ct).ConfigureAwait(false);
                 }
                 else
                 {
-                    // Резервный путь точечного обновления существующей записи
                     await _library.SaveTrackNormalizationGainAsync(trackId, gain, ct).ConfigureAwait(false);
                 }
             }

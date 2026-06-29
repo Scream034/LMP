@@ -206,10 +206,11 @@ public sealed partial class AudioEngine
             else
             {
                 string rawId = next.GetRawIdSpan().ToString();
+                var hint = StreamSelectionHint.FromTrack(next, _library.Settings.RememberTrackFormat);
                 var descriptor = _youtube.TryGetCachedStreamDescriptor(
                     rawId,
-                    GetRequestedContainerHint(next),
-                    GetRequestedBitrateHint(next));
+                    hint.Format,
+                    hint.BitrateKbps);
 
                 if (descriptor is { HasLiveUrl: true } d)
                     targetUrl = d.Url;
