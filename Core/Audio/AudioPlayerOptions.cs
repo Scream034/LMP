@@ -1,3 +1,4 @@
+using LMP.Core.Audio.Normalization;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio;
@@ -47,10 +48,11 @@ public sealed class AudioPlayerOptions
     public Action<AudioPipeline, string?>? OnPipelineConfiguring { get; set; }
 
     /// <summary>
-    /// Callback фиксации gain нормализации.
-    /// Аргументы: trackId, locked gain.
+    /// Callback фиксации integrated loudness из EBU R128 анализа.
+    /// Вызывается после pre-scan или после завершения real-time фазы (~3 сек).
+    /// Аргументы: trackId, integrated LUFS, source.
     /// </summary>
-    public Action<string, float>? OnGainLocked { get; init; }
+    public Action<string, float, LoudnessSource>? OnIntegratedLufsResolved { get; init; }
 
     /// <summary>
     /// Callback для первичного получения continuation URL у partial-cache source.

@@ -106,22 +106,22 @@ public sealed class EbuR128Analyzer
     private volatile int _pendingNormReset;
 
     /// <summary>
-    /// Callback фиксации gain. Вызывается максимум один раз за pipeline.
+    /// Callback фиксации integrated LUFS. Вызывается максимум один раз за pipeline.
     /// Пишется до StartDecoding; читается из fill thread — volatile для visibility.
     /// </summary>
-    private volatile Action<float>? _onGainLocked;
+    private volatile Action<float>? _onIntegratedLufsResolved;
 
 #if DEBUG
     /// <summary>
     /// Последний залогированный gain из кэша. Используется для дедупликации
-    /// повторных вызовов <see cref="LockFromCachedGain"/> с тем же значением
+    /// повторных вызовов <see cref="LockResolvedGain"/> с тем же значением
     /// (возникает при повторных срабатываниях UI-биндингов в Settings).
     /// <para><c>float.NaN</c> = ещё не логировался (начальное состояние или после reset).</para>
     /// </summary>
     private float _lastLoggedCacheGain = float.NaN;
 
     /// <summary>
-    /// Последний залогированный mode при вызове <see cref="LockFromCachedGain"/>.
+    /// Последний залогированный mode при вызове <see cref="LockResolvedGain"/>.
     /// Вместе с <see cref="_lastLoggedCacheGain"/> образует ключ дедупликации.
     /// </summary>
     private NormalizationMode _lastLoggedCacheMode;
@@ -261,8 +261,8 @@ public sealed class EbuR128Analyzer
         _mode = cfg.Mode;
     }
 
-    /// <summary>Устанавливает callback фиксации gain (для персистирования в БД).</summary>
-    public void SetGainLockedCallback(Action<float>? callback) => _onGainLocked = callback;
+    /// <summary>Устанавливает callback фиксации integrated LUFS (для persistence в БД).</summary>
+    public void SetIntegratedLufsCallback(Action<float>? callback) => _onIntegratedLufsResolved = callback;
 
     /// <summary>
     /// Устанавливает начальный gain от предыдущего трека.
@@ -287,22 +287,10 @@ public sealed class EbuR128Analyzer
     #region Gain Locking
 
     /// <summary>
-    /// Применяет предзагруженный gain без вызова <see cref="_onGainLocked"/>.
+    /// Применяет вычисленный runtime-gain без дополнительных событий.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Исправление stale _mode race:</b> <see cref="_mode"/> обновляется
-    /// лениво fill thread'ом через <see cref="ApplyPendingConfig"/>.
-    /// При вызове из command thread сразу после <see cref="Configure"/>
-    /// <see cref="_mode"/> содержит старое значение.
-    /// Метод читает mode из <see cref="_pendingConfig"/> если он есть —
-    /// это гарантирует применение <b>нового</b> mode к gain constraint.</para>
-    ///
-    /// <para><b>Лог-дедупликация:</b> Повторные вызовы с тем же gain/mode
-    /// (типично при UI-биндингах Settings слайдеров) не порождают лог-строк.
-    /// Dedup сбрасывается в <see cref="ExecuteReset"/> при смене трека.</para>
-    /// </remarks>
-    /// <param name="gain">Linear gain из кэша или из <see cref="NormalizationGainResolver"/>.</param>
-    public void LockFromCachedGain(float gain)
+    /// <param name="gain">Linear gain</param>
+    public void LockResolvedGain(float gain)
     {
         if (!_enabled) return;
         if (gain <= 0f || !float.IsFinite(gain)) return;
@@ -357,8 +345,6 @@ public sealed class EbuR128Analyzer
         _lockedGain = gain;
         // Намеренно НЕ обновляем _smoothedNormGain здесь.
         // GainCrossfader в AudioPipeline плавно перейдёт к новому значению.
-
-        _onGainLocked?.Invoke(gain);
     }
 
     /// <summary>
@@ -434,12 +420,20 @@ public sealed class EbuR128Analyzer
         long analysisThreshold = (long)(_sampleRate * AnalysisPhaseSeconds);
         if (_normalizationProcessedFrames >= analysisThreshold)
         {
+            float integratedLufs = ComputeIntegratedLufsFromBlocks(
+                _gatingBlockPowers, _gatingBlockCount);
             float rawGain = ComputeIntegratedGainFromBlocks(
                 _gatingBlockPowers, _gatingBlockCount, _targetLufs, _maxGain);
             _kWeightFilter.Reset();
+
+            // Публикуем measured LUFS для persistence до LockGain,
+            // чтобы persistence callback видел актуальный trackId
+            if (float.IsFinite(integratedLufs))
+                _onIntegratedLufsResolved?.Invoke(integratedLufs);
+
             LockGain(rawGain);
 
-            Log.Debug($"[EbuR128] Real-time locked: gain={_lockedGain:F3}x " +
+            Log.Debug($"[EbuR128] Real-time locked: gain={_lockedGain:F3}x, lufs={integratedLufs:F2} " +
                       $"(analyzed {_normalizationProcessedFrames / (double)_sampleRate:F1}s, " +
                       $"blocks={_gatingBlockCount}, mode={_mode})");
             return _lockedGain;
@@ -528,11 +522,16 @@ public sealed class EbuR128Analyzer
             totalFrames += framesToProcess;
         }
 
+        float integratedLufs = ComputeIntegratedLufsFromBlocks(blockPowers, blockCount);
         float rawGain = ComputeIntegratedGainFromBlocks(blockPowers, blockCount, _targetLufs, _maxGain);
+
+        // Публикуем measured LUFS для persistence (вызывается max 1 раз за pipeline)
+        if (float.IsFinite(integratedLufs))
+            _onIntegratedLufsResolved?.Invoke(integratedLufs);
 
 #if DEBUG
         double scannedSeconds = totalFrames / (double)_sampleRate;
-        Log.Debug($"[EbuR128] Pre-scan: gain={rawGain:F3}x " +
+        Log.Debug($"[EbuR128] Pre-scan: gain={rawGain:F3}x, lufs={integratedLufs:F2} " +
                   $"(scanned {scannedSeconds:F1}s, blocks={blockCount}, target={_targetLufs}LUFS)");
 #endif
 
@@ -685,19 +684,52 @@ public sealed class EbuR128Analyzer
     }
 
     /// <summary>
+    /// Вычисляет integrated LUFS из массива gating block powers (EBU R128).
+    /// Применяет absolute gate (-70 LUFS) и relative gate (-10 LU).
+    /// </summary>
+    /// <param name="blockPowers">Массив mean channel power каждого 400ms gating block.</param>
+    /// <param name="blockCount">Количество заполненных gating blocks.</param>
+    /// <returns>Integrated LUFS или <c>float.NaN</c> если блоков нет.</returns>
+    internal static float ComputeIntegratedLufsFromBlocks(double[] blockPowers, int blockCount)
+    {
+        if (blockCount == 0)
+            return float.NaN;
+
+        double sumPower = 0.0;
+        for (int i = 0; i < blockCount; i++)
+            sumPower += blockPowers[i];
+
+        double meanPower = sumPower / blockCount;
+        double integratedLufs = LufsOffset + 10.0 * Math.Log10(Math.Max(meanPower, 1e-20));
+
+        // Relative gating (−10 LU)
+        double relThreshold = integratedLufs + RelativeGateOffsetLu;
+        double relPowerThreshold = Math.Pow(10.0, (relThreshold - LufsOffset) / 10.0);
+
+        double gatedSum = 0.0;
+        int gatedCount = 0;
+        for (int i = 0; i < blockCount; i++)
+        {
+            if (blockPowers[i] >= relPowerThreshold)
+            {
+                gatedSum += blockPowers[i];
+                gatedCount++;
+            }
+        }
+
+        if (gatedCount > 0)
+        {
+            meanPower = gatedSum / gatedCount;
+            integratedLufs = LufsOffset + 10.0 * Math.Log10(Math.Max(meanPower, 1e-20));
+        }
+
+        return (float)integratedLufs;
+    }
+
+    /// <summary>
     /// Вычисляет integrated LUFS gain из массива gating block powers (EBU R128).
     /// Возвращает RAW gain БЕЗ применения mode constraint.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Почему без DownwardOnly constraint:</b> Этот gain персистируется в БД
-    /// как <see cref="TrackInfo.CachedNormalizationGain"/>. Если применить DownwardOnly
-    /// clamp (1.0) до персистенции, при переключении на Bidirectional потерянный
-    /// raw gain (например 1.710) невозможно восстановить — тихий трек навсегда
-    /// останется без буста.</para>
-    /// <para>Mode constraint применяется на этапе ИСПОЛЬЗОВАНИЯ:
-    /// <see cref="NormalizationGainResolver.ApplyConstraints"/>,
-    /// <see cref="ComputeProvisionalGain"/>, <see cref="LockFromCachedGain"/>.</para>
-    /// </remarks>
     internal static float ComputeIntegratedGainFromBlocks(
         double[] blockPowers, int blockCount, float targetLufs, float maxGain)
     {

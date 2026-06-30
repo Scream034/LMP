@@ -671,7 +671,6 @@ public partial class YoutubeProvider : IDisposable
             PerformForceRefreshReset(rawVideoId, track.Id);
         }
 
-        // 1) EXACT FULL DISK CACHE (0 сети)
         if (!forceRefresh && requested.HasFormat && requested.HasBitrate)
         {
             string cacheKey = AudioSourceFactory.BuildCacheKey(track.Id, requested.Format!.Value, requested.BitrateKbps);
@@ -688,7 +687,6 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
-        // 2) ANY FULL DISK CACHE (0 сети, если формат не важен)
         if (!forceRefresh && requested.HasFormat)
         {
             var anyCache = AudioSourceFactory.FindAnyCachedTrack(rawVideoId);
@@ -700,7 +698,6 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
-        // 3) RAM MANIFEST CACHE (0 сети, все форматы)
         if (!forceRefresh && _manifestRamCache.TryGetValue(track.Id, out var ramManifest))
         {
             var d = SelectFromManifest(ramManifest, track.Id, requested.Format, requested.BitrateKbps);
@@ -711,7 +708,6 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
-        // 4) DISK MANIFEST CACHE с probe (1 HEAD, 0 API)
         if (!forceRefresh)
         {
             var diskEntry = await SessionCacheStore
@@ -732,7 +728,6 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
-        // 5) YOUTUBE API (1 запрос = полный список)
         ThrowIfInCooldown();
 
         try
@@ -749,9 +744,8 @@ public partial class YoutubeProvider : IDisposable
             if (audioStreams.Count == 0)
                 throw new StreamUnavailableException($"No audio streams for {rawVideoId}", rawVideoId, StreamUnavailableReason.AllClientsFailed);
 
-            // Сохраняем полный манифест в RAM и на диск
             _manifestRamCache[track.Id] = manifest;
-            SessionCacheStore.RecordManifest(track.Id, audioStreams);
+            SessionCacheStore.RecordManifest(track.Id, audioStreams, manifest.IntegratedLufs);
 
             var descriptor = SelectFromManifest(manifest, track.Id, requested.Format, requested.BitrateKbps);
             if (descriptor == null)
@@ -786,7 +780,6 @@ public partial class YoutubeProvider : IDisposable
         string trackId = videoId.StartsWith("yt_", StringComparison.Ordinal) ? videoId : $"yt_{videoId}";
         string rawId = videoId.StartsWith("yt_", StringComparison.Ordinal) ? videoId[3..] : videoId;
 
-        // 1. RAM cache
         if (_manifestRamCache.TryGetValue(trackId, out var ramManifest))
         {
             var options = MapManifestToOptions(ramManifest);
@@ -794,7 +787,6 @@ public partial class YoutubeProvider : IDisposable
             return options;
         }
 
-        // 2. Disk cache (без probe — для UI не критично если ссылки протухли, при клике перекачаем)
         var diskEntry = SessionCacheStore.GetManifest(trackId);
         if (diskEntry is { Variants.Count: > 0 })
         {
@@ -806,7 +798,6 @@ public partial class YoutubeProvider : IDisposable
             return options;
         }
 
-        // 3. Network fallback
         try
         {
             var vId = VideoId.Parse(rawId);
@@ -821,7 +812,7 @@ public partial class YoutubeProvider : IDisposable
             if (audioStreams.Count > 0)
             {
                 _manifestRamCache[trackId] = manifest;
-                SessionCacheStore.RecordManifest(trackId, audioStreams);
+                SessionCacheStore.RecordManifest(trackId, audioStreams, manifest.IntegratedLufs);
             }
 
             return MapManifestToOptions(manifest);
@@ -909,34 +900,6 @@ public partial class YoutubeProvider : IDisposable
     private static AudioCodec DetermineCodec(AudioOnlyStreamInfo stream, AudioFormat format)
     {
         return stream.AudioCodec.ToAudioCodec(format);
-    }
-
-    /// <summary>
-    /// Выполняет точечный запрос к InnerTube API для получения громкости трека (loudnessDb).
-    /// </summary>
-    public async ValueTask<float> GetLoudnessDbOnlyAsync(string videoId, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(videoId))
-            return float.NaN;
-
-        try
-        {
-            var vId = VideoId.Parse(videoId);
-            var client = GetClient();
-            var response = await client.Videos.GetPlayerResponseAsync(vId, ct).ConfigureAwait(false);
-            float loudnessDb = response.LoudnessDb;
-
-            if (float.IsFinite(loudnessDb))
-                AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(videoId, loudnessDb);
-
-            return loudnessDb;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            Log.Debug($"[YouTube] GetLoudnessDbOnlyAsync failed for {videoId}: {ex.Message}");
-            return float.NaN;
-        }
     }
 
     #endregion
@@ -1811,10 +1774,13 @@ public partial class YoutubeProvider : IDisposable
         var selected = SelectBestStream(streams, targetFormat, targetBitrate);
         if (selected == null) return null;
 
-        return CreateDescriptorFromStream(trackId, selected);
+        return CreateDescriptorFromStream(trackId, selected, manifest.IntegratedLufs);
     }
 
-    private ResolvedStreamDescriptor CreateDescriptorFromStream(string trackId, AudioOnlyStreamInfo stream)
+    private ResolvedStreamDescriptor CreateDescriptorFromStream(
+         string trackId,
+         AudioOnlyStreamInfo stream,
+         float perceptualLufs)
     {
         var url = stream.Url;
         var format = YoutubeIdHelper.MapContainerToFormat(stream.Container.Name);
@@ -1840,7 +1806,7 @@ public partial class YoutubeProvider : IDisposable
             ContentLengthBytes = stream.Size.Bytes,
             CdnHost = cdnHost,
             ExpireUtc = expireUtc,
-            LoudnessDb = stream.LoudnessDb,
+            IntegratedLufs = perceptualLufs,
             LanguageCode = stream.AudioLanguage?.Code,
             IsDefaultLanguage = stream.IsAudioLanguageDefault ?? false,
             Origin = StreamSource.YouTubeApi
@@ -1884,11 +1850,10 @@ public partial class YoutubeProvider : IDisposable
                 v.Codec,
                 lang,
                 v.IsDefaultLanguage,
-                hasEncryptedNToken: false,
-                v.LoudnessDb));
+                hasEncryptedNToken: false));
         }
 
-        return new StreamManifest(streams);
+        return new StreamManifest(streams, entry.IntegratedLufs);
     }
 
     private static List<StreamOption> MapManifestToOptions(StreamManifest manifest)

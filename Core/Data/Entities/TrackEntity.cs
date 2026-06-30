@@ -22,9 +22,15 @@ public sealed class TrackEntity
     public string? RadioSeedId { get; set; }
 
     /// <summary>
-    /// Кэшированное линейное усиление нормализации, вычисленное EBU R128.
+    /// Измеренная integrated loudness трека в LUFS.
+    /// Новое canonical-поле для будущей LUFS-модели.
     /// </summary>
-    public float? CachedNormalizationGain { get; set; }
+    public float? IntegratedLufs { get; set; }
+
+    /// <summary>
+    /// Источник значения <see cref="IntegratedLufs"/>.
+    /// </summary>
+    public int IntegratedLufsSource { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

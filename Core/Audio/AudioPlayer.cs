@@ -697,10 +697,11 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
             _options.OnPipelineConfiguring?.Invoke(pipeline, cmd.Descriptor.TrackId);
 
             var lockedTrackId = cmd.Descriptor.TrackId;
-            if (lockedTrackId != null && _options.OnGainLocked != null)
+            if (lockedTrackId != null && _options.OnIntegratedLufsResolved != null)
             {
-                var cb = _options.OnGainLocked;
-                pipeline.Analyzer.SetGainLockedCallback(g => cb(lockedTrackId, g));
+                var lufsCb = _options.OnIntegratedLufsResolved;
+                pipeline.Analyzer.SetIntegratedLufsCallback(
+                    lufs => lufsCb(lockedTrackId, lufs, Normalization.LoudnessSource.EbuPreScan));
             }
 
             if (pipeline.IsDeviceLost)

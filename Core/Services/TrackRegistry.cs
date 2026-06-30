@@ -87,6 +87,7 @@ public sealed class TrackRegistry
 
     /// <summary>
     /// Дополняет рантайм-модель трека статусом локального кэша и metadata нормализации.
+    /// В LUFS-модели source of truth — только <see cref="TrackInfo.IntegratedLufs"/>.
     /// </summary>
     /// <param name="track">Канонический экземпляр трека.</param>
     /// <param name="audioCache">Менеджер аудио-кэша.</param>
@@ -104,7 +105,7 @@ public sealed class TrackRegistry
                 track.MarkAsCached(completeEntry.Format, completeEntry.Bitrate);
         }
 
-        if (track.HasCachedNormalizationGain && track.HasYoutubeLoudnessDb)
+        if (track.HasIntegratedLufs)
             return;
 
         var metadataEntry = completeEntry

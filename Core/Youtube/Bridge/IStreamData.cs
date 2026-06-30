@@ -35,11 +35,4 @@ internal interface IStreamData
     int? VideoHeight { get; }
 
     int? VideoFramerate { get; }
-
-    /// <summary>
-    /// Content loudness relative to the YouTube reference level (-14 LUFS), in dB.
-    /// Present only on audio streams; absent on video-only streams and some live formats.
-    /// <c>float.NaN</c> when the field is missing in the InnerTube response.
-    /// </summary>
-    float LoudnessDb { get; }
 }

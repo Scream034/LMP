@@ -16,7 +16,6 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        // === Track ===
         modelBuilder.Entity<TrackEntity>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -25,13 +24,13 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.Property(e => e.Author).HasMaxLength(256);
             entity.Property(e => e.Url).HasMaxLength(512);
             entity.Property(e => e.ThumbnailUrl).HasMaxLength(512);
+            entity.Property(e => e.IntegratedLufsSource).HasDefaultValue(0);
 
             entity.HasIndex(e => e.IsDownloaded);
             entity.HasIndex(e => e.UpdatedAt);
             entity.HasIndex(e => new { e.Title, e.Author });
         });
 
-        // === Liked Tracks ===
         modelBuilder.Entity<LikedTrackEntity>(entity =>
         {
             entity.HasKey(e => new { e.OwnerId, e.TrackId });
@@ -46,7 +45,6 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.HasIndex(e => e.OwnerId);
         });
 
-        // === Playlist ===
         modelBuilder.Entity<PlaylistEntity>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -57,8 +55,6 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.Property(e => e.Description).HasMaxLength(2000);
             entity.Property(e => e.OwnerId).HasMaxLength(128).HasDefaultValue("");
 
-            // EF Core 8 хранит DateOnly как TEXT "yyyy-MM-dd" в SQLite.
-            // Явный конвертер гарантирует корректное чтение после миграции с legacy-строк.
             entity.Property(e => e.ReleaseDate)
                 .HasConversion(
                     v => v.HasValue ? v.Value.ToString("yyyy-MM-dd") : null,
@@ -67,7 +63,6 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.HasIndex(e => e.OwnerId);
         });
 
-        // === PlaylistTrack (Junction Table) ===
         modelBuilder.Entity<PlaylistTrackEntity>(entity =>
         {
             entity.HasKey(e => new { e.PlaylistId, e.TrackId });
@@ -87,7 +82,6 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.Property(e => e.SetVideoId).HasMaxLength(128);
         });
 
-        // === RecentlyPlayed ===
         modelBuilder.Entity<RecentlyPlayedEntity>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -99,14 +93,12 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.HasIndex(e => e.OwnerId);
         });
 
-        // === Settings ===
         modelBuilder.Entity<SettingEntity>(entity =>
         {
             entity.HasKey(e => e.Key);
             entity.Property(e => e.Key).HasMaxLength(128);
         });
 
-        // === Notifications ===
         modelBuilder.Entity<NotificationEntity>(entity =>
         {
             entity.HasKey(e => e.Id);

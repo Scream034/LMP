@@ -29,11 +29,6 @@ public interface IStreamInfo
     /// Stream bitrate
     /// </summary>
     Bitrate Bitrate { get; }
-
-    /// <summary>
-    /// Loudness Db
-    /// </summary>
-    float LoudnessDb { get; }
 }
 
 public static class StreamInfoExtensions

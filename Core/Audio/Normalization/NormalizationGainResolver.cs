@@ -1,41 +1,12 @@
 namespace LMP.Core.Audio.Normalization;
 
 /// <summary>
-/// Единственный источник истины для резолюции gain нормализации трека
-/// с учётом текущей конфигурации нормализации.
-///
-/// <para><b>Иерархия источников (приоритет по убыванию):</b></para>
-/// <list type="number">
-///   <item><b>EBU R128 gain</b> (<see cref="TrackInfo.CachedNormalizationGain"/>):
-///     вычислен полным анализом для конкретного трека. Наиболее точный.</item>
-///   <item><b>YouTube loudnessDb</b> (<see cref="TrackInfo.YoutubeIntegratedLoudnessDb"/>):
-///     энкодирует интегральную громкость трека относительно -14 LUFS.
-///     Конвертируется для ЛЮБОГО targetLufs и ЛЮБОГО режима через единую формулу.</item>
-///   <item><b>float.NaN</b>: требуется EBU R128 анализ.</item>
-/// </list>
-///
-/// <para><b>Математическое обоснование совместимости YouTube с Bidirectional:</b></para>
-/// <para>YouTube определяет: <c>loudnessDb = trackLufs - YouTubeTarget = trackLufs + 14</c>.</para>
-/// <para>Отсюда: <c>trackLufs = loudnessDb - 14</c>.</para>
-/// <para>Gain для любого targetLufs:</para>
-/// <code>gainDb = targetLufs - trackLufs = targetLufs - loudnessDb + 14</code>
-/// <para>Примеры при target = -14 LUFS:</para>
-/// <list type="bullet">
-///   <item>Громкий трек: loudnessDb=+8.29 → gainDb = -14 - 8.29 + 14 = -8.29 dB → gain=0.385 (аттенуация) ✓</item>
-///   <item>Тихий трек: loudnessDb=-4.66 → gainDb = -14 + 4.66 + 14 = +4.66 dB → gain=1.710 (буст) ✓</item>
-/// </list>
-/// <para>При target = -12 LUFS тихий трек: gainDb = -12 + 4.66 + 14 = +6.66 dB → gain=2.15 — корректно больше.</para>
-///
-/// <para><b>Stateless, pure function.</b></para>
+/// Единственный источник истины для runtime-вычисления gain нормализации.
+/// <para>Stateless, pure function. Gain вычисляется исключительно из <see cref="TrackInfo.IntegratedLufs"/>
+/// и текущего <see cref="NormalizationConfig"/>.</para>
 /// </summary>
 public static class NormalizationGainResolver
 {
-    /// <summary>
-    /// Фиксированный reference level YouTube (дБ).
-    /// YouTube измеряет: <c>loudnessDb = trackLufs − YouTubeReferenceLufs</c>.
-    /// </summary>
-    private const float YouTubeReferenceLufs = -14f;
-
     /// <summary>
     /// Резолвит линейный gain нормализации с учётом конфигурации.
     /// </summary>
@@ -46,66 +17,24 @@ public static class NormalizationGainResolver
     /// </returns>
     public static float Resolve(TrackInfo? track, NormalizationConfig config)
     {
-        if (track == null || !config.Enabled)
+        if (track == null || !config.Enabled || !track.HasIntegratedLufs)
             return float.NaN;
 
-        return Resolve(
-            track.HasCachedNormalizationGain ? track.CachedNormalizationGain : null,
-            track.HasYoutubeLoudnessDb ? track.YoutubeIntegratedLoudnessDb : null,
-            config);
+        return ComputeGainFromIntegratedLufs(track.IntegratedLufs, config);
     }
 
     /// <summary>
-    /// Резолвит линейный gain нормализации из raw metadata источников.
+    /// Вычисляет линейный gain из canonical integrated LUFS.
     /// </summary>
-    /// <param name="cachedNormalizationGain">
-    /// Persisted EBU R128 gain, если он уже был вычислен ранее.
-    /// </param>
-    /// <param name="youtubeIntegratedLoudnessDb">
-    /// Сырое значение <c>loudnessDb</c> из YouTube InnerTube API.
-    /// </param>
+    /// <param name="integratedLufs">Integrated loudness трека в LUFS.</param>
     /// <param name="config">Текущая конфигурация нормализации.</param>
-    /// <returns>
-    /// Линейный gain если источник найден; <c>float.NaN</c> если требуется EBU R128 анализ.
-    /// </returns>
-    public static float Resolve(
-        float? cachedNormalizationGain,
-        float? youtubeIntegratedLoudnessDb,
-        NormalizationConfig config)
+    /// <returns>Линейный gain.</returns>
+    public static float ComputeGainFromIntegratedLufs(float integratedLufs, NormalizationConfig config)
     {
-        if (!config.Enabled)
+        if (!config.Enabled || !float.IsFinite(integratedLufs))
             return float.NaN;
 
-        // Приоритет 1: YouTube loudness — ground truth, пересчитывается
-        // для текущего targetLufs и mode динамически.
-        if (youtubeIntegratedLoudnessDb is float loudnessDb && float.IsFinite(loudnessDb))
-            return ComputeGainFromYoutubeLoudness(loudnessDb, config);
-
-        // Приоритет 2: cached EBU R128 gain — fallback когда YouTube loudness недоступен.
-        if (cachedNormalizationGain is float gain && float.IsFinite(gain) && gain > 0f)
-            return ApplyConstraints(gain, config);
-
-        return float.NaN;
-    }
-
-    /// <summary>
-    /// Вычисляет линейный gain из YouTube loudnessDb для текущей конфигурации.
-    /// </summary>
-    /// <remarks>
-    /// <para>YouTube определяет: <c>loudnessDb = trackLufs − (−14) = trackLufs + 14</c>.</para>
-    /// <para>Поэтому: <c>trackLufs = loudnessDb − 14</c>.</para>
-    /// <para>Gain для userTargetLufs:
-    ///   <c>gainDb = userTargetLufs − trackLufs = userTargetLufs − loudnessDb + 14</c>.</para>
-    /// <para>Верификация при target=−14:</para>
-    /// <list type="bullet">
-    ///   <item>loudnessDb=+8.29: gainDb = −14 − 8.29 + 14 = −8.29 dB → 0.385× (аттенуация) ✓</item>
-    ///   <item>loudnessDb=−4.66: gainDb = −14 − (−4.66) + 14 = +4.66 dB → 1.710× (буст) ✓</item>
-    /// </list>
-    /// </remarks>
-    private static float ComputeGainFromYoutubeLoudness(float loudnessDb, NormalizationConfig config)
-    {
-        // gainDb = targetLufs − trackLufs, где trackLufs = loudnessDb + YouTubeReferenceLufs
-        float gainDb = config.TargetLufs - loudnessDb - YouTubeReferenceLufs;
+        float gainDb = config.TargetLufs - integratedLufs;
         float gain = MathF.Pow(10f, gainDb / 20f);
         return ApplyConstraints(gain, config);
     }

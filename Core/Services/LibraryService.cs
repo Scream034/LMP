@@ -488,9 +488,19 @@ public sealed class LibraryService : IAsyncDisposable
         return filtered;
     }
 
-    /// <summary>Сохраняет вычисленный gain нормализации трека в БД.</summary>
-    public Task SaveTrackNormalizationGainAsync(string trackId, float gain, CancellationToken ct = default) =>
-        _tracks.SaveNormalizationGainAsync(trackId, gain, ct);
+    /// <summary>
+    /// Сохраняет track-level integrated loudness и её источник в БД.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    /// <param name="integratedLufs">Integrated loudness в LUFS.</param>
+    /// <param name="source">Источник значения.</param>
+    /// <param name="ct">Токен отмены.</param>
+    public Task SaveTrackNormalizationMetadataAsync(
+        string trackId,
+        float integratedLufs,
+        int source,
+        CancellationToken ct = default) =>
+        _tracks.SaveNormalizationMetadataAsync(trackId, integratedLufs, source, ct);
 
     #endregion
 

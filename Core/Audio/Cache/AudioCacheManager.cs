@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Win32.SafeHandles;
 using LMP.Core.Audio.Interfaces;
 using static LMP.Core.Audio.AudioConstants;
+using LMP.Core.Audio.Normalization;
 
 namespace LMP.Core.Audio.Cache;
 
@@ -19,9 +20,10 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// <list type="bullet">
     ///   <item><b>1</b> — legacy chunk-based: <c>ChunkMaskData</c>, <c>TotalChunks</c>, <c>ChunkSize</c>.</item>
     ///   <item><b>2</b> — range-based: <c>DownloadedRangesData</c>, <c>AlignmentBytes</c>.</item>
+    ///   <item><b>3</b> — lufs нормализация без сохранения gain.</item>
     /// </list>
     /// </remarks>
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
 
     /// <summary>
     /// Обёртка индекса кэша с версионированием схемы.
@@ -168,54 +170,35 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// Пытается сохранить persisted EBU R128 gain в metadata лучшего кэша трека.
+    /// Пытается сохранить integrated loudness в metadata лучшего кэша трека.
+    /// Пока additive-path: старая gain-модель не затрагивается.
     /// </summary>
     /// <param name="trackId">Идентификатор трека.</param>
-    /// <param name="gain">Линейный gain нормализации.</param>
+    /// <param name="integratedLufs">Integrated loudness в LUFS.</param>
+    /// <param name="source">Источник loudness.</param>
     /// <returns><c>true</c>, если metadata была обновлена.</returns>
-    public bool TryUpdateNormalizationGain(string trackId, float gain)
+    public bool TryUpdateIntegratedLufs(string trackId, float integratedLufs, LoudnessSource source)
     {
-        if (string.IsNullOrEmpty(trackId) || !float.IsFinite(gain) || gain <= 0f)
+        if (string.IsNullOrEmpty(trackId) || !float.IsFinite(integratedLufs))
             return false;
 
         var entry = FindBestCache(trackId) ?? FindBestStartupCache(trackId, 0);
         if (entry == null)
             return false;
 
-        if (entry.CachedNormalizationGain is float existingGain
-            && MathF.Abs(existingGain - gain) < 0.001f)
+        var existingSource = (LoudnessSource)entry.IntegratedLufsSource;
+        if (existingSource > source)
+            return false;
+
+        if (entry.IntegratedLufs is float existingLufs
+            && MathF.Abs(existingLufs - integratedLufs) < 0.01f
+            && existingSource == source)
         {
             return false;
         }
 
-        entry.CachedNormalizationGain = gain;
-        entry.LastAccessedAt = DateTime.UtcNow;
-        _ = SaveIndexAsync();
-        return true;
-    }
-
-    /// <summary>
-    /// Пытается сохранить сырое значение <c>loudnessDb</c> YouTube в metadata лучшего кэша трека.
-    /// </summary>
-    /// <param name="trackId">Идентификатор трека.</param>
-    /// <param name="loudnessDb">Сырое значение <c>loudnessDb</c>.</param>
-    /// <returns><c>true</c>, если metadata была обновлена.</returns>
-    public bool TryUpdateYoutubeLoudnessDb(string trackId, float loudnessDb)
-    {
-        if (string.IsNullOrEmpty(trackId) || !float.IsFinite(loudnessDb))
-            return false;
-
-        var entry = FindBestCache(trackId) ?? FindBestStartupCache(trackId, 0);
-        if (entry == null)
-            return false;
-
-        if (entry.YoutubeIntegratedLoudnessDb is float existingLoudness
-            && MathF.Abs(existingLoudness - loudnessDb) < 0.01f)
-        {
-            return false;
-        }
-
-        entry.YoutubeIntegratedLoudnessDb = loudnessDb;
+        entry.IntegratedLufs = integratedLufs;
+        entry.IntegratedLufsSource = (int)source;
         entry.LastAccessedAt = DateTime.UtcNow;
         _ = SaveIndexAsync();
         return true;
@@ -1260,6 +1243,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             if (entries == null) return;
 
             bool needsMigration = loadedSchemaVersion < CurrentSchemaVersion;
+            bool needsLufsMigration = loadedSchemaVersion < 3;
             int migratedComplete = 0;
             int droppedPartial = 0;
 
@@ -1273,6 +1257,13 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
                 if (needsMigration)
                     MigrateEntry(entry, filePath, ref migratedComplete, ref droppedPartial);
+
+                // Инвалидация legacy normalization metadata ДО RestoreAfterLoad/добавления в _entries
+                if (needsLufsMigration)
+                {
+                    entry.IntegratedLufs = null;
+                    entry.IntegratedLufsSource = 0;
+                }
 
                 entry.RestoreAfterLoad();
 
@@ -1300,10 +1291,11 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                 AddToTrackIndex(entry.TrackId, entry.CacheKey);
             }
 
-            if (needsMigration || migratedComplete > 0)
+            if (needsMigration || needsLufsMigration || migratedComplete > 0)
             {
                 Log.Info($"[AudioCache] Schema migration v{loadedSchemaVersion}→v{CurrentSchemaVersion}: " +
-                         $"{migratedComplete} complete restored, {droppedPartial} partial reset");
+                         $"{migratedComplete} complete restored, {droppedPartial} partial reset" +
+                         (needsLufsMigration ? $", {entries.Count} normalization metadata reset (LUFS model)" : ""));
                 _ = SaveIndexAsync();
             }
 
@@ -1705,14 +1697,14 @@ public sealed class AudioCacheEntry
     public long ActualFileSize { get; set; }
 
     /// <summary>
-    /// Закэшированный linear gain нормализации, вычисленный EBU R128 анализом.
+    /// Новое canonical-поле integrated loudness трека в LUFS.
     /// </summary>
-    public float? CachedNormalizationGain { get; set; }
+    public float? IntegratedLufs { get; set; }
 
     /// <summary>
-    /// Сырое значение <c>loudnessDb</c> из YouTube InnerTube API.
+    /// Источник значения <see cref="IntegratedLufs"/>.
     /// </summary>
-    public float? YoutubeIntegratedLoudnessDb { get; set; }
+    public int IntegratedLufsSource { get; set; }
 
     /// <summary>
     /// Сериализуемые диапазоны локально скачанных данных.

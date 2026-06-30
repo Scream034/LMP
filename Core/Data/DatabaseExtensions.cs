@@ -3,20 +3,13 @@ using LMP.Core.Data.Entities;
 
 namespace LMP.Core.Data;
 
-/// <summary>
-/// Расширения контекста базы данных для выполнения безопасных миграций и оптимизаций.
-/// </summary>
 public static class DatabaseExtensions
 {
     /// <summary>
-    /// Константный номер текущей версии структуры базы данных LMP.
-    /// При его изменении старая схема будет пересоздана в чистое состояние с предварительным бэкапом.
+    /// Текущая версия схемы базы данных.
     /// </summary>
-    public const int CurrentDbVersion = 3;
+    public const int CurrentDbVersion = 4;
 
-    /// <summary>
-    /// Извлекает текущую версию схемы базы данных с использованием PRAGMA user_version.
-    /// </summary>
     public static async Task<int> GetDatabaseVersionAsync(this LibraryDbContext context, CancellationToken ct = default)
     {
         var connection = context.Database.GetDbConnection();
@@ -41,9 +34,6 @@ public static class DatabaseExtensions
         }
     }
 
-    /// <summary>
-    /// Сохраняет новую версию схемы базы данных с использованием PRAGMA user_version.
-    /// </summary>
     public static async Task SetDatabaseVersionAsync(this LibraryDbContext context, int version, CancellationToken ct = default)
     {
         var connection = context.Database.GetDbConnection();
@@ -67,12 +57,8 @@ public static class DatabaseExtensions
         }
     }
 
-    /// <summary>
-    /// Применяет инкрементные миграции схемы для существующих баз данных.
-    /// </summary>
     public static async Task MigrateSchemaAsync(this LibraryDbContext context, CancellationToken ct = default)
     {
-        // V1 → V2 migrations (existing)
         await AddColumnIfNotExistsAsync(context, "Playlists", "OwnerId", "TEXT NOT NULL DEFAULT ''", ct);
         await AddColumnIfNotExistsAsync(context, "RecentlyPlayed", "OwnerId", "TEXT NOT NULL DEFAULT ''", ct);
 
@@ -84,7 +70,6 @@ public static class DatabaseExtensions
         await EnsureLikedTracksTableAsync(context, ct);
         await MigrateLegacyLikesAsync(context, ct);
 
-        // V2 → V3: Playlist ownership, visibility, cloud state
         await AddColumnIfNotExistsAsync(context, "Playlists", "OwnerChannelId", "TEXT", ct);
         await AddColumnIfNotExistsAsync(context, "Playlists", "Ownership", "INTEGER NOT NULL DEFAULT 0", ct);
         await AddColumnIfNotExistsAsync(context, "Playlists", "Visibility", "INTEGER NOT NULL DEFAULT 0", ct);
@@ -94,18 +79,16 @@ public static class DatabaseExtensions
         await AddColumnIfNotExistsAsync(context, "Playlists", "ViewCount", "INTEGER", ct);
         await AddColumnIfNotExistsAsync(context, "Playlists", "ReleaseDate", "TEXT", ct);
 
+        await AddColumnIfNotExistsAsync(context, "Tracks", "IntegratedLufs", "REAL", ct);
+        await AddColumnIfNotExistsAsync(context, "Tracks", "IntegratedLufsSource", "INTEGER NOT NULL DEFAULT 0", ct);
+
         await context.Database.ExecuteSqlRawAsync(
             "UPDATE Playlists SET ReleaseDate = NULL WHERE ReleaseDate IS NOT NULL AND ReleaseDate NOT GLOB '????-??-??'",
-        ct).ConfigureAwait(false);
+            ct).ConfigureAwait(false);
 
         await MigrateCloudPublicOwnershipAsync(context, ct);
     }
 
-    /// <summary>
-    /// Мигрирует существующие CloudPublic плейлисты: устанавливает
-    /// <see cref="PlaylistOwnership.Foreign"/> и <see cref="PlaylistVisibility.Public"/>.
-    /// Идемпотентна: обновляет только записи с <c>Ownership = 0</c> (Unknown).
-    /// </summary>
     private static async Task MigrateCloudPublicOwnershipAsync(
         LibraryDbContext context, CancellationToken ct)
     {
@@ -122,8 +105,6 @@ public static class DatabaseExtensions
             try
             {
                 using var cmd = connection.CreateCommand();
-                // SyncMode=2 (CloudPublic) → Ownership=2 (Foreign), Visibility=3 (Public)
-                // Условие Ownership=0 гарантирует идемпотентность
                 cmd.CommandText =
                     "UPDATE Playlists SET Ownership = 2, Visibility = 3 WHERE SyncMode = 2 AND Ownership = 0";
 
@@ -143,9 +124,6 @@ public static class DatabaseExtensions
         }
     }
 
-    /// <summary>
-    /// Безопасно добавляет новую колонку в таблицу SQLite.
-    /// </summary>
     private static async Task AddColumnIfNotExistsAsync(
         LibraryDbContext context,
         string tableName,
@@ -202,9 +180,6 @@ public static class DatabaseExtensions
         }
     }
 
-    /// <summary>
-    /// Создает таблицу LikedTracks для многопользовательского разделения лайков.
-    /// </summary>
     private static async Task EnsureLikedTracksTableAsync(LibraryDbContext context, CancellationToken ct)
     {
         const string sql = """
@@ -220,9 +195,6 @@ public static class DatabaseExtensions
         await context.Database.ExecuteSqlRawAsync(sql, ct);
     }
 
-    /// <summary>
-    /// Переносит лайки старой схемы во вновь созданную связующую таблицу LikedTracks.
-    /// </summary>
     private static async Task MigrateLegacyLikesAsync(LibraryDbContext context, CancellationToken ct)
     {
         try
@@ -262,13 +234,10 @@ public static class DatabaseExtensions
                         if (migrated > 0)
                         {
                             Log.Info($"[DB] Successfully migrated {migrated} legacy likes.");
-
-                            // Сохраняем красивое локализованное уведомление об успешном переносе старых лайков [1]
                             SaveSuccessMigrationNotification(context);
                         }
                     }
 
-                    // КРИТИЧЕСКИЙ ПАТЧ: сначала полностью удаляем индекс, блокирующий DROP COLUMN
                     try
                     {
                         using var cmd = connection.CreateCommand();
@@ -306,9 +275,6 @@ public static class DatabaseExtensions
         }
     }
 
-    /// <summary>
-    /// Сохраняет запись об успешном импорте любимых треков с использованием JSON-ключей
-    /// </summary>
     private static void SaveSuccessMigrationNotification(LibraryDbContext context)
     {
         try
@@ -316,8 +282,8 @@ public static class DatabaseExtensions
             var notification = new NotificationEntity
             {
                 Id = Guid.NewGuid().ToString(),
-                TitleKey = "Playlist_SyncComplete_Toast_Title", // "Синхронизация завершена"
-                MessageKey = "Sync_Success_Msg_LikedOnly", // "Понравившиеся песни успешно синхронизированы."
+                TitleKey = "Playlist_SyncComplete_Toast_Title",
+                MessageKey = "Sync_Success_Msg_LikedOnly",
                 Severity = (int)NotificationSeverity.Success,
                 IsRead = false,
                 CreatedAt = DateTime.UtcNow
@@ -332,15 +298,6 @@ public static class DatabaseExtensions
         }
     }
 
-    /// <summary>
-    /// Создает FTS5 виртуальную таблицу для мгновенного поиска по трекам.
-    /// </summary>
-    /// <remarks>
-    /// <para>Удалено ручное создание служебной таблицы <c>TracksFts_config</c>, 
-    /// так как движок SQLite FTS5 генерирует и обслуживает её теневой аналог автоматически.</para>
-    /// </remarks>
-    /// <param name="context">Контекст базы данных.</param>
-    /// <param name="ct">Токен отмены асинхронной операции.</param>
     public static async Task EnsureFtsTablesAsync(this LibraryDbContext context, CancellationToken ct = default)
     {
         const string sql = """
@@ -373,9 +330,6 @@ public static class DatabaseExtensions
         await context.Database.ExecuteSqlRawAsync(sql, ct);
     }
 
-    /// <summary>
-    /// Полностью пересоздает FTS-индекс.
-    /// </summary>
     public static async Task RebuildFtsIndexAsync(this LibraryDbContext context, CancellationToken ct = default)
     {
         await context.Database.ExecuteSqlRawAsync("DELETE FROM TracksFts;", ct);
@@ -383,9 +337,6 @@ public static class DatabaseExtensions
             "INSERT INTO TracksFts(rowid, Title, Author) SELECT RowId, Title, Author FROM Tracks;", ct);
     }
 
-    /// <summary>
-    /// Настраивает WAL-режим работы СУБД SQLite.
-    /// </summary>
     public static async Task OptimizeAsync(this LibraryDbContext context, CancellationToken ct = default)
     {
         await context.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct);

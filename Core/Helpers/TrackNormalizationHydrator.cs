@@ -16,19 +16,13 @@ public static class TrackNormalizationHydrator
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void HydrateNormalization(TrackInfo track, AudioCacheEntry entry)
     {
-        if (!track.HasCachedNormalizationGain
-            && entry.CachedNormalizationGain is float cachedGain
-            && float.IsFinite(cachedGain)
-            && cachedGain > 0f)
+        if (!track.HasIntegratedLufs
+            && entry.IntegratedLufs is float integratedLufs
+            && float.IsFinite(integratedLufs))
         {
-            track.SetGain(cachedGain);
-        }
-
-        if (!track.HasYoutubeLoudnessDb
-            && entry.YoutubeIntegratedLoudnessDb is float loudnessDb
-            && float.IsFinite(loudnessDb))
-        {
-            track.TrySetGainFromLoudness(loudnessDb);
+            track.SetIntegratedLufs(
+                integratedLufs,
+                (LMP.Core.Audio.Normalization.LoudnessSource)entry.IntegratedLufsSource);
         }
     }
 }

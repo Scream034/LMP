@@ -6,18 +6,6 @@ namespace LMP.Core.Audio;
 /// Единый immutable дескриптор resolved аудио потока.
 /// Передаётся от resolve-слоя до audio source без потерь метаданных.
 /// </summary>
-/// <remarks>
-/// <para><b>Single Source of Truth</b> для всех метаданных потока:
-/// format, codec, bitrate, contentLength, loudnessDb, language, expire.</para>
-/// <para>Заменяет цепочку <c>string url + string? trackId + int bitrateHint</c>,
-/// которая уничтожала структурированные данные между слоями.</para>
-/// <para><b>Единицы измерения (зафиксированы):</b></para>
-/// <list type="bullet">
-///   <item>Bitrate — kbps (int)</item>
-///   <item>ContentLength — bytes (long)</item>
-///   <item>LoudnessDb — dB (float, <see cref="float.NaN"/> = отсутствует)</item>
-/// </list>
-/// </remarks>
 public readonly record struct ResolvedStreamDescriptor()
 {
     /// <summary>Идентификатор трека (с префиксом <c>yt_</c>).</summary>
@@ -48,20 +36,16 @@ public readonly record struct ResolvedStreamDescriptor()
     /// </summary>
     public DateTime ExpireUtc { get; init; } = DateTime.MaxValue;
 
-    /// <summary>CDN hostname (например, <c>rr1---sn-xxx.googlevideo.com</c>). Пустая строка если неизвестен.</summary>
+    /// <summary>CDN hostname.</summary>
     public string CdnHost { get; init; } = "";
 
     /// <summary>
-    /// Сырое значение <c>loudnessDb</c> из YouTube InnerTube API.
+    /// Track-level integrated loudness в LUFS из YouTube <c>perceptualLoudnessDb</c>.
     /// <see cref="float.NaN"/> = значение отсутствует.
     /// </summary>
-    /// <remarks>
-    /// <para>Положительное значение = трек громче цели YouTube (-14 LUFS), нужна аттенуация.</para>
-    /// <para>Отрицательное = трек тише цели.</para>
-    /// </remarks>
-    public float LoudnessDb { get; init; } = float.NaN;
+    public float IntegratedLufs { get; init; } = float.NaN;
 
-    /// <summary>Код языка аудиодорожки (например, <c>en</c>). <c>null</c> = не указан.</summary>
+    /// <summary>Код языка аудиодорожки.</summary>
     public string? LanguageCode { get; init; }
 
     /// <summary>Является ли аудиодорожка языком по умолчанию.</summary>
@@ -73,26 +57,26 @@ public readonly record struct ResolvedStreamDescriptor()
     /// <summary><c>true</c> если <see cref="Url"/> непустой и пригоден для HTTP-запросов.</summary>
     public bool HasLiveUrl => !string.IsNullOrEmpty(Url);
 
-    /// <summary><c>true</c> если URL протух (с учётом 30-минутного safety margin).</summary>
+    /// <summary><c>true</c> если URL протух.</summary>
     public bool IsExpired => ExpireUtc != DateTime.MaxValue
         && DateTime.UtcNow >= ExpireUtc.AddMinutes(-30);
 
-    /// <summary><c>true</c> если значение loudness присутствует и конечно.</summary>
-    public bool HasLoudness => !float.IsNaN(LoudnessDb) && float.IsFinite(LoudnessDb);
+    /// <summary><c>true</c> если значение perceptual LUFS присутствует.</summary>
+    public bool HasPerceptualLufs => !float.IsNaN(IntegratedLufs) && float.IsFinite(IntegratedLufs);
 
     /// <summary><c>true</c> если дескриптор содержит информацию об истечении URL.</summary>
     public bool HasExpiry => ExpireUtc != DateTime.MaxValue;
 
     /// <summary>
-    /// Возвращает текстовое представление дескриптора для быстрой диагностики.
+    /// Возвращает текстовое представление дескриптора.
     /// </summary>
-    /// <returns>Строка с ключевыми параметрами потока.</returns>
     public override string ToString()
     {
         return $"track={TrackId}, origin={Origin}, format={Format}, codec={Codec}, " +
                $"bitrate={BitrateKbps}kbps, itag={Itag}, size={ContentLengthBytes}, " +
                $"liveUrl={HasLiveUrl}, host={CdnHost}, expiry={(HasExpiry ? ExpireUtc.ToString("O") : "none")}, " +
-               $"loudness={(HasLoudness ? LoudnessDb.ToString("F2") : "NaN")}, lang={LanguageCode ?? "-"}, defaultLang={IsDefaultLanguage}";
+               $"lufs={(HasPerceptualLufs ? IntegratedLufs.ToString("F2") : "NaN")}, " +
+               $"lang={LanguageCode ?? "-"}, defaultLang={IsDefaultLanguage}";
     }
 }
 

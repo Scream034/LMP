@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using LMP.Core.Audio.Normalization;
 using LMP.Core.Data.Entities;
 using LMP.Core.Youtube.Utils;
 using Microsoft.EntityFrameworkCore;
@@ -312,13 +313,18 @@ public sealed partial class TrackRepository : ITrackRepository
     }
 
     /// <inheritdoc />
-    public async Task SaveNormalizationGainAsync(string id, float gain, CancellationToken ct = default)
+    public async Task SaveNormalizationMetadataAsync(
+        string id,
+        float integratedLufs,
+        int source,
+        CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
         await ctx.Tracks
             .Where(t => t.Id == id)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(t => t.CachedNormalizationGain, gain)
+                .SetProperty(t => t.IntegratedLufs, integratedLufs)
+                .SetProperty(t => t.IntegratedLufsSource, source)
                 .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
     }
 
@@ -447,7 +453,8 @@ public sealed partial class TrackRepository : ITrackRepository
         PreferredFormat = ParsePreferredFormat(e.PreferredContainer),
         PreferredBitrate = e.PreferredBitrate,
         RadioSeedId = e.RadioSeedId,
-        CachedNormalizationGain = e.CachedNormalizationGain ?? float.NaN
+        IntegratedLufs = e.IntegratedLufs ?? float.NaN,
+        IntegratedLufsSource = (LoudnessSource)e.IntegratedLufsSource
     };
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -468,8 +475,9 @@ public sealed partial class TrackRepository : ITrackRepository
         PreferredContainer = PersistPreferredFormat(m.PreferredFormat),
         PreferredBitrate = m.PreferredBitrate,
         RadioSeedId = m.RadioSeedId,
-        CachedNormalizationGain = float.IsNaN(m.CachedNormalizationGain) || !float.IsFinite(m.CachedNormalizationGain)
-            ? null : m.CachedNormalizationGain
+        IntegratedLufs = float.IsNaN(m.IntegratedLufs) || !float.IsFinite(m.IntegratedLufs)
+            ? null : m.IntegratedLufs,
+        IntegratedLufsSource = (int)m.IntegratedLufsSource
     };
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -491,8 +499,11 @@ public sealed partial class TrackRepository : ITrackRepository
         entity.PreferredBitrate = model.PreferredBitrate > 0 ? model.PreferredBitrate : entity.PreferredBitrate;
         entity.RadioSeedId = model.RadioSeedId ?? entity.RadioSeedId;
 
-        if (!float.IsNaN(model.CachedNormalizationGain) && float.IsFinite(model.CachedNormalizationGain))
-            entity.CachedNormalizationGain = model.CachedNormalizationGain;
+        if (!float.IsNaN(model.IntegratedLufs) && float.IsFinite(model.IntegratedLufs))
+        {
+            entity.IntegratedLufs = model.IntegratedLufs;
+            entity.IntegratedLufsSource = (int)model.IntegratedLufsSource;
+        }
     }
 
     #endregion

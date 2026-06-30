@@ -308,15 +308,11 @@ internal partial class PlayerResponse(JsonElement content)
         }
     }
 
-    /// <inheritdoc/>
     /// <summary>
-    /// Извлекает значение целевой громкости (loudnessDb) из playerConfig.audioConfig плеера,
-    /// либо, в случае его отсутствия, из метаданных первого доступного медиапотока.
+    /// Integrated loudness трека в LUFS из <c>playerConfig.audioConfig.perceptualLoudnessDb</c>.
+    /// <c>float.NaN</c> если поле отсутствует.
     /// </summary>
-    /// <remarks>
-    /// Использует zero-alloc поиск по UTF-8 байтам для предотвращения аллокаций строк в куче (SOH).
-    /// </remarks>
-    public float LoudnessDb
+    public float PerceptualLoudnessDb
     {
         get
         {
@@ -326,20 +322,13 @@ internal partial class PlayerResponse(JsonElement content)
 
             if (audioConfig.HasValue)
             {
-                var val = audioConfig.Value.GetPropertyOrNull("loudnessDb"u8)?.GetDoubleOrNull();
-                if (val.HasValue) return (float)val.Value;
-            }
+                var val = audioConfig.Value
+                    .GetPropertyOrNull("perceptualLoudnessDb"u8)
+                    ?.GetDoubleOrNull();
 
-            // Fallback-поиск в массиве стримов, если основной конфиг пуст
-            foreach (var stream in Streams)
-            {
-                if (!float.IsNaN(stream.LoudnessDb))
-                    return stream.LoudnessDb;
+                if (val.HasValue && double.IsFinite(val.Value))
+                    return (float)val.Value;
             }
-
-#if DEBUG
-            Log.Warn("[PlayerResponse] LoudnessDb not found in playerConfig.audioConfig or any stream metadata. Returning NaN.");
-#endif
 
             return float.NaN;
         }
@@ -577,26 +566,6 @@ internal partial class PlayerResponse
                 ?.GetPropertyOrNull("audioIsDefault")
                 ?.GetBooleanOrNull();
 
-        /// <inheritdoc/>
-        public float LoudnessDb
-        {
-            get
-            {
-                var value = _content
-                    .GetPropertyOrNull("loudnessDb")
-                    ?.GetDoubleOrNull()
-                    ?.Pipe(static d => (float)d) ?? float.NaN;
-
-#if DEBUG
-                if (!float.IsNaN(value) && !float.IsFinite(value))
-                {
-                    Log.Warn($"[StreamData] itag={Itag}: Invalid loudnessDb value: {value}");
-                    return float.NaN;
-                }
-#endif
-                return value;
-            }
-        }
 
         /// <inheritdoc/>
         public string? VideoCodec

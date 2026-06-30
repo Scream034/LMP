@@ -15,6 +15,12 @@ public sealed partial class AudioEngine
     /// <summary>Кэшированный словарь для flush gain writes — reuse через Clear().</summary>
     private readonly Dictionary<string, float> _gainBatch = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Кэшированный словарь для flush normalization metadata — reuse через Clear().
+    /// </summary>
+    private readonly Dictionary<string, (float IntegratedLufs, LoudnessSource Source)> _normalizationBatch =
+        new(StringComparer.Ordinal);
+
     private const int VolumeSaveIntervalMs = 2000;
 
     #endregion
@@ -97,7 +103,10 @@ public sealed partial class AudioEngine
         _player.SetVolumeGain(gain);
     }
 
-    /// <summary>Пробрасывает настройки нормализации в активный pipeline.</summary>
+    /// <summary>
+    /// Пробрасывает актуальные настройки нормализации в активный pipeline.
+    /// В новой модели gain всегда вычисляется из persisted integrated LUFS.
+    /// </summary>
     private void ApplyNormalizationToPipeline()
     {
         var pipeline = _player.GetActivePipeline();
@@ -120,22 +129,23 @@ public sealed partial class AudioEngine
                 TrackNormalizationHydrator.HydrateNormalization(track, cacheEntry);
         }
 
-        float cachedGain = normConfig.Enabled
+        float resolvedGain = normConfig.Enabled
             ? NormalizationGainResolver.Resolve(track, normConfig)
             : float.NaN;
 
-        if (float.IsNaN(cachedGain) && cacheEntry != null)
+        if (float.IsNaN(resolvedGain)
+            && cacheEntry?.IntegratedLufs is float cacheIntegratedLufs
+            && float.IsFinite(cacheIntegratedLufs))
         {
-            cachedGain = NormalizationGainResolver.Resolve(
-                cacheEntry.CachedNormalizationGain,
-                cacheEntry.YoutubeIntegratedLoudnessDb,
+            resolvedGain = NormalizationGainResolver.ComputeGainFromIntegratedLufs(
+                cacheIntegratedLufs,
                 normConfig);
         }
 
         pipeline.Analyzer.Configure(normConfig);
 
-        if (normConfig.Enabled && !float.IsNaN(cachedGain))
-            pipeline.Analyzer.LockFromCachedGain(cachedGain);
+        if (normConfig.Enabled && !float.IsNaN(resolvedGain))
+            pipeline.Analyzer.LockResolvedGain(resolvedGain);
     }
 
     private static float ComputeGain(int volumePercent, int maxVolume, AudioSettings audioSettings)
@@ -168,7 +178,7 @@ public sealed partial class AudioEngine
         };
     }
 
-    /// <summary>Периодически сохраняет громкость и gain в БД.</summary>
+    /// <summary>Периодически сохраняет громкость, legacy gain и новую normalization metadata в БД.</summary>
     private async Task VolumeSaveLoopAsync()
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(VolumeSaveIntervalMs));
@@ -182,36 +192,37 @@ public sealed partial class AudioEngine
                     s.RepeatMode = RepeatMode;
                     s.ShuffleEnabled = ShuffleEnabled;
                 });
-                await FlushPendingGainWritesAsync(_lifetimeCts.Token).ConfigureAwait(false);
+
+                await FlushPendingNormalizationWritesAsync(_lifetimeCts.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) { }
     }
 
     /// <summary>
-    /// Синхронно сохраняет все отложенные записи коэффициента усиления в базу данных.
-    /// <para>Вызывается в процессе закрытия приложения как экстренный fallback-сценарий.</para>
+    /// Синхронно сохраняет все отложенные записи integrated loudness в базу данных.
+    /// Используется в shutdown-path до полной миграции со старой gain-модели.
     /// </summary>
-    private void FlushPendingGainWritesSync()
+    private void FlushPendingNormalizationWritesSync()
     {
-        if (_pendingGainWrites.IsEmpty) return;
+        if (_pendingNormalizationWrites.IsEmpty) return;
 
-        // Потокобезопасная синхронизация общего не-threadsafe словаря
-        lock (_gainBatch)
+        lock (_normalizationBatch)
         {
-            _gainBatch.Clear();
-            while (_pendingGainWrites.TryDequeue(out var pending))
-                _gainBatch[pending.TrackId] = pending.Gain;
+            _normalizationBatch.Clear();
+            while (_pendingNormalizationWrites.TryDequeue(out var pending))
+                _normalizationBatch[pending.TrackId] = (pending.IntegratedLufs, pending.Source);
 
-            if (_gainBatch.Count == 0) return;
+            if (_normalizationBatch.Count == 0) return;
 
-            foreach (var (trackId, gain) in _gainBatch)
+            foreach (var (trackId, data) in _normalizationBatch)
             {
                 try
                 {
                     var track = _trackRegistry.TryGet(trackId) ?? _library.GetTrack(trackId);
                     if (track != null)
                     {
+                        track.SetIntegratedLufs(data.IntegratedLufs, data.Source);
                         _library.AddOrUpdateTrackAsync(track, CancellationToken.None)
                             .ConfigureAwait(false)
                             .GetAwaiter()
@@ -219,7 +230,11 @@ public sealed partial class AudioEngine
                     }
                     else
                     {
-                        _library.SaveTrackNormalizationGainAsync(trackId, gain, CancellationToken.None)
+                        _library.SaveTrackNormalizationMetadataAsync(
+                                trackId,
+                                data.IntegratedLufs,
+                                (int)data.Source,
+                                CancellationToken.None)
                             .ConfigureAwait(false)
                             .GetAwaiter()
                             .GetResult();
@@ -227,47 +242,51 @@ public sealed partial class AudioEngine
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    Log.Warn($"[AudioEngine] Failed to sync persist gain for {trackId}: {ex.Message}");
+                    Log.Warn($"[AudioEngine] Failed to sync persist normalization metadata for {trackId}: {ex.Message}");
                 }
             }
         }
     }
 
     /// <summary>
-    /// Асинхронно дренирует и сохраняет отложенные записи коэффициента усиления в БД.
+    /// Асинхронно сохраняет отложенные записи integrated loudness в БД.
     /// </summary>
     /// <param name="ct">Токен отмены.</param>
-    private async Task FlushPendingGainWritesAsync(CancellationToken ct)
+    private async Task FlushPendingNormalizationWritesAsync(CancellationToken ct)
     {
-        if (_pendingGainWrites.IsEmpty) return;
+        if (_pendingNormalizationWrites.IsEmpty) return;
 
-        // Потокобезопасная синхронизация общего не-threadsafe словаря
-        lock (_gainBatch)
+        lock (_normalizationBatch)
         {
-            _gainBatch.Clear();
-            while (_pendingGainWrites.TryDequeue(out var pending))
-                _gainBatch[pending.TrackId] = pending.Gain;
+            _normalizationBatch.Clear();
+            while (_pendingNormalizationWrites.TryDequeue(out var pending))
+                _normalizationBatch[pending.TrackId] = (pending.IntegratedLufs, pending.Source);
         }
 
-        if (_gainBatch.Count == 0) return;
+        if (_normalizationBatch.Count == 0) return;
 
-        foreach (var (trackId, gain) in _gainBatch)
+        foreach (var (trackId, data) in _normalizationBatch)
         {
             try
             {
                 var track = _trackRegistry.TryGet(trackId) ?? _library.GetTrack(trackId);
                 if (track != null)
                 {
+                    track.SetIntegratedLufs(data.IntegratedLufs, data.Source);
                     await _library.AddOrUpdateTrackAsync(track, ct).ConfigureAwait(false);
                 }
                 else
                 {
-                    await _library.SaveTrackNormalizationGainAsync(trackId, gain, ct).ConfigureAwait(false);
+                    await _library.SaveTrackNormalizationMetadataAsync(
+                        trackId,
+                        data.IntegratedLufs,
+                        (int)data.Source,
+                        ct).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                Log.Warn($"[AudioEngine] Failed to persist gain for {trackId}: {ex.Message}");
+                Log.Warn($"[AudioEngine] Failed to persist normalization metadata for {trackId}: {ex.Message}");
             }
         }
     }

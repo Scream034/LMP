@@ -246,12 +246,15 @@ public sealed class StreamClient
             }
 
             yield return new AudioOnlyStreamInfo(
-                itag.Value, url, container.Value,
-                new FileSize(contentLength), bitrate.Value,
-                audioCodec, audioLanguage,
+                itag.Value,
+                url,
+                container.Value,
+                new FileSize(contentLength),
+                bitrate.Value,
+                audioCodec,
+                audioLanguage,
                 streamData.IsAudioLanguageDefault,
-                hasEncryptedNToken,
-                streamData.LoudnessDb);
+                hasEncryptedNToken);
         }
     }
 
@@ -311,7 +314,7 @@ public sealed class StreamClient
         if (streams.Count == 0)
             throw new VideoUnplayableException($"No audio streams available for {videoId}");
 
-        return new StreamManifest(streams);
+        return new StreamManifest(streams, playerResponse.PerceptualLoudnessDb);
     }
 
     /// <summary>

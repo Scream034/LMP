@@ -157,8 +157,11 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     private string? _sealedFailedTrackId;
     private volatile bool _isManualLoading;
 
-    /// <summary>Очередь отложенных записей gain нормализации в БД.</summary>
-    private readonly ConcurrentQueue<(string TrackId, float Gain)> _pendingGainWrites = new();
+    /// <summary>
+    /// Очередь отложенных записей integrated loudness в БД.
+    /// Используется для новой LUFS-модели.
+    /// </summary>
+    private readonly ConcurrentQueue<(string TrackId, float IntegratedLufs, LoudnessSource Source)> _pendingNormalizationWrites = new();
 
     /// <summary>
     /// Флаг завершённого dispose. Предотвращает double-dispose
@@ -301,7 +304,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             MaxRetryAttempts = 3,
             UseNullBackend = false,
             OnPipelineConfiguring = ConfigurePipelineBeforeStart,
-            OnGainLocked = HandleGainLocked,
+            OnIntegratedLufsResolved = CommitIntegratedLufs,
             ShouldFastReplay = () => RepeatMode == RepeatMode.One
         });
 
@@ -356,15 +359,16 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             if (track != null && cacheEntry != null)
                 TrackNormalizationHydrator.HydrateNormalization(track, cacheEntry);
 
-            float cachedGain = track != null
+            float resolvedGain = track != null
                 ? NormalizationGainResolver.Resolve(track, normConfig)
                 : float.NaN;
 
-            if (float.IsNaN(cachedGain) && cacheEntry != null)
+            if (float.IsNaN(resolvedGain)
+                && cacheEntry?.IntegratedLufs is float cacheIntegratedLufs
+                && float.IsFinite(cacheIntegratedLufs))
             {
-                cachedGain = NormalizationGainResolver.Resolve(
-                    cacheEntry.CachedNormalizationGain,
-                    cacheEntry.YoutubeIntegratedLoudnessDb,
+                resolvedGain = NormalizationGainResolver.ComputeGainFromIntegratedLufs(
+                    cacheIntegratedLufs,
                     normConfig);
             }
 
@@ -373,32 +377,20 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             {
                 Log.Debug($"[AudioEngine] Track resolved: ID={track.Id}, Title='{track.Title}' " +
                           $"| Source: {(registryTrack != null ? "Registry" : "CurrentTrackFallback")} " +
-                          $"| DB Cached Gain: {(float.IsNaN(track.CachedNormalizationGain) ? "NaN" : track.CachedNormalizationGain.ToString("F4"))} " +
-                          $"| YT Loudness: {(float.IsNaN(track.YoutubeIntegratedLoudnessDb) ? "NaN" : track.YoutubeIntegratedLoudnessDb.ToString("F2") + "dB")} " +
-                          $"| Cache Gain: {(cacheEntry?.CachedNormalizationGain is float cg ? cg.ToString("F4") : "null")} " +
-                          $"| Cache Loudness: {(cacheEntry?.YoutubeIntegratedLoudnessDb is float cl ? cl.ToString("F2") + "dB" : "null")} " +
-                          $"| Resolved Gain: {(float.IsNaN(cachedGain) ? "NaN" : cachedGain.ToString("F4"))}");
+                          $"| Integrated LUFS: {(track.HasIntegratedLufs ? track.IntegratedLufs.ToString("F2") : "NaN")} " +
+                          $"| LUFS Source: {track.IntegratedLufsSource} " +
+                          $"| Cache LUFS: {(cacheEntry?.IntegratedLufs is float clufs ? clufs.ToString("F2") : "null")} " +
+                          $"| Cache LUFS Source: {(cacheEntry != null ? ((LoudnessSource)cacheEntry.IntegratedLufsSource).ToString() : "null")} " +
+                          $"| Resolved Gain: {(float.IsNaN(resolvedGain) ? "NaN" : resolvedGain.ToString("F4"))}");
             }
 #endif
 
-            if (!float.IsNaN(cachedGain))
+            if (!float.IsNaN(resolvedGain))
             {
-                pipeline.Analyzer.LockFromCachedGain(cachedGain);
-                Log.Info($"[AudioEngine] Normalization gain locked from cache: {cachedGain:F4}x for {trackId}");
-
-                // ВАЖНО: LockFromCachedGain не триггерит _onGainLocked внутри EbuR128Analyzer.
-                // Поэтому мы должны явно зафиксировать вычисленный из loudness gain в БД и AudioCache.
-                HandleGainLocked(trackId, cachedGain);
+                pipeline.Analyzer.LockResolvedGain(resolvedGain);
+                Log.Info($"[AudioEngine] Normalization gain locked from LUFS metadata: {resolvedGain:F4}x for {trackId}");
             }
-#if DEBUG
-            else if (_player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource { IsFullyBuffered: false })
-            {
-                // Partial-cache source: loudnessDb ещё не получен (API call параллелен).
-                // Real-time анализ (~3 сек) зафиксирует gain автоматически.
-                Log.Debug($"[AudioEngine] Gain deferred to real-time analysis for {trackId} (partial-cache, API pending)");
-            }
-#endif
-            else if (track != null)
+            else if (track != null && !(pipeline.Source is Audio.Sources.CachingStreamSource { IsFullyBuffered: false }))
             {
                 Log.Warn($"[AudioEngine] Normalization resolver returned NaN for {trackId}. EBU R128 Pre-scan is REQUIRED.");
             }
@@ -721,15 +713,23 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             new KeyValuePair<string, Task<ContinuationUrlResult?>>(trackId, task));
     }
 
-    /// <summary>Вызывается при фиксации gain нормализации.</summary>
-    private void HandleGainLocked(string trackId, float gain)
+    /// <summary>
+    /// Сохраняет resolved integrated loudness трека в runtime-модели, AudioCache и очередь DB persistence.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    /// <param name="integratedLufs">Integrated loudness в LUFS.</param>
+    /// <param name="source">Источник значения.</param>
+    private void CommitIntegratedLufs(string trackId, float integratedLufs, LoudnessSource source)
     {
+        if (string.IsNullOrEmpty(trackId) || !float.IsFinite(integratedLufs))
+            return;
+
         var canonical = _library.GetTrack(trackId);
-        canonical?.SetGain(gain);
+        canonical?.SetIntegratedLufs(integratedLufs, source);
 
         var registryTrack = _trackRegistry.TryGet(trackId);
         if (registryTrack != null && !ReferenceEquals(registryTrack, canonical))
-            registryTrack.SetGain(gain);
+            registryTrack.SetIntegratedLufs(integratedLufs, source);
 
         var current = CurrentTrack;
         if (current != null
@@ -737,11 +737,11 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             && !ReferenceEquals(current, canonical)
             && !ReferenceEquals(current, registryTrack))
         {
-            current.SetGain(gain);
+            current.SetIntegratedLufs(integratedLufs, source);
         }
 
-        AudioSourceFactory.GlobalCache?.TryUpdateNormalizationGain(trackId, gain);
-        _pendingGainWrites.Enqueue((trackId, gain));
+        AudioSourceFactory.GlobalCache?.TryUpdateIntegratedLufs(trackId, integratedLufs, source);
+        _pendingNormalizationWrites.Enqueue((trackId, integratedLufs, source));
     }
 
     /// <summary>
@@ -826,11 +826,6 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             Interlocked.Exchange(ref _nTokenActiveTrackId, track.Id);
             Interlocked.Exchange(ref _nTokenWarnedTrackId, null);
 
-            if (track.HasCachedNormalizationGain)
-            {
-                _pendingGainWrites.Enqueue((track.Id, track.CachedNormalizationGain));
-            }
-
             AudioSourceFactory.PreWarmCdnConnections(
                 Audio.Http.SharedHttpClient.Instance, _lifetimeCts.Token);
 
@@ -845,10 +840,16 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                     var descriptor = await Task.Run(
                         () => ResolveStreamAsync(track, ct, seekPosition), ct).ConfigureAwait(false);
 
-                    if (descriptor.HasLoudness)
+                    if (descriptor.HasPerceptualLufs)
                     {
-                        // Применяем к in-memory объекту ДО PlayAsync, чтобы ConfigurePipelineBeforeStart увидел это
-                        track.TrySetGainFromLoudness(descriptor.LoudnessDb);
+                        track.SetIntegratedLufs(
+                            descriptor.IntegratedLufs,
+                            LoudnessSource.YoutubePerceptual);
+
+                        CommitIntegratedLufs(
+                            track.Id,
+                            descriptor.IntegratedLufs,
+                            LoudnessSource.YoutubePerceptual);
                     }
 
                     if (_session.IsStaleOrCancelled(session, ct) || IsSealedFailedTrack(track.Id)) return;
@@ -857,11 +858,12 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
                     await _player.PlayAsync(descriptor, ct, seekPosition: seekPosition).ConfigureAwait(false);
 
-                    // ВАЖНО: Обновлять AudioCache нужно ТОЛЬКО ПОСЛЕ PlayAsync,
-                    // так как именно внутри PlayAsync создаётся AudioCacheEntry.
-                    if (descriptor.HasLoudness)
+                    if (descriptor.HasPerceptualLufs)
                     {
-                        AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(track.Id, descriptor.LoudnessDb);
+                        AudioSourceFactory.GlobalCache?.TryUpdateIntegratedLufs(
+                            track.Id,
+                            descriptor.IntegratedLufs,
+                            LoudnessSource.YoutubePerceptual);
                     }
 
                     PreWarmNextTracksInQueue(CurrentQueueIndex, Audio.Http.SharedHttpClient.Instance, _lifetimeCts.Token);
@@ -1118,7 +1120,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         {
             var entry = fullCache.Value.Entry;
             TrackNormalizationHydrator.HydrateNormalization(track, entry);
-            TryEnrichLoudnessFromLocalSources(track);
+            TryEnrichIntegratedLufsFromLocalSources(track);
 
             var descriptor = new ResolvedStreamDescriptor
             {
@@ -1140,7 +1142,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         if (bootstrapCache != null)
         {
             TrackNormalizationHydrator.HydrateNormalization(track, bootstrapCache);
-            TryEnrichLoudnessFromLocalSources(track);
+            TryEnrichIntegratedLufsFromLocalSources(track);
 
             if (TryGetCompatibleContinuationUrl(track, bootstrapCache, out var eagerUrl))
             {
@@ -1212,7 +1214,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                     Url = selectedVariant.Url,
                     ExpireUtc = diskEntry.ExpireUtc,
                     CdnHost = diskEntry.CdnHost,
-                    LoudnessDb = selectedVariant.LoudnessDb,
+                    IntegratedLufs = diskEntry.IntegratedLufs,
                     LanguageCode = selectedVariant.LanguageCode,
                     IsDefaultLanguage = selectedVariant.IsDefaultLanguage,
                     Origin = StreamSource.SessionCache
@@ -1249,30 +1251,33 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     }
 
     /// <summary>
-    /// Пытается обогатить трек YouTube loudness из локальных источников (без сети).
-    /// Проверяет SessionCacheStore (RAM) на наличие манифеста с loudnessDb.
+    /// Пытается обогатить трек track-level integrated LUFS из локальных источников без сети.
+    /// Использует только <see cref="TrackManifestEntry.IntegratedLufs"/> из SessionCache.
     /// </summary>
-    private static void TryEnrichLoudnessFromLocalSources(TrackInfo track)
+    /// <param name="track">Текущий трек.</param>
+    private static void TryEnrichIntegratedLufsFromLocalSources(TrackInfo track)
     {
-        if (track.HasYoutubeLoudnessDb)
+        if (track.HasIntegratedLufs)
             return;
 
         var manifest = SessionCacheStore.GetManifest(track.Id);
-        if (manifest is not { Variants.Count: > 0 })
+        if (manifest is null)
             return;
 
-        for (int i = 0; i < manifest.Variants.Count; i++)
-        {
-            if (float.IsFinite(manifest.Variants[i].LoudnessDb))
-            {
-                track.TrySetGainFromLoudness(manifest.Variants[i].LoudnessDb);
-                AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(
-                    track.Id, manifest.Variants[i].LoudnessDb);
-                Log.Debug($"[AudioEngine] Enriched loudness from SessionCache: " +
-                          $"{track.Id} → {manifest.Variants[i].LoudnessDb:F2}dB");
-                return;
-            }
-        }
+        if (!float.IsFinite(manifest.IntegratedLufs))
+            return;
+
+        track.SetIntegratedLufs(
+            manifest.IntegratedLufs,
+            LoudnessSource.YoutubePerceptual);
+
+        AudioSourceFactory.GlobalCache?.TryUpdateIntegratedLufs(
+            track.Id,
+            manifest.IntegratedLufs,
+            LoudnessSource.YoutubePerceptual);
+
+        Log.Debug($"[AudioEngine] Enriched LUFS from SessionCache: " +
+                  $"{track.Id} → {manifest.IntegratedLufs:F2} LUFS");
     }
 
     #endregion
@@ -1522,14 +1527,28 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
             var actualPosition = CurrentPosition;
 
-            if (d.HasLoudness)
+            if (d.HasPerceptualLufs)
             {
-                track.TrySetGainFromLoudness(d.LoudnessDb);
-                AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(track.Id, d.LoudnessDb);
+                track.SetIntegratedLufs(d.IntegratedLufs, LoudnessSource.YoutubePerceptual);
+                CommitIntegratedLufs(
+                    track.Id,
+                    d.IntegratedLufs,
+                    LoudnessSource.YoutubePerceptual);
             }
 
-            await _player.PlayAsync(d, ct,
-                seekPosition: actualPosition.TotalSeconds > 1 ? actualPosition : null).ConfigureAwait(false);
+            await _player.PlayAsync(
+                d,
+                ct,
+                seekPosition: actualPosition.TotalSeconds > 1 ? actualPosition : null)
+                .ConfigureAwait(false);
+
+            if (d.HasPerceptualLufs)
+            {
+                AudioSourceFactory.GlobalCache?.TryUpdateIntegratedLufs(
+                    track.Id,
+                    d.IntegratedLufs,
+                    LoudnessSource.YoutubePerceptual);
+            }
 
             ApplyGainToPipeline();
         }
@@ -1885,11 +1904,11 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
             try
             {
-                FlushPendingGainWritesSync();
+                FlushPendingNormalizationWritesSync();
             }
             catch (Exception ex)
             {
-                Log.Warn($"[AudioEngine] Sync gain flush on dispose failed: {ex.Message}");
+                Log.Warn($"[AudioEngine] Sync normalization flush on dispose failed: {ex.Message}");
             }
 
             _library.UpdateSettings(s =>
@@ -1930,12 +1949,16 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             s.ShuffleEnabled = ShuffleEnabled;
         });
 
-        // 3. Async flush gain writes — hard timeout без блокировки UI
         using (var flushCts = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
         {
-            try { await FlushPendingGainWritesAsync(flushCts.Token).ConfigureAwait(false); }
+            try
+            {
+                await FlushPendingNormalizationWritesAsync(flushCts.Token).ConfigureAwait(false);
+            }
             catch (Exception ex)
-            { Log.Warn($"[AudioEngine] Gain flush on async dispose: {ex.Message}"); }
+            {
+                Log.Warn($"[AudioEngine] Normalization flush on async dispose: {ex.Message}");
+            }
         }
 
         // 4. Complete writer — «новых команд не будет»; штатное завершение ReadAllAsync

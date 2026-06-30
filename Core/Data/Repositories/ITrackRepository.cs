@@ -152,12 +152,17 @@ public interface ITrackRepository
     Task SetDownloadedAsync(string id, bool downloaded, string? localPath, CancellationToken ct = default);
 
     /// <summary>
-    /// Сохраняет предварительно вычисленный или полученный в реальном времени коэффициент нормализации звука для трека.
+    /// Сохраняет track-level integrated loudness и её источник.
     /// </summary>
     /// <param name="id">Идентификатор трека.</param>
-    /// <param name="gain">Линейный коэффициент усиления (normalization gain).</param>
-    /// <param name="ct">Токен отмены асинхронной операции.</param>
-    Task SaveNormalizationGainAsync(string id, float gain, CancellationToken ct = default);
+    /// <param name="integratedLufs">Измеренная integrated loudness в LUFS.</param>
+    /// <param name="source">Источник значения <c>IntegratedLufs</c>.</param>
+    /// <param name="ct">Токен отмены.</param>
+    Task SaveNormalizationMetadataAsync(
+        string id,
+        float integratedLufs,
+        int source,
+        CancellationToken ct = default);
 
     #endregion
 

@@ -34,13 +34,6 @@ public sealed class VariantEntry
     public long Clen { get; set; }
 
     /// <summary>
-    /// Сырое значение loudnessDb из YouTube API.
-    /// <see cref="float.NaN"/> = отсутствует.
-    /// </summary>
-    [JsonConverter(typeof(NaNFloatJsonConverter))]
-    public float LoudnessDb { get; set; } = float.NaN;
-
-    /// <summary>
     /// Типизированный формат контейнера.
     /// Не сериализуется и вычисляется из <see cref="Container"/>.
     /// </summary>
@@ -79,6 +72,12 @@ public sealed class TrackManifestEntry
     /// Реальная инвалидация — по HTTP 403/410 при probe.
     /// </summary>
     public DateTime ExpireUtc { get; set; }
+
+    /// <summary>
+    /// Track-level integrated loudness в LUFS из YouTube <c>perceptualLoudnessDb</c>.
+    /// </summary>
+    [JsonConverter(typeof(NaNFloatJsonConverter))]
+    public float IntegratedLufs { get; set; } = float.NaN;
 
     /// <summary>Все доступные аудио-варианты.</summary>
     public List<VariantEntry> Variants { get; set; } = [];
@@ -236,7 +235,10 @@ internal static class SessionCacheStore
     /// </summary>
     /// <param name="trackId">ID трека (с префиксом yt_).</param>
     /// <param name="streams">Все аудио-варианты из манифеста.</param>
-    public static void RecordManifest(string trackId, IReadOnlyList<AudioOnlyStreamInfo> streams)
+    public static void RecordManifest(
+         string trackId,
+         IReadOnlyList<AudioOnlyStreamInfo> streams,
+         float perceptualLufs = float.NaN)
     {
         if (string.IsNullOrEmpty(trackId) || streams.Count == 0)
             return;
@@ -262,7 +264,6 @@ internal static class SessionCacheStore
                 Codec = s.AudioCodec.ToAudioCodec(format).ToDisplayName(),
                 Bitrate = (int)s.Bitrate.BitsPerSecond,
                 Clen = s.Size.Bytes,
-                LoudnessDb = s.LoudnessDb,
                 LanguageCode = s.AudioLanguage?.Code,
                 IsDefaultLanguage = s.IsAudioLanguageDefault ?? false
             });
@@ -272,6 +273,7 @@ internal static class SessionCacheStore
         {
             TrackId = trackId,
             CdnHost = cdnHost,
+            IntegratedLufs = perceptualLufs,
             ExpireUtc = expireUtc,
             Variants = variants,
             SavedAtUtc = DateTime.UtcNow

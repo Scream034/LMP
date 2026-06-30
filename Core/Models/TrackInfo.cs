@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
+using LMP.Core.Audio.Normalization;
 using LMP.Core.Youtube.Search;
 using LMP.Core.Youtube.Utils;
 using ReactiveUI;
@@ -186,87 +187,46 @@ public sealed partial class TrackInfo : ReactiveObject, IBatchItem, ISearchResul
     #region Audio Normalization
 
     /// <summary>
-    /// Сырое значение <c>loudnessDb</c> из YouTube InnerTube API.
-    ///
-    /// <para><b>Семантика:</b> Разница между интегральной громкостью трека и целевым
-    /// уровнем YouTube (-14 LUFS). Положительное значение = трек ГРОМЧЕ цели
-    /// (нужна аттенуация); отрицательное = трек ТИШЕ (YouTube не бустит).</para>
-    ///
-    /// <para><b>Примеры:</b></para>
-    /// <list type="bullet">
-    ///   <item>loudnessDb=+6.8 → трек на -7.2 LUFS, нужна аттенуация 6.8 dB</item>
-    ///   <item>loudnessDb=-2.0 → трек на -16 LUFS, тихий, YouTube не трогает</item>
-    ///   <item>loudnessDb=0 → трек ровно на -14 LUFS или YouTube не указал поправку</item>
-    /// </list>
-    ///
-    /// <para><b>Ограничения использования:</b> Значение валидно исключительно для
-    /// режима <see cref="NormalizationMode.DownwardOnly"/> при target ≈ -14 LUFS.
-    /// Для Bidirectional или других targetLufs требуется EBU R128 анализ.</para>
-    ///
-    /// <para><c>float.NaN</c> = значение отсутствует в API ответе.</para>
+    /// Новое canonical-поле integrated loudness трека в LUFS.
     /// </summary>
     [JsonIgnore]
-    public float YoutubeIntegratedLoudnessDb { get; private set; } = float.NaN;
+    public float IntegratedLufs { get; set; } = float.NaN;
 
     /// <summary>
-    /// <c>true</c> если YouTube передал значение <see cref="YoutubeIntegratedLoudnessDb"/>.
+    /// Источник значения <see cref="IntegratedLufs"/>.
     /// </summary>
     [JsonIgnore]
-    public bool HasYoutubeLoudnessDb =>
-        !float.IsNaN(YoutubeIntegratedLoudnessDb) && float.IsFinite(YoutubeIntegratedLoudnessDb);
+    public LoudnessSource IntegratedLufsSource { get; set; } = LoudnessSource.Unknown;
 
     /// <summary>
-    /// Закэшированный linear gain нормализации, вычисленный EBU R128 анализом.
-    /// Единственный источник истины для Bidirectional режима и нестандартных targetLufs.
-    ///
-    /// <para><b>Откуда берётся:</b></para>
-    /// <list type="bullet">
-    ///   <item>EBU R128 pre-scan — через <see cref="SetGain"/></item>
-    ///   <item>EBU R128 real-time анализ (~3 сек) — через <see cref="SetGain"/></item>
-    /// </list>
-    ///
-    /// <para><c>float.NaN</c> = не вычислен → требуется EBU R128 анализ.</para>
-    ///
-    /// <para><b>Намеренное отсутствие YouTube gain здесь:</b> YouTube gain является
-    /// DownwardOnly аттенуацией при фиксированном target -14 LUFS и хранится
-    /// отдельно в <see cref="YoutubeIntegratedLoudnessDb"/>. Смешивание двух
-    /// семантически разных величин в одном поле вызывало некорректное
-    /// применение gain в Bidirectional режиме.</para>
+    /// <c>true</c> если integrated loudness измерена.
     /// </summary>
     [JsonIgnore]
-    public float CachedNormalizationGain { get; set; } = float.NaN;
+    public bool HasIntegratedLufs =>
+        !float.IsNaN(IntegratedLufs) && float.IsFinite(IntegratedLufs);
 
     /// <summary>
-    /// <c>true</c> если EBU R128 gain вычислен и готов к применению.
-    /// </summary>
-    [JsonIgnore]
-    public bool HasCachedNormalizationGain =>
-        !float.IsNaN(CachedNormalizationGain) && float.IsFinite(CachedNormalizationGain);
-
-    /// <summary>
-    /// Устанавливает EBU R128 gain. Перезаписывает если значение значимо изменилось.
+    /// Устанавливает integrated loudness трека.
+    /// Более точный источник может перезаписать менее точный.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool SetGain(float gain)
+    public bool SetIntegratedLufs(float lufs, LoudnessSource source)
     {
-        if (!float.IsFinite(gain) || gain <= 0f) return false;
-
-        // Перезапись только при значимом изменении (> 0.1% разницы).
-        // Предотвращает лишние persist при RepeatMode.One.
-        if (HasCachedNormalizationGain && MathF.Abs(CachedNormalizationGain - gain) < 0.001f)
+        if (!float.IsFinite(lufs))
             return false;
 
-        CachedNormalizationGain = gain;
-        return true;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TrySetGainFromLoudness(float loudnessDb)
-    {
-        if (!float.IsFinite(loudnessDb))
+        if (IntegratedLufsSource > source)
             return false;
 
-        YoutubeIntegratedLoudnessDb = loudnessDb;
+        if (HasIntegratedLufs
+            && MathF.Abs(IntegratedLufs - lufs) < 0.01f
+            && IntegratedLufsSource == source)
+        {
+            return false;
+        }
+
+        IntegratedLufs = lufs;
+        IntegratedLufsSource = source;
         return true;
     }
 
@@ -312,22 +272,15 @@ public sealed partial class TrackInfo : ReactiveObject, IBatchItem, ISearchResul
         if (!string.IsNullOrEmpty(fresh.ChannelId) && fresh.ChannelId != ChannelId)
             ChannelId = fresh.ChannelId;
 
-        // Повышаем статус лайка. API плейлистов/поиска возвращает IsLiked = false,
-        // поэтому мы не должны перезаписывать локальный true на false.
         if (fresh.IsLiked && !IsLiked)
             IsLiked = true;
 
         if (fresh.IsDisliked && !IsDisliked)
             IsDisliked = true;
 
-        if (fresh.HasCachedNormalizationGain && !HasCachedNormalizationGain)
-            CachedNormalizationGain = fresh.CachedNormalizationGain;
+        if (fresh.HasIntegratedLufs)
+            SetIntegratedLufs(fresh.IntegratedLufs, fresh.IntegratedLufsSource);
 
-        if (fresh.HasYoutubeLoudnessDb && !HasYoutubeLoudnessDb)
-            YoutubeIntegratedLoudnessDb = fresh.YoutubeIntegratedLoudnessDb;
-
-        // Сохраняем только явные runtime-hints выбора качества текущей сессии.
-        // Resolved stream metadata больше не переносится через TrackInfo.
         if (fresh.TransientFormat is { } transientFormat
             && transientFormat != AudioFormat.Unknown
             && transientFormat != TransientFormat)
