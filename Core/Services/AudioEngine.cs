@@ -385,6 +385,10 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             {
                 pipeline.Analyzer.LockFromCachedGain(cachedGain);
                 Log.Info($"[AudioEngine] Normalization gain locked from cache: {cachedGain:F4}x for {trackId}");
+
+                // ВАЖНО: LockFromCachedGain не триггерит _onGainLocked внутри EbuR128Analyzer.
+                // Поэтому мы должны явно зафиксировать вычисленный из loudness gain в БД и AudioCache.
+                HandleGainLocked(trackId, cachedGain);
             }
 #if DEBUG
             else if (_player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource { IsFullyBuffered: false })
@@ -843,8 +847,8 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
                     if (descriptor.HasLoudness)
                     {
+                        // Применяем к in-memory объекту ДО PlayAsync, чтобы ConfigurePipelineBeforeStart увидел это
                         track.TrySetGainFromLoudness(descriptor.LoudnessDb);
-                        AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(track.Id, descriptor.LoudnessDb);
                     }
 
                     if (_session.IsStaleOrCancelled(session, ct) || IsSealedFailedTrack(track.Id)) return;
@@ -852,6 +856,14 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                     Log.Info($"[AudioEngine] PlayTrackCore resolved -> {descriptor}");
 
                     await _player.PlayAsync(descriptor, ct, seekPosition: seekPosition).ConfigureAwait(false);
+
+                    // ВАЖНО: Обновлять AudioCache нужно ТОЛЬКО ПОСЛЕ PlayAsync,
+                    // так как именно внутри PlayAsync создаётся AudioCacheEntry.
+                    if (descriptor.HasLoudness)
+                    {
+                        AudioSourceFactory.GlobalCache?.TryUpdateYoutubeLoudnessDb(track.Id, descriptor.LoudnessDb);
+                    }
+
                     PreWarmNextTracksInQueue(CurrentQueueIndex, Audio.Http.SharedHttpClient.Instance, _lifetimeCts.Token);
                     break;
                 }
