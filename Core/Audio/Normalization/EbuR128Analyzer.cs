@@ -59,10 +59,10 @@ public sealed class EbuR128Analyzer
     private const int MaxGatingBlocks = 64;
 
     /// <summary>Макс. количество gating blocks для pre-scan.</summary>
-    private const int MaxScanGatingBlocks = 512;
+    internal const int MaxScanGatingBlocks = 512;
 
     /// <summary>Макс. длительность pre-scan (секунд).</summary>
-    private const float MaxScanDurationSeconds = 120f;
+    private const float MaxScanDurationSeconds = 30f;
 
     #endregion
 
@@ -243,6 +243,17 @@ public sealed class EbuR128Analyzer
             Log.Debug($"[EbuR128] Params changed (recalc): target={normalizedConfig.TargetLufs}LUFS, " +
                       $"maxGain={normalizedConfig.MaxGain:F1}x, mode={normalizedConfig.Mode}");
         }
+    }
+
+    /// <summary>
+    /// Вызывает persistence callback с измеренным integrated LUFS.
+    /// Используется <see cref="AudioPipeline"/> после isolated pre-scan,
+    /// где callback не вызывается автоматически из DSP-цикла.
+    /// </summary>
+    internal void NotifyIntegratedLufs(float integratedLufs)
+    {
+        if (float.IsFinite(integratedLufs))
+            _onIntegratedLufsResolved?.Invoke(integratedLufs);
     }
 
     /// <summary>

@@ -104,6 +104,9 @@ public sealed class LocalFileSource : IAudioSource
     /// </summary>
     internal IContainerParser? Parser => _parser;
 
+    /// <summary>Абсолютный путь к файлу на диске.</summary>
+    public string FilePath => _filePath;
+
     #endregion
 
     #region Initialization

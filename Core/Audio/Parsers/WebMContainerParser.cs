@@ -40,7 +40,7 @@ public sealed class WebMContainerParser : IContainerParser
 
     public async ValueTask<AudioFrame?> ReadNextFrameAsync(CancellationToken ct = default)
     {
-        // ═══ GC ZERO: Возвращаем ПРЕДЫДУЩИЙ буфер в пул ═══
+        // GC ZERO: Возвращаем ПРЕДЫДУЩИЙ буфер в пул
         // Декодер уже отработал с ним в предыдущей итерации цикла.
         ReleaseCurrentFrame();
 

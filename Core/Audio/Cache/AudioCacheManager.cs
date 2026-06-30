@@ -699,6 +699,18 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     #region Statistics
 
     /// <summary>
+    /// Перечисляет все complete и физически валидные записи кэша.
+    /// </summary>
+    internal IEnumerable<AudioCacheEntry> GetAllCompleteEntries()
+    {
+        foreach (var entry in _entries.Values)
+        {
+            if (entry.IsComplete && EnsureCacheFileIntegrity(entry))
+                yield return entry;
+        }
+    }
+
+    /// <summary>
     /// Возвращает компактную статистику кэша.
     /// </summary>
     public (int FileCount, int SizeMb) GetStatsCompact()

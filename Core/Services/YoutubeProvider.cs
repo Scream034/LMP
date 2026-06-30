@@ -687,7 +687,7 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
-        if (!forceRefresh && requested.HasFormat)
+        if (!forceRefresh && !requested.HasFormat)
         {
             var anyCache = AudioSourceFactory.FindAnyCachedTrack(rawVideoId);
             if (anyCache != null)

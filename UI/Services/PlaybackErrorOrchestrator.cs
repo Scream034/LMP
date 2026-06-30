@@ -285,53 +285,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         await _dialogService.ShowBotDetectionCooldownAsync(exception.RemainingCooldown);
     }
 
-    private async Task HandleLoginRequiredAsync(LoginRequiredException exception)
-    {
-        Log.Warn($"[Orchestrator] Login required: {exception.Reason} for {exception.VideoId}");
-        var settings = _libraryService.Settings.Audio;
-
-        await InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
-
-        _notificationService.TryPlayErrorSound();
-
-        var messageKey = GetLoginRequiredMessageKey(exception);
-        var recommendationKey = GetRecommendation(exception);
-        var (Id, Title) = GetCurrentTrackInfo();
-
-        await _notificationService.ShowPlaybackErrorAsync(
-            "Error_Playback_Title", messageKey, Id, Title, null, exception.ToString(),
-            NotificationSeverity.Error, DialogToastDurationMs, recommendationKey);
-
-        await NotificationService.ShowOsNotificationAsync(
-            LocalizationService.Instance["Error_Playback_Title"],
-            LocalizationService.Instance[messageKey],
-            NotificationSeverity.Error);
-    }
-
-    private async Task HandleStreamUnavailableAsync(StreamUnavailableException exception)
-    {
-        Log.Error($"[Orchestrator] Stream unavailable: {exception.Reason} for {exception.VideoId}");
-        var attempts = ExtractAttemptsFromException(exception);
-        var messageKey = GetStreamErrorMessageKey(exception);
-        await DispatchPlaybackErrorAsync(exception, messageKey, attempts);
-    }
-
-    private async Task HandleChunkFatalAsync(ChunkDownloadFatalException exception)
-    {
-        Log.Error($"[Orchestrator] Chunk fatal: {exception.Reason} at chunk {exception.ChunkIndex}");
-        var attempts = new List<AttemptRecord> {
-            new($"Chunk {exception.ChunkIndex}", false, $"{exception.Reason}: {exception.Message}", DateTime.UtcNow)
-        };
-        var messageKey = GetChunkErrorMessageKey(exception);
-        await DispatchPlaybackErrorAsync(exception, messageKey, attempts);
-    }
-
-    private async Task HandleGenericErrorAsync(Exception exception)
-    {
-        Log.Error($"[Orchestrator] Generic error: {exception.Message}");
-        await DispatchPlaybackErrorAsync(exception, exception.Message, null);
-    }
-
     #endregion
 
     #region Behavior Strategies (Deduplicated)
@@ -423,35 +376,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         if (_audioEngine.Queue.Count <= 1)
             return InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError);
 
-        return InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
-    }
-
-    /// <summary>
-    /// Выполняет восстановление воспроизведения после критической ошибки с учетом настроенного поведения.
-    /// </summary>
-    private Task RecoverFromFatalPlaybackErrorAsync()
-    {
-        var failureBehavior = _libraryService.Settings.Audio.PlaybackFailureBehavior;
-
-        if (failureBehavior == PlaybackFailureBehavior.Stop || _audioEngine.Queue.Count <= 1)
-        {
-            return InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError);
-        }
-
-        if (failureBehavior == PlaybackFailureBehavior.SkipAndPause)
-        {
-            // Переключаемся на следующий трек в режиме паузы (без автозапуска плеера)
-            return InvokeOnUIAsync(() => _audioEngine.PlayNextAsync(startPlaying: false));
-        }
-
-        // По умолчанию: SkipAndPlay
-        return InvokeOnUIAsync(() => _audioEngine.PlayNextAsync(startPlaying: true));
-    }
-
-    private Task PauseOrStopForDialogAsync()
-    {
-        if (_audioEngine.Queue.Count <= 1)
-            return InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError);
         return InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
     }
 

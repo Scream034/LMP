@@ -1525,15 +1525,25 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
             Log.Info($"[AudioEngine] SwitchQuality resolved -> {d}");
 
+            // Повторный клик на активный формат: resolved совпадает с pipeline — rebuild не нужен.
+            var currentInfo = _player.StreamInfo;
+            if (currentInfo.IsValid
+                && string.Equals(currentInfo.TrackId, d.TrackId, StringComparison.Ordinal)
+                && currentInfo.Format == d.Format
+                && currentInfo.CodecType == d.Codec
+                && currentInfo.Bitrate == d.BitrateKbps)
+            {
+                Log.Info($"[AudioEngine] SwitchQuality skipped: active pipeline already matches " +
+                         $"{d.Format.ToContainerName()}/{d.Codec.ToDisplayName()}/{d.BitrateKbps}kbps for {track.Id}");
+                return;
+            }
+
             var actualPosition = CurrentPosition;
 
             if (d.HasPerceptualLufs)
             {
                 track.SetIntegratedLufs(d.IntegratedLufs, LoudnessSource.YoutubePerceptual);
-                CommitIntegratedLufs(
-                    track.Id,
-                    d.IntegratedLufs,
-                    LoudnessSource.YoutubePerceptual);
+                CommitIntegratedLufs(track.Id, d.IntegratedLufs, LoudnessSource.YoutubePerceptual);
             }
 
             await _player.PlayAsync(
@@ -1545,9 +1555,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             if (d.HasPerceptualLufs)
             {
                 AudioSourceFactory.GlobalCache?.TryUpdateIntegratedLufs(
-                    track.Id,
-                    d.IntegratedLufs,
-                    LoudnessSource.YoutubePerceptual);
+                    track.Id, d.IntegratedLufs, LoudnessSource.YoutubePerceptual);
             }
 
             ApplyGainToPipeline();

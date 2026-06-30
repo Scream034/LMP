@@ -172,9 +172,9 @@
     <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Concentus.Native" Version="1.5.2" />
     <PackageReference Include="ReactiveUI.Avalonia" Version="$(ReactiveUIAvaloniaVersion)" />
-    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1"
-      Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
   <ItemGroup Label="Hot Reload" Condition="'$(Configuration)' == 'Debug'">

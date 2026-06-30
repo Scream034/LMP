@@ -49,9 +49,6 @@ public sealed partial class PlayerBarViewModel : ViewModelBase
     #region Constants - Network & Buffer
 
     private const int BufferStateThrottleMs = 100;
-    private const double SpeedDisplayThresholdKbs = 10.0;
-    private const double BytesPerKb = 1024.0;
-    private const double MinSpeedCalcIntervalSec = 0.5;
 
     #endregion
 
