@@ -273,6 +273,24 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
 
     #endregion
 
+    #region Playback & Failure Settings
+
+    /// <summary>Варианты уведомлений n-токена для ComboBox.</summary>
+    public ObservableCollection<LocalizedItem<NTokenNotificationMode>> NTokenNotificationOptions { get; } = [];
+
+    /// <summary>Выбранный режим предупреждений расшифровки n-токена.</summary>
+    [Reactive] public partial LocalizedItem<NTokenNotificationMode>? SelectedNTokenNotification { get; set; }
+
+    /// <summary>Варианты поведения при сбое воспроизведения для ComboBox.</summary>
+    public ObservableCollection<LocalizedItem<PlaybackFailureBehavior>> PlaybackFailureOptions { get; } = [];
+
+    /// <summary>Выбранный режим поведения при фатальном сбое трека.</summary>
+    [Reactive] public partial LocalizedItem<PlaybackFailureBehavior>? SelectedPlaybackFailure { get; set; }
+
+    [Reactive] public partial bool IsPlaybackFailureActionEnabled { get; private set; } = true;
+
+    #endregion
+
     #region UI & Behavior
 
     [Reactive] public partial bool DiscordRpcEnabled { get; set; }
@@ -730,7 +748,28 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
         ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.ToastAndSkip, SL["Settings_ErrorBehavior_ToastAndSkip"]));
         ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Ignore, SL["Settings_ErrorBehavior_Ignore"]));
         SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == currentErrorBehavior)
+                             ?? ErrorBehaviorOptions.FirstOrDefault(x => x.Value == PlaybackErrorBehavior.ToastAndSkip)
                              ?? ErrorBehaviorOptions[0];
+
+        var currentNTokenMode = SelectedNTokenNotification?.Value ?? _library.Settings.Audio.NTokenNotificationMode;
+        NTokenNotificationOptions.Clear();
+        NTokenNotificationOptions.Add(new(NTokenNotificationMode.Disabled, SL["Settings_NTokenMode_Disabled"]));
+        NTokenNotificationOptions.Add(new(NTokenNotificationMode.PanelOnly, SL["Settings_NTokenMode_PanelOnly"]));
+        NTokenNotificationOptions.Add(new(NTokenNotificationMode.Toast, SL["Settings_NTokenMode_Toast"]));
+        SelectedNTokenNotification = NTokenNotificationOptions.FirstOrDefault(x => x.Value == currentNTokenMode)
+                                  ?? NTokenNotificationOptions.FirstOrDefault(x => x.Value == NTokenNotificationMode.Toast)
+                                  ?? NTokenNotificationOptions[^1];
+
+        var currentFailureMode = SelectedPlaybackFailure?.Value ?? _library.Settings.Audio.PlaybackFailureBehavior;
+        PlaybackFailureOptions.Clear();
+        PlaybackFailureOptions.Add(new(PlaybackFailureBehavior.SkipAndPlay, SL["Settings_PlaybackFailure_SkipAndPlay"]));
+        PlaybackFailureOptions.Add(new(PlaybackFailureBehavior.SkipAndPause, SL["Settings_PlaybackFailure_SkipAndPause"]));
+        PlaybackFailureOptions.Add(new(PlaybackFailureBehavior.Stop, SL["Settings_PlaybackFailure_Stop"]));
+        SelectedPlaybackFailure = PlaybackFailureOptions.FirstOrDefault(x => x.Value == currentFailureMode)
+                               ?? PlaybackFailureOptions.FirstOrDefault(x => x.Value == PlaybackFailureBehavior.SkipAndPause)
+                               ?? PlaybackFailureOptions[0];
+
+        UpdatePlaybackFailureActionAvailability();
 
         var currentCloseAction = SelectedCloseAction?.Value ?? _library.Settings.CloseAction;
         CloseActionOptions.Clear();
@@ -1027,7 +1066,11 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
         this.WhenAnyValue(x => x.SelectedErrorBehavior)
             .Skip(1).WhereNotNull()
             .Where(_ => !_isLoadingSettings)
-            .Subscribe(b => _library.UpdateSettings(s => s.Audio.CriticalErrorBehavior = b.Value))
+            .Subscribe(b =>
+            {
+                _library.UpdateSettings(s => s.Audio.CriticalErrorBehavior = b.Value);
+                UpdatePlaybackFailureActionAvailability();
+            })
             .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.PlayErrorSound)
@@ -1040,6 +1083,18 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
             .Subscribe(v => _library.UpdateSettings(s => s.Audio.SkipNTokenTracks = v))
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.SelectedNTokenNotification)
+            .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(m => _library.UpdateSettings(s => s.Audio.NTokenNotificationMode = m.Value))
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.SelectedPlaybackFailure)
+            .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(m => _library.UpdateSettings(s => s.Audio.PlaybackFailureBehavior = m.Value))
             .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.DiscordRpcEnabled)
@@ -1123,8 +1178,15 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
                                      ?? VolumeCurveOptions[1];
             PlayErrorSound = s.Audio.PlayErrorSound;
             SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == s.Audio.CriticalErrorBehavior)
-                                     ?? ErrorBehaviorOptions[0];
+                                 ?? ErrorBehaviorOptions.FirstOrDefault(x => x.Value == PlaybackErrorBehavior.ToastAndSkip)
+                                 ?? ErrorBehaviorOptions[0];
             SkipNTokenTracks = s.Audio.SkipNTokenTracks;
+            SelectedNTokenNotification = NTokenNotificationOptions.FirstOrDefault(x => x.Value == s.Audio.NTokenNotificationMode)
+                                      ?? NTokenNotificationOptions.FirstOrDefault(x => x.Value == NTokenNotificationMode.Toast)
+                                      ?? NTokenNotificationOptions[^1];
+            SelectedPlaybackFailure = PlaybackFailureOptions.FirstOrDefault(x => x.Value == s.Audio.PlaybackFailureBehavior)
+                                   ?? PlaybackFailureOptions.FirstOrDefault(x => x.Value == PlaybackFailureBehavior.SkipAndPause)
+                                   ?? PlaybackFailureOptions[0];
 
             SelectedQualityItem = QualityOptions.FirstOrDefault(x => x.Value == s.QualityPreference)
                                ?? QualityOptions[0];
@@ -1164,6 +1226,7 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
                                ?? CloseActionOptions.LastOrDefault();
             MinimizeToTray = s.MinimizeToTray;
 
+            UpdatePlaybackFailureActionAvailability();
             LoadThemeColors();
         }
         finally
@@ -1277,6 +1340,12 @@ public sealed partial class SettingsViewModel : ViewModelBase, IDisposable, ISmo
             Log.Warn("[AudioCache] AudioCacheManager not initialized, cannot clear cache.");
 
         UpdateCacheStats();
+    }
+
+    private void UpdatePlaybackFailureActionAvailability()
+    {
+        var behavior = SelectedErrorBehavior?.Value ?? _library.Settings.Audio.CriticalErrorBehavior;
+        IsPlaybackFailureActionEnabled = PlaybackErrorBehaviorMatrix.UsesPlaybackFailureBehavior(behavior);
     }
 
     /// <summary>

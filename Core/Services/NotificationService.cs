@@ -125,9 +125,33 @@ public sealed class NotificationService : ReactiveObject, IDisposable
             RecommendationKey = recommendationKey
         };
 
-        await AddToHistoryAsync(notification);
-        await PersistAsync(notification);
-        await ShowToastInternalAsync(notification, durationMs, ct);
+        await PublishAsync(notification, showToast: true, durationMs, ct);
+    }
+
+    internal async Task AddToPanelAsync(
+      string titleKey,
+      string messageKey,
+      NotificationSeverity severity = NotificationSeverity.Info,
+      object[]? messageArgs = null,
+      CancellationToken ct = default,
+      string? trackId = null,
+      string? trackTitle = null,
+      string? exceptionDetails = null,
+      string? recommendationKey = null)
+    {
+        var notification = new Notification
+        {
+            TitleKey = titleKey,
+            MessageKey = messageKey,
+            MessageArgs = messageArgs,
+            Severity = severity,
+            TrackId = trackId,
+            TrackTitle = trackTitle,
+            ExceptionDetails = exceptionDetails,
+            RecommendationKey = recommendationKey
+        };
+
+        await PublishAsync(notification, showToast: false, 0, ct);
     }
 
     /// <summary>
@@ -161,9 +185,7 @@ public sealed class NotificationService : ReactiveObject, IDisposable
             RecommendationKey = recommendationKey
         };
 
-        await AddToHistoryAsync(notification);
-        await PersistAsync(notification);
-        await ShowToastInternalAsync(notification, durationMs, ct);
+        await PublishAsync(notification, showToast: true, durationMs, ct);
     }
 
     public static async Task ShowOsNotificationAsync(
@@ -181,6 +203,20 @@ public sealed class NotificationService : ReactiveObject, IDisposable
     }
 
     public static void PlaySuccessSound() => OsSoundPlayer.PlaySuccess();
+
+    private async Task PublishAsync(Notification notification, bool showToast, int durationMs, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        await AddToHistoryAsync(notification);
+        await PersistAsync(notification);
+
+        if (!showToast)
+            return;
+
+        ct.ThrowIfCancellationRequested();
+        await ShowToastInternalAsync(notification, durationMs, ct);
+    }
 
     #endregion
 

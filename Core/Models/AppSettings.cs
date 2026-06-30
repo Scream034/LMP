@@ -43,37 +43,79 @@ public enum VolumeCurveType
     /// </summary>
     SpeedOfLight
 }
-
 /// <summary>
-/// Поведение при критических ошибках воспроизведения.
+/// Стратегия обработки критических ошибок воспроизведения.
 /// </summary>
 /// <remarks>
-/// <para>Определяет реакцию системы на ошибки типа:</para>
-/// <list type="bullet">
-///   <item><see cref="Youtube.Exceptions.StreamUnavailableException"/> — стрим недоступен (403, geo-block)</item>
-///   <item><see cref="Exceptions.ChunkDownloadFatalException"/> — фатальная ошибка загрузки чанков</item>
-/// </list>
-/// <para>Используется в <see cref="Services.PlaybackErrorOrchestrator"/>.</para>
+/// <para>Определяет, требуется ли ручное действие пользователя или можно восстановиться автоматически.</para>
+/// <para>Если выбран автоматический режим, конкретное действие с очередью определяется <see cref="PlaybackFailureBehavior"/>.</para>
+/// <para>Используется в <see cref="UI.Services.PlaybackErrorOrchestrator"/>.</para>
 /// </remarks>
 public enum PlaybackErrorBehavior
 {
     /// <summary>
-    /// Показать модальный диалог и остановить воспроизведение.
-    /// Требует явного действия пользователя.
+    /// Остановить автоматическое восстановление и ждать явного действия пользователя.
+    /// Если в очереди есть следующий трек — воспроизведение приостанавливается на текущем состоянии.
+    /// Если трек последний — активный трек завершается полной остановкой.
     /// </summary>
     Dialog,
 
     /// <summary>
-    /// Показать toast-уведомление и автоматически перейти к следующему треку.
-    /// Также показывает OS-уведомление если приложение свёрнуто.
+    /// Восстановиться автоматически и показать уведомление об ошибке.
+    /// Конкретное действие после ошибки определяется <see cref="PlaybackFailureBehavior"/>.
     /// </summary>
     ToastAndSkip,
 
     /// <summary>
-    /// Игнорировать ошибку и автоматически перейти к следующему треку.
-    /// Ошибка логируется, но пользователь не уведомляется.
+    /// Восстановиться автоматически без показа уведомления.
+    /// Конкретное действие после ошибки определяется <see cref="PlaybackFailureBehavior"/>.
     /// </summary>
     Ignore
+}
+
+/// <summary>
+/// Режим отображения уведомлений при сложной дешифровке n-токена.
+/// </summary>
+public enum NTokenNotificationMode
+{
+    /// <summary>
+    /// Не создавать уведомление вовсе.
+    /// </summary>
+    Disabled = 0,
+
+    /// <summary>
+    /// Показывать всплывающее toast-уведомление и сохранять запись в центре уведомлений.
+    /// </summary>
+    Toast = 1,
+
+    /// <summary>
+    /// Сохранять запись только в центре уведомлений без toast.
+    /// </summary>
+    PanelOnly = 2
+}
+
+/// <summary>
+/// Поведение автоматического восстановления после критической ошибки воспроизведения.
+/// </summary>
+/// <remarks>
+/// Применяется только если <see cref="AudioSettings.CriticalErrorBehavior"/> допускает автоматическое восстановление.
+/// </remarks>
+public enum PlaybackFailureBehavior
+{
+    /// <summary>
+    /// Автоматически переключиться на следующий трек и продолжить воспроизведение.
+    /// </summary>
+    SkipAndPlay,
+
+    /// <summary>
+    /// Автоматически переключиться на следующий трек и приостановить воспроизведение.
+    /// </summary>
+    SkipAndPause,
+
+    /// <summary>
+    /// Выйти из текущего трека и полностью остановить воспроизведение без перехода к следующему.
+    /// </summary>
+    Stop
 }
 
 public enum RepeatMode
@@ -172,21 +214,31 @@ public sealed class AudioSettings
     public NormalizationMode NormalizationMode { get; set; } = NormalizationMode.Bidirectional;
 
     /// <summary>
-    /// Поведение при критических ошибках воспроизведения.
+    /// Стратегия обработки критических ошибок воспроизведения.
     /// </summary>
     /// <remarks>
-    /// <para>Применяется к ошибкам:</para>
-    /// <list type="bullet">
-    ///   <item>StreamUnavailableException (403, geo-block, все клиенты failed)</item>
-    ///   <item>ChunkDownloadFatalException (превышен лимит 403 при загрузке чанков)</item>
-    /// </list>
+    /// <para>Определяет, требуется ли ручное действие пользователя или можно восстановиться автоматически.</para>
+    /// <para>Если выбран автоматический режим, конкретное действие с очередью задаётся свойством <see cref="PlaybackFailureBehavior"/>.</para>
     /// <para>НЕ применяется к:</para>
     /// <list type="bullet">
     ///   <item>BotDetectionException — всегда показывает диалог с таймером</item>
-    ///   <item>LoginRequiredException — всегда показывает диалог (требует действия)</item>
+    ///   <item>LoginRequiredException — всегда показывает диалог/уведомление, требующее внимания пользователя</item>
     /// </list>
     /// </remarks>
     public PlaybackErrorBehavior CriticalErrorBehavior { get; set; } = PlaybackErrorBehavior.ToastAndSkip;
+
+    /// <summary>
+    /// Режим отображения уведомлений при сложной расшифровке n-токена.
+    /// </summary>
+    public NTokenNotificationMode NTokenNotificationMode { get; set; } = NTokenNotificationMode.Toast;
+
+    /// <summary>
+    /// Действие автоматического восстановления после критической ошибки воспроизведения.
+    /// </summary>
+    /// <remarks>
+    /// Применяется только если <see cref="CriticalErrorBehavior"/> допускает автоматическое восстановление.
+    /// </remarks>
+    public PlaybackFailureBehavior PlaybackFailureBehavior { get; set; } = PlaybackFailureBehavior.SkipAndPause;
 
     /// <summary>
     /// Воспроизводить звук при ошибке воспроизведения.

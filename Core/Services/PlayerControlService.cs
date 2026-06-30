@@ -505,7 +505,8 @@ public sealed class PlayerControlService : IDisposable
 
     /// <summary>
     /// Публикует предупреждение о сложной расшифровке n-токена
-    /// и, если доступен NotificationService, показывает toast с названием трека.
+    /// и, если это разрешено настройками, либо добавляет его в центр уведомлений,
+    /// либо показывает toast.
     /// </summary>
     private void OnNTokenDecryptionWarning(AudioEngine.NTokenWarningInfo warning)
     {
@@ -514,7 +515,66 @@ public sealed class PlayerControlService : IDisposable
         if (_notificationService == null)
             return;
 
-        _ = ShowNTokenWarningAsync(_notificationService, warning);
+        var mode = _library.Settings.Audio.NTokenNotificationMode;
+        switch (mode)
+        {
+            case NTokenNotificationMode.Disabled:
+                Log.Debug($"[PlayerControl] N-Token warning suppressed for track '{warning.Track?.Id}' as configured.");
+                return;
+
+            case NTokenNotificationMode.PanelOnly:
+                _ = PublishNTokenWarningAsync(_notificationService, warning, showToast: false);
+                return;
+
+            default:
+                _ = PublishNTokenWarningAsync(_notificationService, warning, showToast: true);
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Публикует уведомление о сложной расшифровке n-токена
+    /// либо как toast, либо только в центр уведомлений.
+    /// </summary>
+    private static async Task PublishNTokenWarningAsync(
+        NotificationService notificationService,
+        AudioEngine.NTokenWarningInfo warning,
+        bool showToast)
+    {
+        try
+        {
+            var track = warning.Track;
+            string trackDisplay = track?.Title ?? track?.Id ?? "Unknown";
+            string? trackTitle = track?.Title ?? track?.Id;
+            string messageKey = warning.WasSkipped
+                ? "Notification_NToken_Skipped"
+                : "Notification_NToken_Message";
+
+            if (showToast)
+            {
+                await notificationService.ShowToastAsync(
+                    titleKey: "Notification_NToken_Title",
+                    messageKey: messageKey,
+                    severity: NotificationSeverity.Warning,
+                    messageArgs: [trackDisplay],
+                    trackId: track?.Id,
+                    trackTitle: trackTitle);
+            }
+            else
+            {
+                await notificationService.AddToPanelAsync(
+                    titleKey: "Notification_NToken_Title",
+                    messageKey: messageKey,
+                    severity: NotificationSeverity.Warning,
+                    messageArgs: [trackDisplay],
+                    trackId: track?.Id,
+                    trackTitle: trackTitle);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[PlayerControl] Failed to publish n-token warning: {ex.Message}");
+        }
     }
 
     /// <summary>

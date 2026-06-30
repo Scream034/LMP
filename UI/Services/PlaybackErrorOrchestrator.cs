@@ -337,8 +337,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     #region Behavior Strategies (Deduplicated)
 
     /// <summary>
-    /// Универсальный диспетчер, обрабатывающий поведение на основе настроек <c>PlaybackErrorBehavior</c>.
-    /// Полностью устраняет дублирование между типами ошибок.
+    /// Универсальный диспетчер, обрабатывающий поведение на основе настроек воспроизведения.
     /// </summary>
     private async Task DispatchPlaybackErrorAsync(
       Exception exception,
@@ -347,19 +346,17 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
       bool skipNotification = false,
       string? recommendationKeyOverride = null)
     {
-        var behavior = _libraryService.Settings.Audio.CriticalErrorBehavior;
+        var policy = PlaybackErrorBehaviorMatrix.Resolve(
+            _libraryService.Settings.Audio.CriticalErrorBehavior,
+            _libraryService.Settings.Audio.PlaybackFailureBehavior);
 
-        if (behavior == PlaybackErrorBehavior.Ignore)
+        await ApplyRecoveryPolicyAsync(policy);
+
+        if (!policy.ShowNotification)
         {
-            Log.Debug("[Orchestrator] Ignoring error, applying fatal recovery");
-            await RecoverFromFatalPlaybackErrorAsync();
+            Log.Debug("[Orchestrator] Recovered silently according to CriticalErrorBehavior.");
             return;
         }
-
-        if (behavior == PlaybackErrorBehavior.Dialog)
-            await PauseOrStopForDialogAsync();
-        else
-            await RecoverFromFatalPlaybackErrorAsync();
 
         if (skipNotification)
         {
@@ -380,7 +377,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         _notificationService.TryPlayErrorSound();
 
         var severity = NotificationSeverity.Error;
-        int duration = behavior == PlaybackErrorBehavior.Dialog ? DialogToastDurationMs : SkipToastDurationMs;
+        int duration = policy.RequiresUserAction ? DialogToastDurationMs : SkipToastDurationMs;
 
         object[]? messageArgs = null;
         if (exception is StreamUnavailableException { Reason: StreamUnavailableReason.CopyrightBlocked } copyrightEx)
@@ -403,11 +400,52 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         await NotificationService.ShowOsNotificationAsync(localizedTitle, localizedMessage, severity);
     }
 
-    private Task RecoverFromFatalPlaybackErrorAsync()
+    private Task ApplyRecoveryPolicyAsync(EffectivePlaybackErrorPolicy policy)
+    {
+        return policy.RecoveryMode switch
+        {
+            PlaybackRecoveryMode.AwaitUserAction => PauseOrStopForUserActionAsync(),
+            PlaybackRecoveryMode.Stop => InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError),
+            PlaybackRecoveryMode.SkipAndPause => _audioEngine.Queue.Count <= 1
+                ? InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError)
+                : InvokeOnUIAsync(() => _audioEngine.PlayNextAsync(startPlaying: false)),
+            PlaybackRecoveryMode.SkipAndPlay => _audioEngine.Queue.Count <= 1
+                ? InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError)
+                : InvokeOnUIAsync(() => _audioEngine.PlayNextAsync(startPlaying: true)),
+            _ => _audioEngine.Queue.Count <= 1
+                ? InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError)
+                : InvokeOnUIAsync(() => _audioEngine.PlayNextAsync(startPlaying: false))
+        };
+    }
+
+    private Task PauseOrStopForUserActionAsync()
     {
         if (_audioEngine.Queue.Count <= 1)
             return InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError);
-        return InvokeOnUIAsync(() => _audioEngine.PlayNextAsync());
+
+        return InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
+    }
+
+    /// <summary>
+    /// Выполняет восстановление воспроизведения после критической ошибки с учетом настроенного поведения.
+    /// </summary>
+    private Task RecoverFromFatalPlaybackErrorAsync()
+    {
+        var failureBehavior = _libraryService.Settings.Audio.PlaybackFailureBehavior;
+
+        if (failureBehavior == PlaybackFailureBehavior.Stop || _audioEngine.Queue.Count <= 1)
+        {
+            return InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError);
+        }
+
+        if (failureBehavior == PlaybackFailureBehavior.SkipAndPause)
+        {
+            // Переключаемся на следующий трек в режиме паузы (без автозапуска плеера)
+            return InvokeOnUIAsync(() => _audioEngine.PlayNextAsync(startPlaying: false));
+        }
+
+        // По умолчанию: SkipAndPlay
+        return InvokeOnUIAsync(() => _audioEngine.PlayNextAsync(startPlaying: true));
     }
 
     private Task PauseOrStopForDialogAsync()

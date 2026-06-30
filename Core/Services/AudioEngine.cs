@@ -44,7 +44,10 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     private sealed record PlayCurrentIndexCommand(int Session) : IEngineCommand;
 
     /// <summary>Навигация вперёд/назад.</summary>
-    private sealed record NavigateCommand(bool Forward, bool UserInitiated) : IEngineCommand;
+    /// <param name="Forward">Направление движения.</param>
+    /// <param name="UserInitiated">Инициировано ли пользователем.</param>
+    /// <param name="StartPlaying">Запускать ли воспроизведение на целевом треке.</param>
+    private sealed record NavigateCommand(bool Forward, bool UserInitiated, bool StartPlaying = true) : IEngineCommand;
 
     #endregion
 
@@ -738,9 +741,9 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     }
 
     /// <summary>
-    /// Запускает воспроизведение трека по текущему индексу очереди с опциональной позиции.
+    /// Запускает воспроизведение трека по текущему индексу очереди с опциональной позиции и флагом автозапуска.
     /// </summary>
-    private async Task PlayCurrentIndexAsync(int session, TimeSpan? seekPosition = null)
+    private async Task PlayCurrentIndexAsync(int session, TimeSpan? seekPosition = null, bool startPlaying = true)
     {
         TrackInfo? track;
         lock (_queueLock)
@@ -761,8 +764,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
         if (_session.IsStale(session)) return;
 
-        // Передаем seekPosition в задачу подготовки
-        var playTask = PlayTrackCoreAsync(track, session, GetSessionToken(), seekPosition);
+        var playTask = PlayTrackCoreAsync(track, session, GetSessionToken(), seekPosition, startPlaying);
         Volatile.Write(ref _activePlayTask, playTask);
 
         try
@@ -774,13 +776,13 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     }
 
     /// <summary>
-    /// Основной метод подготовки и запуска воспроизведения трека с поддержкой SeekPosition.
+    /// Основной метод подготовки и запуска воспроизведения трека с поддержкой SeekPosition и ленивой загрузки.
     /// </summary>
-    private async Task PlayTrackCoreAsync(TrackInfo track, int session, CancellationToken ct, TimeSpan? seekPosition = null)
+    private async Task PlayTrackCoreAsync(TrackInfo track, int session, CancellationToken ct, TimeSpan? seekPosition = null, bool startPlaying = true)
     {
         if (_session.IsStale(session) || IsSealedFailedTrack(track.Id)) return;
 
-        Log.Debug($"[AudioEngine] [PlayTrackCore] Initiating playback for track: {track.Id} ('{track.Title}') | Session: {session}");
+        Log.Debug($"[AudioEngine] [PlayTrackCore] Initiating playback for track: {track.Id} | Session: {session} | StartPlaying: {startPlaying}");
 
         _player.Stop();
         if (_session.IsStale(session) || IsSealedFailedTrack(track.Id)) return;
@@ -792,13 +794,11 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             var canonical = await _library.GetTrackAsync(track.Id, ct).ConfigureAwait(false);
             if (canonical != null)
             {
-                Log.Debug($"[AudioEngine] [PlayTrackCore] Track {track.Id} found in DB.");
                 canonical.UpdateMetadata(track);
                 track = canonical;
             }
             else
             {
-                Log.Debug($"[AudioEngine] [PlayTrackCore] Track {track.Id} NOT found in DB.");
                 track = _trackRegistry.RegisterOrUpdate(track);
             }
 
@@ -810,6 +810,13 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                 OnTrackChanged?.Invoke(track);
                 OnPositionChanged?.Invoke(TimeSpan.Zero);
             });
+
+            // Ленивый выход: прерываем подготовку потока при требовании тихой загрузки трека (SkipAndPause)
+            if (!startPlaying)
+            {
+                SetManualLoading(false);
+                return;
+            }
 
             ct.ThrowIfCancellationRequested();
             Interlocked.Exchange(ref _nTokenActiveTrackId, track.Id);
@@ -834,7 +841,6 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                     var descriptor = await Task.Run(
                         () => ResolveStreamAsync(track, ct, seekPosition), ct).ConfigureAwait(false);
 
-                    // Apply loudness from descriptor to track for normalization
                     if (descriptor.HasLoudness)
                     {
                         track.TrySetGainFromLoudness(descriptor.LoudnessDb);
@@ -844,8 +850,6 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
                     if (_session.IsStaleOrCancelled(session, ct) || IsSealedFailedTrack(track.Id)) return;
 
                     Log.Info($"[AudioEngine] PlayTrackCore resolved -> {descriptor}");
-
-                    Log.Debug($"[AudioEngine] PlayTrackCore -> AudioPlayer, track={descriptor.TrackId}, origin={descriptor.Origin}, seek={seekPosition?.TotalMilliseconds ?? 0}ms");
 
                     await _player.PlayAsync(descriptor, ct, seekPosition: seekPosition).ConfigureAwait(false);
                     PreWarmNextTracksInQueue(CurrentQueueIndex, Audio.Http.SharedHttpClient.Instance, _lifetimeCts.Token);
@@ -1346,8 +1350,8 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         });
     }
 
-    public Task PlayNextAsync() { ResetSealedFailedTrack(); EnqueueCommand(new NavigateCommand(true, true)); return Task.CompletedTask; }
-    public Task PlayPreviousAsync() { ResetSealedFailedTrack(); EnqueueCommand(new NavigateCommand(false, true)); return Task.CompletedTask; }
+    public Task PlayNextAsync(bool startPlaying = true) { ResetSealedFailedTrack(); EnqueueCommand(new NavigateCommand(true, true, startPlaying)); return Task.CompletedTask; }
+    public Task PlayPreviousAsync(bool startPlaying = true) { ResetSealedFailedTrack(); EnqueueCommand(new NavigateCommand(false, true, startPlaying)); return Task.CompletedTask; }
 
     #endregion
 
@@ -1411,7 +1415,7 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
         if (queueMutated) RaiseOnUI(() => OnQueueChanged?.Invoke());
 
         if (canMove)
-            await PlayCurrentIndexAsync(session).ConfigureAwait(false);
+            await PlayCurrentIndexAsync(session, startPlaying: cmd.StartPlaying).ConfigureAwait(false);
         else if (!cmd.Forward && _player.State != PlaybackState.Stopped)
             await _player.SeekAsync(TimeSpan.Zero).ConfigureAwait(false);
         else
